@@ -1,0 +1,27 @@
+services:
+  agent-console:
+    build: .
+    ports:
+      - "127.0.0.1:3210:3210"
+    volumes:
+      - agent-console-data:/data
+      - agent-console-config:/config
+      - ${AGENT_CONSOLE_WORKSPACE_ROOT:-.}:/workspace
+    environment:
+      - AGENT_CONSOLE_TAILSCALE_LOGIN=${AGENT_CONSOLE_TAILSCALE_LOGIN:-}
+      - AGENT_CONSOLE_LAN_CIDR=${AGENT_CONSOLE_LAN_CIDR:-127.0.0.1/32}
+      - AGENT_CONSOLE_TRUSTED_HOSTS=${AGENT_CONSOLE_TRUSTED_HOSTS:-localhost,127.0.0.1}
+      - AGENT_CONSOLE_MAX_PTY_CLIENTS=${AGENT_CONSOLE_MAX_PTY_CLIENTS:-2}
+      - AGENT_CONSOLE_MAX_SESSIONS=${AGENT_CONSOLE_MAX_SESSIONS:-12}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3210/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  agent-console-data:
+  agent-console-config:

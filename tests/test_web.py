@@ -1,0 +1,404 @@
+from __future__ import annotations
+
+import os
+import subprocess
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+os.environ["AGENT_CONSOLE_TAILSCALE_LOGIN"] = "test@example.com"
+
+from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
+from agent_console.config import Settings
+from agent_console.manager import SessionManager
+from agent_console.providers import LaunchSpec
+from agent_console.validation import PROFILES
+from agent_console.web import create_app
+
+
+@unittest.skipUnless(
+    subprocess.run(["sh", "-c", "command -v tmux"], capture_output=True).returncode == 0,
+    "tmux required",
+)
+class WebTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.workspace = root / "workspace"
+        self.workspace.mkdir()
+        profiles = root / "profiles"
+        profiles.mkdir()
+        for profile in PROFILES:
+            (profiles / f"{profile}.md").write_text(f"# {profile}\n", encoding="utf-8")
+        self.socket = f"agent-console-web-test-{os.getpid()}-{id(self)}"
+        settings = Settings(
+            workspace_root=self.workspace,
+            state_dir=root / "state",
+            database_path=root / "state" / "test.sqlite3",
+            profile_dir=profiles,
+            handoff_dir=root / "handoffs",
+            worktree_root=self.workspace / "worktrees",
+            tmux_socket=self.socket,
+            max_children_per_parent=2,
+            max_managed_sessions=4,
+        )
+        self.manager = SessionManager(settings)
+        codex_home = self.manager.auth.codex_home("default")
+        (codex_home / "auth.json").write_text("{}\n", encoding="utf-8")
+        self.client = TestClient(create_app(self.manager))
+        self.headers = {"Tailscale-User-Login": "test@example.com"}
+
+    def tearDown(self) -> None:
+        subprocess.run(["tmux", "-L", self.socket, "kill-server"], capture_output=True)
+        self.temp.cleanup()
+
+    def test_health_and_identity_gate(self) -> None:
+        self.assertEqual(self.client.get("/healthz").text, "ok\n")
+        self.assertEqual(self.client.get("/api/sessions").status_code, 403)
+        response = self.client.get("/api/sessions", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+        me = self.client.get("/api/me", headers=self.headers).json()
+        self.assertEqual(me["default_tool"], "codex")
+        self.assertEqual(me["default_agent_modes"]["codex"], "auto")
+        self.assertEqual(me["default_agent_modes"]["opencode"], "plan")
+        default_opencode = next(
+            item for item in me["auth_contexts"]
+            if item["tool"] == "opencode" and item["default"]
+        )
+        self.assertEqual(default_opencode["name"], "opencode-go-default")
+        claude = next(item for item in me["tool_status"] if item["name"] == "claude")
+        self.assertEqual(claude["status"], "disabled")
+
+    def test_attention_endpoint_updates_state_without_exposing_note_in_audit(self) -> None:
+        self.manager.create(
+            tool="shell",
+            profile="general",
+            name="attention-web-test",
+            repository=str(self.workspace),
+        )
+        response = self.client.patch(
+            "/api/sessions/attention-web-test/attention",
+            headers=self.headers,
+            json={"state": "ready_for_review", "note": "Please review the UI"},
+        )
+        self.assertEqual(response.status_code, 200)
+        session = response.json()
+        self.assertEqual(session["attention_state"], "ready_for_review")
+        self.assertEqual(session["attention_note"], "Please review the UI")
+        self.manager.reconcile()
+        listed = self.client.get("/api/sessions", headers=self.headers).json()
+        listed_session = next(row for row in listed if row["tmux_name"] == "attention-web-test")
+        self.assertEqual(listed_session["attention_state"], "ready_for_review")
+        invalid = self.client.patch(
+            "/api/sessions/attention-web-test/attention",
+            headers=self.headers,
+            json={"state": "guessed_from_output"},
+        )
+        self.assertEqual(invalid.status_code, 422)
+        with self.manager.database.connect() as conn:
+            audit = conn.execute(
+                "SELECT details_json FROM audit_events WHERE action='session.attention.updated' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertNotIn("Please review the UI", audit["details_json"])
+
+    def test_model_and_brief_interfaces(self) -> None:
+        self.manager.create(
+            tool="shell", profile="general", name="brief-web-test",
+            task="Do not send this automatically", repository=str(self.workspace),
+        )
+        brief = self.client.get("/api/sessions/brief-web-test/brief", headers=self.headers)
+        self.assertEqual(brief.status_code, 200)
+        self.assertEqual(brief.headers["cache-control"], "no-store")
+        self.assertTrue(brief.json()["stored_only"])
+        model = {
+            "id": "free", "model": "openrouter/free", "provider": "openrouter",
+            "name": "Free", "status": "active", "selectable": True,
+            "cost": {"input": 0.0, "output": 0.0, "cache_read": 0.0, "reasoning": None},
+            "limits": {"context": 1000, "output": 100},
+            "capabilities": {"reasoning": False, "attachment": False, "toolcall": True},
+        }
+        with patch.object(self.manager.models, "list", return_value={"provider": "openrouter", "models": [model], "stale": False}):
+            listed = self.client.get("/api/models?provider=openrouter", headers=self.headers)
+            self.assertEqual(listed.status_code, 200)
+            estimated = self.client.post(
+                "/api/models/estimate", headers=self.headers,
+                json={"provider": "openrouter", "uncached_input_tokens": 1000, "cached_input_tokens": 0, "output_tokens": 1000},
+            )
+            self.assertEqual(estimated.status_code, 200)
+            self.assertEqual(estimated.json()["models"][0]["estimated_usd"], 0.0)
+
+    def test_trusted_lan_and_wrong_tailscale_header(self) -> None:
+        lan_client = TestClient(
+            create_app(self.manager),
+            client=("10.0.0.40", 50000),
+            base_url="http://10.0.0.1",
+        )
+        me = lan_client.get("/api/me")
+        self.assertEqual(me.status_code, 200)
+        self.assertEqual(me.json()["access_surface"], "local-lan")
+        denied = lan_client.get(
+            "/api/me", headers={"Tailscale-User-Login": "wrong@example.com"}
+        )
+        self.assertEqual(denied.status_code, 403)
+
+    def test_kill_endpoint_verifies_exit_and_moves_to_history(self) -> None:
+        self.manager.create(
+            tool="shell",
+            profile="general",
+            name="kill-web-test",
+            repository=str(self.workspace),
+        )
+        response = self.client.post(
+            "/api/sessions/kill-web-test/kill",
+            headers=self.headers,
+            json={"confirmed": True, "allow_unmanaged": False},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["running"])
+        self.assertFalse(self.manager.tmux.exists("kill-web-test"))
+        active = self.client.get("/api/sessions?state=active", headers=self.headers).json()
+        history = self.client.get("/api/sessions?state=history", headers=self.headers).json()
+        self.assertNotIn("kill-web-test", {row["tmux_name"] for row in active})
+        self.assertIn("kill-web-test", {row["tmux_name"] for row in history})
+
+    def test_review_and_delegation_endpoints(self) -> None:
+        parent = self.manager.create(
+            tool="shell",
+            profile="general",
+            name="web-parent",
+            repository=str(self.workspace),
+        )
+        self.manager.tmux.run("send-keys", "-t", "web-parent", "-l", "printf WEB_REVIEW_OK")
+        self.manager.tmux.run("send-keys", "-t", "web-parent", "Enter")
+        response = None
+        for _ in range(20):
+            response = self.client.get(
+                "/api/sessions/web-parent/review?lines=50", headers=self.headers
+            )
+            if "WEB_REVIEW_OK" in response.json()["content"]:
+                break
+        assert response is not None
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertIn("WEB_REVIEW_OK", response.json()["content"])
+        self.assertTrue(self.manager.tmux.exists("web-parent"))
+
+        delegated = self.client.post(
+            "/api/sessions/web-parent/delegations",
+            headers=self.headers,
+            json={
+                "profile": "planner",
+                "tool": "shell",
+                "auth_context": "default",
+                "task": "Read-only child",
+            },
+        )
+        self.assertEqual(delegated.status_code, 200)
+        child = delegated.json()["session"]
+        self.assertEqual(child["parent_session_id"], parent["id"])
+        self.assertEqual(child["auth_context"], "default")
+        tree = self.client.get("/api/delegations", headers=self.headers)
+        self.assertEqual(tree.status_code, 200)
+        root = next(node for node in tree.json()["roots"] if node["tmux_name"] == "web-parent")
+        self.assertEqual(root["child_count"], 1)
+        self.assertEqual(root["children"][0]["tmux_name"], child["tmux_name"])
+
+        second = self.client.post(
+            "/api/sessions/web-parent/delegations",
+            headers=self.headers,
+            json={"profile": "scout", "tool": "shell", "task": "Second child"},
+        )
+        self.assertEqual(second.status_code, 200)
+        limited = self.client.post(
+            "/api/sessions/web-parent/delegations",
+            headers=self.headers,
+            json={"profile": "reviewer", "tool": "shell", "task": "Third child"},
+        )
+        self.assertEqual(limited.status_code, 400)
+        self.assertIn("child-session limit", limited.json()["detail"])
+
+        rejected = self.client.post(
+            "/api/sessions/web-parent/delegations",
+            headers=self.headers,
+            json={"profile": "planner", "tool": "opencode", "agent_mode": "build", "task": "No"},
+        )
+        self.assertEqual(rejected.status_code, 400)
+
+    def test_plan_preview_confirmation_and_revision_change(self) -> None:
+        repository = self.workspace / "plan-repository"
+        repository.mkdir()
+        subprocess.run(["git", "-C", str(repository), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(repository), "config", "user.email", "test@example.com"], check=True)
+        subprocess.run(["git", "-C", str(repository), "config", "user.name", "Agent Console Test"], check=True)
+        (repository / "README.md").write_text("first\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repository), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(repository), "commit", "-qm", "first"], check=True)
+        revision = subprocess.run(
+            ["git", "-C", str(repository), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        artifact = self.manager.settings.handoff_dir / "web-plan"
+        artifact.mkdir(parents=True)
+        (artifact / "plan.md").write_text("# Web plan\n", encoding="utf-8")
+        (artifact / "metadata.json").write_text(
+            '{"title":"Web plan","repository":"%s","repository_revision":"%s"}\n'
+            % (repository, revision),
+            encoding="utf-8",
+        )
+        preview = self.client.get("/api/plans/web-plan", headers=self.headers)
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.json()["revision_state"], "current")
+        missing_confirmation = self.client.post(
+            "/api/plans/web-plan/execute",
+            headers=self.headers,
+            json={"confirmed": False, "profile": "coder"},
+        )
+        self.assertEqual(missing_confirmation.status_code, 400)
+
+        (repository / "README.md").write_text("second\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repository), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(repository), "commit", "-qm", "second"], check=True)
+        changed = self.client.get("/api/plans/web-plan", headers=self.headers)
+        self.assertEqual(changed.json()["revision_state"], "changed")
+        blocked = self.client.post(
+            "/api/plans/web-plan/execute",
+            headers=self.headers,
+            json={"confirmed": True, "profile": "coder"},
+        )
+        self.assertEqual(blocked.status_code, 400)
+        with patch.object(
+            self.manager,
+            "_launch_spec",
+            return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+        ):
+            executed = self.client.post(
+                "/api/plans/web-plan/execute",
+                headers=self.headers,
+                json={
+                    "confirmed": True,
+                    "profile": "coder",
+                    "name": "web-plan-run",
+                    "allow_revision_change": True,
+                },
+            )
+        self.assertEqual(executed.status_code, 200)
+        session = executed.json()
+        self.assertEqual(session["linked_plan_id"], "web-plan")
+        self.assertTrue(Path(session["worktree"]).is_dir())
+        self.manager.kill("web-plan-run")
+        self.assertTrue(Path(session["worktree"]).is_dir())
+
+    def test_unmanaged_kill_requires_explicit_acknowledgement(self) -> None:
+        subprocess.run(
+            self.manager.tmux.command(
+                "new-session",
+                "-d",
+                "-s",
+                "unmanaged-web-test",
+                "sleep 60",
+            ),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.manager.reconcile()
+        missing_ack = self.client.post(
+            "/api/sessions/unmanaged-web-test/kill",
+            headers=self.headers,
+            json={"confirmed": True, "allow_unmanaged": True},
+        )
+        self.assertEqual(missing_ack.status_code, 400)
+        self.assertTrue(self.manager.tmux.exists("unmanaged-web-test"))
+        killed = self.client.post(
+            "/api/sessions/unmanaged-web-test/kill",
+            headers=self.headers,
+            json={
+                "confirmed": True,
+                "allow_unmanaged": True,
+                "understand_unmanaged": True,
+            },
+        )
+        self.assertEqual(killed.status_code, 200)
+        self.assertFalse(killed.json()["running"])
+        self.assertFalse(self.manager.tmux.exists("unmanaged-web-test"))
+
+    def test_websocket_detach_preserves_tmux(self) -> None:
+        self.manager.create(
+            tool="shell",
+            profile="general",
+            name="web-test",
+            repository=str(self.workspace),
+        )
+        output = bytearray()
+        with self.client.websocket_connect(
+            "/ws/sessions/web-test",
+            headers=self.headers,
+        ) as websocket:
+            websocket.send_bytes(b"printf WEBPTY_OK\\n")
+            for _ in range(20):
+                output.extend(websocket.receive_bytes())
+                if b"WEBPTY_OK" in output:
+                    break
+        self.assertIn(b"WEBPTY_OK", output)
+        self.assertTrue(self.manager.tmux.exists("web-test"))
+
+    def test_websocket_detach_control_preserves_tmux(self) -> None:
+        self.manager.create(
+            tool="shell",
+            profile="general",
+            name="detach-control-test",
+            repository=str(self.workspace),
+        )
+        with self.client.websocket_connect(
+            "/ws/sessions/detach-control-test",
+            headers=self.headers,
+        ) as websocket:
+            websocket.send_text('{"type":"detach"}')
+            with self.assertRaises(WebSocketDisconnect) as closed:
+                for _ in range(20):
+                    websocket.receive_bytes()
+            self.assertEqual(closed.exception.code, 4000)
+        self.assertTrue(self.manager.tmux.exists("detach-control-test"))
+
+    def test_kill_closes_websocket_instead_of_switching_sessions(self) -> None:
+        self.manager.create(
+            tool="shell",
+            profile="general",
+            name="other-live-session",
+            repository=str(self.workspace),
+        )
+        self.manager.create(
+            tool="shell",
+            profile="general",
+            name="kill-attached-test",
+            repository=str(self.workspace),
+        )
+        with self.client.websocket_connect(
+            "/ws/sessions/kill-attached-test",
+            headers=self.headers,
+        ) as websocket:
+            killer = threading.Thread(
+                target=self.manager.kill,
+                args=("kill-attached-test",),
+                daemon=True,
+            )
+            killer.start()
+            with self.assertRaises(WebSocketDisconnect) as closed:
+                for _ in range(20):
+                    websocket.receive_bytes()
+            killer.join(timeout=3)
+            self.assertEqual(closed.exception.code, 4001)
+        self.assertFalse(self.manager.tmux.exists("kill-attached-test"))
+        self.assertTrue(self.manager.tmux.exists("other-live-session"))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+unset PYTHONPATH
+unset PYTHONHOME
+secret_file="${AGENT_CONSOLE_SECRET_FILE:-$HOME/.config/agent-console/secrets.d/openrouter-main.env}"
+if [[ -r "$secret_file" ]]; then
+  # shellcheck disable=SC1090
+  source "$secret_file"
+fi
+exec "$HOME/.hermes/hermes-agent/venv/bin/hermes" "$@"

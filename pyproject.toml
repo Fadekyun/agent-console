@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-console"
+version = "0.1.0"
+description = "Unified tmux session manager for AI coding agent orchestration"
+license = "MIT"
+authors = [{name = "Fadekyun"}]
+readme = "README.md"
+keywords = ["tmux", "agent", "terminal", "orchestration", "ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+web = [
+    "fastapi==0.139.0",
+    "uvicorn[standard]==0.51.0",
+    "httpx==0.28.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/Fadekyun/agent-console"
+Repository = "https://github.com/Fadekyun/agent-console"
+Issues = "https://github.com/Fadekyun/agent-console/issues"
+
+[project.scripts]
+agentctl = "agent_console.cli:main"
+
+[tool.setuptools]
+packages = ["agent_console"]

@@ -1,0 +1,24 @@
+[Unit]
+Description=Agent Console web terminal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/agent-console
+Environment=PYTHONPATH=/path/to/agent-console
+Environment=AGENT_CONSOLE_TAILSCALE_LOGIN=your-email@example.com
+Environment=AGENT_CONSOLE_MAX_PTY_CLIENTS=2
+Environment=AGENT_CONSOLE_TMUX_SOCKET_PATH=/run/user/%U/agent-console/tmux.sock
+Environment=AGENT_CONSOLE_LEGACY_TMUX_SOCKET_PATH=/tmp/tmux-%U/default
+Environment=AGENT_CONSOLE_LAN_CIDR=10.0.0.0/8
+Environment=AGENT_CONSOLE_TRUSTED_HOSTS=your-tailscale-host.ts.net,your-lan-ip,localhost,127.0.0.1
+ExecStart=/path/to/venv/bin/uvicorn agent_console.web:app --host 0.0.0.0 --port 3210 --no-proxy-headers
+Restart=on-failure
+RestartSec=3
+KillMode=process
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

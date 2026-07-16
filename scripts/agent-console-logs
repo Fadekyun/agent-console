@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+journalctl --user -u agent-console-web.service -u agent-console-tailscale-tunnel.service "$@"

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SOURCE="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$SOURCE")/.." && pwd)"
+export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+if [[ "${TERM:-dumb}" == "dumb" ]]; then
+  export TERM=xterm-256color
+fi
+AGENT_CONSOLE_ENV_FILE="${AGENT_CONSOLE_ENV_FILE:-$HOME/.config/agent-console/runtime.env}"
+if [[ -r "$AGENT_CONSOLE_ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$AGENT_CONSOLE_ENV_FILE"
+  set +a
+fi
+exec python3 -m agent_console.cli "$@"
