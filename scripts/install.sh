@@ -22,7 +22,13 @@ lan_cidr="${AGENT_CONSOLE_LAN_CIDR:-127.0.0.1/32}"
 trusted_hosts="${AGENT_CONSOLE_TRUSTED_HOSTS:-localhost,127.0.0.1}"
 bind_host="${AGENT_CONSOLE_BIND_HOST:-127.0.0.1}"
 
-config_dir="$HOME/.config/agent-console"
+workspace_root="${AGENT_CONSOLE_WORKSPACE_ROOT:-$root}"
+state_dir="${AGENT_CONSOLE_STATE_DIR:-$HOME/.local/share/agent-console}"
+config_dir="${AGENT_CONSOLE_CONFIG_DIR:-$HOME/.config/agent-console}"
+profile_dir="${AGENT_CONSOLE_PROFILE_DIR:-$workspace_root/agent-profiles}"
+handoff_dir="${AGENT_CONSOLE_HANDOFF_DIR:-$workspace_root/handoffs}"
+worktree_root="${AGENT_CONSOLE_WORKTREE_ROOT:-$workspace_root/worktrees}"
+
 mkdir -p "$config_dir"
 cat > "$config_dir/runtime.env" <<EOF
 AGENT_CONSOLE_TAILSCALE_LOGIN=$tailscale_login
@@ -31,6 +37,12 @@ AGENT_CONSOLE_TMUX_SOCKET_PATH=/run/user/$(id -u)/agent-console/tmux.sock
 AGENT_CONSOLE_LEGACY_TMUX_SOCKET_PATH=/tmp/tmux-$(id -u)/default
 AGENT_CONSOLE_LAN_CIDR=$lan_cidr
 AGENT_CONSOLE_TRUSTED_HOSTS=$trusted_hosts
+AGENT_CONSOLE_WORKSPACE_ROOT=$workspace_root
+AGENT_CONSOLE_STATE_DIR=$state_dir
+AGENT_CONSOLE_CONFIG_DIR=$config_dir
+AGENT_CONSOLE_PROFILE_DIR=$profile_dir
+AGENT_CONSOLE_HANDOFF_DIR=$handoff_dir
+AGENT_CONSOLE_WORKTREE_ROOT=$worktree_root
 EOF
 chmod 600 "$config_dir/runtime.env"
 
