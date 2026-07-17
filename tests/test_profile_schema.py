@@ -3,10 +3,12 @@ from __future__ import annotations
 import unittest
 
 from agent_console.profiles import (
+    CAPABILITY_ENFORCEMENTS,
     PROFILE_SCHEMA,
     READ_ONLY_PROFILES,
     WRITE_PROFILES,
     profile_summaries,
+    validate_profile_capability,
     validate_profile_schema,
 )
 from agent_console.validation import PROFILES
@@ -226,6 +228,90 @@ class ProfiledValidationFailureTests(unittest.TestCase):
         finally:
             PROFILE_SCHEMA.clear()
             PROFILE_SCHEMA.update(saved)
+
+
+class CapabilityValidationTests(unittest.TestCase):
+    def test_read_only_denies_codex_auto(self) -> None:
+        for profile in READ_ONLY_PROFILES:
+            result = validate_profile_capability(profile, "codex", "auto")
+            self.assertFalse(result["allowed"], f"{profile}+codex+auto should be denied")
+            self.assertEqual(result["enforcement"], "enforced")
+
+    def test_read_only_denies_opencode_build(self) -> None:
+        for profile in READ_ONLY_PROFILES:
+            result = validate_profile_capability(profile, "opencode", "build")
+            self.assertFalse(result["allowed"], f"{profile}+opencode+build should be denied")
+            self.assertEqual(result["enforcement"], "enforced")
+
+    def test_read_only_denies_claude_build(self) -> None:
+        for profile in READ_ONLY_PROFILES:
+            result = validate_profile_capability(profile, "claude", "build")
+            if result["allowed"]:
+                continue
+            self.assertEqual(result["enforcement"], "enforced")
+
+    def test_read_only_allows_plan_modes(self) -> None:
+        for profile in READ_ONLY_PROFILES:
+            for tool in ("codex", "opencode", "claude"):
+                result = validate_profile_capability(profile, tool, "plan")
+                self.assertTrue(result["allowed"], f"{profile}+{tool}+plan should be allowed")
+
+    def test_write_profiles_allow_all_modes(self) -> None:
+        for profile in WRITE_PROFILES:
+            for tool, modes in (("codex", ("plan", "auto")), ("opencode", ("plan", "build"))):
+                for mode in modes:
+                    result = validate_profile_capability(profile, tool, mode)
+                    self.assertTrue(result["allowed"], f"{profile}+{tool}+{mode} should be allowed")
+
+    def test_general_allows_all_modes(self) -> None:
+        for tool, modes in (("codex", ("plan", "auto", None)), ("opencode", ("plan", "build", None))):
+            for mode in modes:
+                result = validate_profile_capability("general", tool, mode)
+                self.assertTrue(result["allowed"], f"general+{tool}+{mode} should be allowed")
+
+    def test_shell_is_unsupported(self) -> None:
+        for profile in PROFILE_SCHEMA:
+            result = validate_profile_capability(profile, "shell", None)
+            self.assertTrue(result["allowed"], f"{profile}+shell should be allowed")
+            self.assertEqual(result["enforcement"], "unsupported")
+
+    def test_hermes_is_unverified(self) -> None:
+        for profile in PROFILE_SCHEMA:
+            result = validate_profile_capability(profile, "hermes", None)
+            self.assertTrue(result["allowed"], f"{profile}+hermes should be allowed")
+            self.assertEqual(result["enforcement"], "unverified")
+
+    def test_release_and_operator_are_pending_approval(self) -> None:
+        for profile in ("release", "operator"):
+            result = validate_profile_capability(profile, "codex", "auto")
+            self.assertTrue(result["allowed"], f"{profile}+codex should be allowed")
+            self.assertEqual(result["enforcement"], "pending_approval")
+
+    def test_claude_advisory_note(self) -> None:
+        for profile in ("general", "coder", "bugfix"):
+            result = validate_profile_capability(profile, "claude", "plan")
+            self.assertTrue(result["allowed"])
+            self.assertEqual(result["enforcement"], "unsupported")
+
+    def test_unknown_profile_rejected(self) -> None:
+        result = validate_profile_capability("nonexistent", "codex", "plan")
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["enforcement"], "enforced")
+
+    def test_worktree_required_denies_no_worktree(self) -> None:
+        for name, meta in PROFILE_SCHEMA.items():
+            if meta["worktree_requirement"] == "required":
+                result = validate_profile_capability(name, "codex", "plan", worktree=False)
+                self.assertFalse(result["allowed"], f"{name} should require worktree")
+
+    def test_enforcement_values_are_valid(self) -> None:
+        for profile in PROFILE_SCHEMA:
+            for tool in ("codex", "opencode", "claude", "shell", "hermes"):
+                result = validate_profile_capability(profile, tool, None)
+                self.assertIn(
+                    result["enforcement"], CAPABILITY_ENFORCEMENTS,
+                    f"{profile}+{tool}: unexpected enforcement {result['enforcement']!r}",
+                )
 
 
 if __name__ == "__main__":

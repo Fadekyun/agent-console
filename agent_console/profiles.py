@@ -171,6 +171,105 @@ PROFILE_SCHEMA: dict[str, dict[str, Any]] = {
     },
 }
 
+CAPABILITY_ENFORCEMENTS = frozenset({"enforced", "unsupported", "unverified", "pending_approval"})
+
+
+def validate_profile_capability(
+    profile: str,
+    tool: str,
+    agent_mode: str | None,
+    *,
+    worktree: bool = False,
+) -> dict[str, Any]:
+    """Check whether the given profile/tool/mode combination is allowed.
+
+    Returns dict with:
+      - allowed: bool — whether session creation should proceed
+      - reason: str | None — explanation if not allowed, or enforcement caveat
+      - enforcement: str — one of enforced|unsupported|unverified|pending_approval
+    """
+    meta = PROFILE_SCHEMA.get(profile)
+    if meta is None:
+        return {"allowed": False, "reason": f"unknown profile: {profile!r}", "enforcement": "enforced"}
+
+    rwc = meta["read_write_capability"]
+    constraints = meta["provider_mode_constraints"]
+    requires_approval = meta["requires_human_approval"]
+    wt_req = meta["worktree_requirement"]
+
+    # Shell — no sandbox, unsupported enforcement
+    if tool == "shell":
+        return {
+            "allowed": True,
+            "reason": "shell enforcement is unsupported: no sandbox or mode constraint",
+            "enforcement": "unsupported",
+        }
+
+    # Hermes — context-file delivery is unverified
+    if tool == "hermes":
+        return {
+            "allowed": True,
+            "reason": "Hermes context-file delivery is unverified; profile instructions may not reach the agent through the declared channel",
+            "enforcement": "unverified",
+        }
+
+    # Release / operator — human-approval gate is pending
+    if requires_approval:
+        return {
+            "allowed": True,
+            "reason": f"{profile!r} requires human approval; the backend approval gate is pending implementation",
+            "enforcement": "pending_approval",
+        }
+
+    # Read-only profiles must use plan mode (checked before generic constraint
+    # so error messages match the primary semantic reason)
+    if rwc == "read_only":
+        if tool == "codex" and agent_mode not in (None, "plan"):
+            return {
+                "allowed": False,
+                "reason": "read-only profiles must use Codex Plan mode",
+                "enforcement": "enforced",
+            }
+        if tool == "opencode" and agent_mode not in (None, "plan"):
+            return {
+                "allowed": False,
+                "reason": "read-only profiles must use OpenCode Plan mode",
+                "enforcement": "enforced",
+            }
+        if tool == "claude" and agent_mode not in (None, "plan"):
+            return {
+                "allowed": False,
+                "reason": "read-only profiles must use Claude Plan mode",
+                "enforcement": "enforced",
+            }
+
+    # Worktree requirement
+    if wt_req == "required" and not worktree:
+        return {
+            "allowed": False,
+            "reason": f"profile {profile!r} requires a worktree",
+            "enforcement": "enforced",
+        }
+
+    # Provider mode constraints from schema
+    if constraints and agent_mode is not None and agent_mode not in constraints:
+        return {
+            "allowed": False,
+            "reason": f"profile {profile!r} restricts agent modes to {sorted(constraints)} but {agent_mode!r} was requested",
+            "enforcement": "enforced",
+        }
+
+    # Claude has no mode-constraint enforcement via sandbox; note it
+    if tool == "claude":
+        return {
+            "allowed": True,
+            "reason": "Claude Plan mode is advisory (--permission-mode flag); no sandbox enforcement",
+            "enforcement": "unsupported",
+        }
+
+    return {"allowed": True, "reason": None, "enforcement": "enforced"}
+
+
 READ_ONLY_PROFILES: frozenset[str] = frozenset(
     name for name, meta in PROFILE_SCHEMA.items()
     if meta["read_write_capability"] == "read_only"
