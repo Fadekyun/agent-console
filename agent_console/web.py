@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from .logging_config import configure_logging
 from .manager import SessionManager
 from .profiles import profile_summaries
+from .skills import doctor_skills, skill_catalog, sync_skills
 from .validation import TOOLS, validate_session_name
 
 configure_logging()
@@ -365,6 +366,21 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     @app.post("/api/sessions/{name}/restart")
     async def restart(name: str, _: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         return session_manager.restart(validate_session_name(name))
+
+    @app.get("/api/skills")
+    async def skills_api(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
+        return skill_catalog()
+
+    class SkillsSyncRequest(BaseModel):
+        pass
+
+    @app.post("/api/skills/sync")
+    async def skills_sync(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
+        return sync_skills()
+
+    @app.post("/api/skills/doctor")
+    async def skills_doctor(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
+        return doctor_skills()
 
     @app.post("/api/sessions/{name}/kill")
     async def kill(

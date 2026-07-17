@@ -4,11 +4,101 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .validation import PROFILES
 
-_retained_env = os.getenv("AGCONSOLE_RETAINED_SKILLS", "")
-RETAINED_SKILLS = tuple(
-    name.strip() for name in _retained_env.split(",") if name.strip()
-) if _retained_env else ()
+SUPPORTED_TOOLS = frozenset({"codex", "claude", "hermes"})
+SKILL_KINDS = frozenset({"standard", "superpower"})
+
+
+def _resolve_canonical_root() -> Path:
+    return Path(os.getenv("AGCONSOLE_SKILLS_ROOT", str(Path.home() / "codex" / "skills")))
+
+
+def _load_retained_env() -> tuple[str, ...]:
+    raw = os.getenv("AGCONSOLE_RETAINED_SKILLS", "")
+    if not raw:
+        return ()
+    return tuple(name.strip() for name in raw.split(",") if name.strip())
+
+
+RETAINED_SKILLS: tuple[str, ...] = _load_retained_env()
+
+SKILL_CATALOG: list[dict[str, Any]] = [
+    {
+        "name": name,
+        "description": "",
+        "tools": sorted(SUPPORTED_TOOLS),
+        "kind": "standard",
+        "source_path": str(_resolve_canonical_root() / name),
+        "allowed_profiles": None,
+        "requires_approval": False,
+    }
+    for name in RETAINED_SKILLS
+]
+
+
+def validate_catalog(
+    canonical_root: Path | None = None,
+) -> list[str]:
+    root = canonical_root or _resolve_canonical_root()
+    errors: list[str] = []
+    for entry in SKILL_CATALOG:
+        name = entry["name"]
+        kind = entry["kind"]
+        if kind not in SKILL_KINDS:
+            errors.append(f"skill {name!r}: unknown kind {kind!r}")
+            continue
+        source = root / name / "SKILL.md"
+        if not source.is_file():
+            errors.append(f"skill {name!r}: missing SKILL.md at {source}")
+        for tool in entry["tools"]:
+            if tool not in SUPPORTED_TOOLS:
+                errors.append(f"skill {name!r}: unsupported tool {tool!r}")
+        allowed = entry.get("allowed_profiles")
+        if allowed is not None:
+            for profile in allowed:
+                if profile not in PROFILES:
+                    errors.append(f"skill {name!r}: unknown profile {profile!r}")
+    return errors
+
+
+def skill_catalog(
+    canonical_root: Path | None = None,
+) -> dict[str, Any]:
+    root = canonical_root or _resolve_canonical_root()
+    errors = validate_catalog(root)
+    entries = []
+    for entry in SKILL_CATALOG:
+        name = entry["name"]
+        source = root / name / "SKILL.md"
+        synced = []
+        for tool in entry["tools"]:
+            link = _tool_root(tool) / name
+            synced.append({
+                "tool": tool,
+                "linked": link.is_symlink() and (link / "SKILL.md").is_file(),
+            })
+        entries.append({
+            "name": name,
+            "description": entry["description"],
+            "kind": entry["kind"],
+            "tools": entry["tools"],
+            "allowed_profiles": entry.get("allowed_profiles"),
+            "requires_approval": entry.get("requires_approval", False),
+            "source_present": source.is_file(),
+            "synced": synced,
+        })
+    return {"entries": entries, "errors": errors}
+
+
+def _tool_root(tool: str, home: Path | None = None) -> Path:
+    h = home or Path.home()
+    roots = {
+        "codex": h / ".codex" / "skills",
+        "claude": h / ".claude" / "skills",
+        "hermes": h / ".hermes" / "skills" / "homelab",
+    }
+    return roots[tool]
 
 
 def _replace_link(path: Path, target: Path) -> None:
@@ -31,70 +121,93 @@ def _prepare_root(path: Path, canonical_root: Path) -> None:
 
 def sync_skills(
     *,
-    canonical_root: Path = Path(os.getenv("AGCONSOLE_SKILLS_ROOT", str(Path.home() / "codex" / "skills"))),
+    canonical_root: Path | None = None,
     home: Path | None = None,
 ) -> dict[str, Any]:
-    home = home or Path.home()
-    missing = [name for name in RETAINED_SKILLS if not (canonical_root / name / "SKILL.md").is_file()]
+    root = canonical_root or _resolve_canonical_root()
+    h = home or Path.home()
+    names = [entry["name"] for entry in SKILL_CATALOG]
+    missing = [name for name in names if not (root / name / "SKILL.md").is_file()]
     if missing:
         raise FileNotFoundError(f"canonical skills missing: {', '.join(missing)}")
 
-    roots = {
-        "codex": home / ".codex" / "skills",
-        "claude": home / ".claude" / "skills",
-        "hermes": home / ".hermes" / "skills" / "homelab",
-    }
-    for root in roots.values():
-        _prepare_root(root, canonical_root)
+    tool_set = {tool for entry in SKILL_CATALOG for tool in entry["tools"]}
+    roots = {tool: _tool_root(tool, h) for tool in tool_set}
+    for r in roots.values():
+        _prepare_root(r, root)
 
-    for tool, root in roots.items():
-        for name in RETAINED_SKILLS:
-            _replace_link(root / name, canonical_root / name)
-        for path in root.iterdir():
+    for tool, r in roots.items():
+        catalog_names = {e["name"] for e in SKILL_CATALOG if tool in e["tools"]}
+        for name in catalog_names:
+            _replace_link(r / name, root / name)
+        for path in r.iterdir():
             if (
                 path.is_symlink()
-                and canonical_root.resolve() in path.resolve().parents
-                and path.name not in RETAINED_SKILLS
+                and root.resolve() in path.resolve().parents
+                and path.name not in catalog_names
             ):
                 path.unlink()
 
     return {
         "ok": True,
-        "canonical_root": str(canonical_root),
-        "skills": len(RETAINED_SKILLS),
-        "roots": {name: str(path) for name, path in roots.items()},
-        "opencode_discovery": str(roots["claude"]),
+        "canonical_root": str(root),
+        "skills": len(SKILL_CATALOG),
+        "roots": {name: str(p) for name, p in roots.items()},
     }
 
 
 def doctor_skills(
     *,
-    canonical_root: Path = Path(os.getenv("AGCONSOLE_SKILLS_ROOT", str(Path.home() / "codex" / "skills"))),
+    canonical_root: Path | None = None,
     home: Path | None = None,
 ) -> dict[str, Any]:
-    home = home or Path.home()
-    roots = {
-        "codex": home / ".codex" / "skills",
-        "claude": home / ".claude" / "skills",
-        "hermes": home / ".hermes" / "skills" / "homelab",
-    }
+    root = canonical_root or _resolve_canonical_root()
+    h = home or Path.home()
     problems: list[str] = []
-    for name in RETAINED_SKILLS:
-        source = canonical_root / name / "SKILL.md"
+    for entry in SKILL_CATALOG:
+        name = entry["name"]
+        source = root / name / "SKILL.md"
         if not source.is_file():
             problems.append(f"missing canonical skill: {name}")
             continue
         text = source.read_text(encoding="utf-8", errors="replace")
         if not text.startswith("---"):
             problems.append(f"missing frontmatter: {name}")
-        for tool, root in roots.items():
-            link = root / name
+        for tool in entry["tools"]:
+            link = _tool_root(tool, h) / name
             if not link.is_symlink() or not (link / "SKILL.md").is_file():
                 problems.append(f"{tool} link missing: {name}")
-            elif link.resolve() != (canonical_root / name).resolve():
+            elif link.resolve() != (root / name).resolve():
                 problems.append(f"{tool} link has wrong target: {name}")
     return {
         "ok": not problems,
-        "skills": len(RETAINED_SKILLS),
+        "skills": len(SKILL_CATALOG),
         "problems": problems,
     }
+
+
+def check_superpower_approval(
+    profile: str,
+    skill_name: str,
+    *,
+    approved: bool = False,
+) -> dict[str, Any]:
+    entry = next((e for e in SKILL_CATALOG if e["name"] == skill_name), None)
+    if entry is None:
+        return {"allowed": False, "reason": f"unknown skill: {skill_name}", "enforcement": "enforced"}
+    if entry["kind"] != "superpower":
+        return {"allowed": True, "reason": None, "enforcement": "enforced"}
+    allowed = entry.get("allowed_profiles")
+    if allowed is not None and profile not in allowed:
+        return {
+            "allowed": False,
+            "reason": f"profile {profile!r} is not allowed to use superpower {skill_name!r}",
+            "enforcement": "enforced",
+        }
+    if entry.get("requires_approval", False) and not approved:
+        return {
+            "allowed": False,
+            "reason": f"superpower {skill_name!r} requires explicit human approval for profile {profile!r}",
+            "enforcement": "pending_approval",
+        }
+    return {"allowed": True, "reason": None, "enforcement": "enforced"}
