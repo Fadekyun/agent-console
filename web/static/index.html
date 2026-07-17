@@ -16,6 +16,7 @@
       <div class="brand"><span class="brand-mark">AC</span><span class="nav-label"><strong>Agent Console</strong><small>v0.1.0</small></span></div>
       <nav class="nav-list">
         <button class="nav-button" data-view="sessions"><span aria-hidden="true">●</span><span class="nav-label">Sessions</span></button>
+        <button class="nav-button" data-view="profiles"><span aria-hidden="true">◎</span><span class="nav-label">Profiles</span></button>
         <button class="nav-button" data-view="orchestration"><span aria-hidden="true">⌘</span><span class="nav-label">Orchestration</span></button>
         <button class="nav-button" data-view="new"><span aria-hidden="true">＋</span><span class="nav-label">New session</span></button>
       </nav>
@@ -50,6 +51,11 @@
           </div>
           <div class="session-table-shell"><table class="session-table"><thead><tr><th>State</th><th>Session</th><th>Tool / mode</th><th>Role</th><th>Repository</th><th>Activity</th><th>Clients</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody id="active-sessions"></tbody></table></div>
           <details class="history"><summary>History <span id="history-count" class="count">0</span></summary><div class="session-table-shell"><table class="session-table"><thead><tr><th>State</th><th>Session</th><th>Tool / mode</th><th>Role</th><th>Repository</th><th>Activity</th><th>Clients</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody id="session-history"></tbody></table></div></details>
+        </section>
+
+        <section class="view" data-view-panel="profiles" hidden>
+          <div class="view-heading"><div><h2>Agent Profiles</h2><p class="muted">Role-specific instructions and capability metadata from the profile schema.</p></div><button id="refresh-profiles">Refresh</button></div>
+          <div id="profiles-list" class="profiles-grid"></div>
         </section>
 
         <section class="view" data-view-panel="orchestration" hidden>
@@ -131,6 +137,17 @@
 
   <dialog id="review-dialog">
     <form method="dialog" class="dialog-form review-dialog-form"><h2 id="review-title">Peer review</h2><p id="review-notice" class="muted"></p><pre id="review-content" class="plan-preview"></pre><div class="dialog-actions"><button value="close">Close</button></div></form>
+  </dialog>
+
+  <dialog id="profile-editor-dialog">
+    <form id="profile-editor-form" class="dialog-form">
+      <h2 id="profile-editor-title">Edit profile</h2>
+      <input name="profile_name" type="hidden">
+      <div id="profile-editor-meta" class="profile-meta-summary"></div>
+      <label>Instructions<textarea name="content" rows="12" class="code-textarea"></textarea></label>
+      <p id="profile-editor-status" role="status"></p>
+      <div class="dialog-actions"><button type="button" data-close="profile-editor-dialog">Cancel</button><button type="submit" class="primary">Save</button></div>
+    </form>
   </dialog>
 
   <textarea id="clipboard-fallback" class="visually-hidden" aria-hidden="true"></textarea>

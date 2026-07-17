@@ -203,6 +203,23 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     async def profiles(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
         return session_manager.list_profiles()
 
+    @app.get("/api/profiles/{name}")
+    async def inspect_profile_api(
+        name: str, _: AuthContext = Depends(require_identity)
+    ) -> dict[str, Any]:
+        return session_manager.inspect_profile(name)
+
+    class ProfileUpdateRequest(BaseModel):
+        content: str = Field(min_length=1)
+
+    @app.put("/api/profiles/{name}")
+    async def write_profile_api(
+        name: str,
+        payload: ProfileUpdateRequest,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.write_profile(name, payload.content)
+
     @app.get("/api/plans")
     async def plans(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
         return session_manager.list_plans()

@@ -917,12 +917,37 @@ class SessionManager:
 
     def inspect_profile(self, profile: str) -> dict[str, Any]:
         validate_profile(profile)
+        meta = PROFILE_SCHEMA[profile]
         return {
             "name": profile,
-            "read_only": PROFILE_SCHEMA[profile]["read_write_capability"] == "read_only",
+            "read_only": meta["read_write_capability"] == "read_only",
             "path": str(self.settings.profile_dir / f"{profile}.md"),
             "content": profile_text(self.settings.profile_dir, profile),
+            "read_write_capability": meta["read_write_capability"],
+            "worktree_requirement": meta["worktree_requirement"],
+            "requires_human_approval": meta["requires_human_approval"],
+            "status": meta["status"],
+            "delegation_permissions": sorted(meta["delegation_permissions"]),
+            "allowed_delegation_profiles": sorted(meta["allowed_delegation_profiles"]),
+            "allowed_collaboration_profiles": sorted(meta["allowed_collaboration_profiles"]),
+            "legacy_aliases": sorted(meta["legacy_aliases"]),
+            "replacement_profile": meta["replacement_profile"],
+            "provider_mode_constraints": sorted(meta["provider_mode_constraints"]),
+            "manages_session_links": meta["manages_session_links"],
         }
+
+    def write_profile(self, profile: str, content: str) -> dict[str, Any]:
+        validate_profile(profile)
+        body = content.strip()
+        if not body:
+            raise ValueError("profile instruction body cannot be empty")
+        path = self.settings.profile_dir / f"{profile}.md"
+        if not path.is_file():
+            raise FileNotFoundError(f"profile is not installed: {path}")
+        original_mode = path.stat().st_mode
+        path.write_text(body + "\n", encoding="utf-8")
+        path.chmod(original_mode)
+        return self.inspect_profile(profile)
 
     def _discover_plans(self) -> None:
         if not self.settings.handoff_dir.is_dir():

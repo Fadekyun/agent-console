@@ -262,7 +262,22 @@ dialog::backdrop { background: rgb(0 0 0 / .58); } .dialog-form, dialog form { d
   .filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .attention-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+/* Profiles */
+.profiles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap: 14px; }
+.profile-card { display: grid; gap: 8px; padding: 15px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.profile-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.profile-card-header h3 { margin: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 1rem; }
+.profile-card .meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: .82rem; color: var(--muted); }
+.profile-card .meta span { display: inline-flex; align-items: center; gap: 4px; }
+.profile-card p { margin: 0; font-size: .88rem; overflow-wrap: anywhere; }
+.profile-meta-summary { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-muted); font-size: .82rem; }
+.profile-meta-summary span { white-space: nowrap; }
+.code-textarea { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .88rem; line-height: 1.5; min-height: 160px; }
+.mobile-profiles-list { display: grid; gap: 8px; }
+.mobile-profile-card { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+
 @media (max-width: 760px) {
+  .mobile-tabs { grid-template-columns: repeat(5, 1fr); }
   .provider-health, .topbar-actions > .primary { display: none; }
   .attention-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .session-table-shell { border: 0; overflow: visible; background: transparent; }

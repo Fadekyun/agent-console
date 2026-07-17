@@ -3,7 +3,7 @@ import { initTheme } from '/static/theme.js?v=7';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = { identity: null, sessions: [], plans: [], tree: { roots: [], delegations: [] }, view: 'sessions', selectedSession: null };
-const viewTitles = { sessions: 'Sessions', orchestration: 'Orchestration', new: 'New session' };
+const viewTitles = { sessions: 'Sessions', profiles: 'Profiles', orchestration: 'Orchestration', new: 'New session' };
 const activeEl = $('#active-sessions');
 const historyEl = $('#session-history');
 const historyCountEl = $('#history-count');
@@ -188,6 +188,7 @@ function selectView(view, updateHash = true) {
     else button.removeAttribute('aria-current');
   });
   $('#view-title').textContent = viewTitles[state.view];
+  if (state.view === 'profiles') renderProfiles();
   if (updateHash && location.hash !== `#${state.view}`) history.replaceState(null, '', `#${state.view}`);
 }
 
@@ -331,6 +332,63 @@ async function openPlan(planId) {
     $('#plan-content').textContent = plan.plan; $('#revision-warning').hidden = plan.revision_state !== 'changed';
   } catch (error) { $('#plan-status').textContent = error.message || String(error); }
 }
+
+async function renderProfiles() {
+  const entries = await api('/api/profiles');
+  $('#profiles-list').replaceChildren(...entries.map(profileCard));
+}
+
+function profileCard(entry) {
+  const card = document.createElement('div'); card.className = 'profile-card';
+  const header = document.createElement('div'); header.className = 'profile-card-header';
+  const h3 = document.createElement('h3'); h3.textContent = entry.display_name || entry.name;
+  const badge = document.createElement('span'); badge.className = `badge ${entry.status === 'active' ? 'live' : 'stopped'}`; badge.textContent = entry.status;
+  header.append(h3, badge);
+  const meta = document.createElement('div'); meta.className = 'meta';
+  meta.innerHTML = `<span>${entry.read_write_capability}</span><span>worktree: ${entry.worktree_requirement}</span><span>delegation: ${(entry.delegation_permissions || []).join(', ') || 'none'}</span>${entry.requires_human_approval ? '<span>requires approval</span>' : ''}`;
+  const desc = document.createElement('p'); desc.textContent = entry.description || '';
+  const actions = document.createElement('div'); actions.className = 'dialog-actions';
+  const editBtn = document.createElement('button'); editBtn.textContent = 'Edit instructions'; editBtn.onclick = () => openProfileEditor(entry.name);
+  actions.append(editBtn);
+  card.append(header, meta, desc, actions);
+  return card;
+}
+
+async function openProfileEditor(name) {
+  const form = $('#profile-editor-form'); form.reset();
+  form.elements.profile_name.value = name;
+  $('#profile-editor-title').textContent = `Edit: ${name}`;
+  $('#profile-editor-status').textContent = 'Loading…';
+  $('#profile-editor-dialog').showModal();
+  try {
+    const data = await api(`/api/profiles/${encodeURIComponent(name)}`);
+    form.elements.content.value = data.content || '';
+    const metaHtml = [
+      `<span>${data.read_write_capability}</span>`,
+      `<span>worktree: ${data.worktree_requirement}</span>`,
+      `<span>status: ${data.status}</span>`,
+      data.requires_human_approval ? '<span>requires approval</span>' : '',
+      data.replacement_profile ? `<span>replaces: ${data.replacement_profile}</span>` : '',
+    ].filter(Boolean).join(' ');
+    $('#profile-editor-meta').innerHTML = metaHtml;
+    $('#profile-editor-status').textContent = '';
+  } catch (e) { $('#profile-editor-status').textContent = e.message; }
+}
+
+$('#profile-editor-form').onsubmit = async (event) => {
+  event.preventDefault(); const submit = $('button[type="submit"]', event.target); submit.disabled = true;
+  const status = $('#profile-editor-status'); status.textContent = 'Saving…';
+  try {
+    await api(`/api/profiles/${encodeURIComponent(event.target.elements.profile_name.value)}`, {
+      method: 'PUT', body: JSON.stringify({ content: event.target.elements.content.value }),
+    });
+    status.textContent = 'Saved.';
+    setTimeout(() => { $('#profile-editor-dialog').close(); }, 800);
+    renderProfiles();
+  } catch (e) { status.textContent = e.message; } finally { submit.disabled = false; }
+};
+
+$('#refresh-profiles').onclick = renderProfiles;
 
 function updateAgentModeField() {
   const tool = newForm.elements.tool.value;
