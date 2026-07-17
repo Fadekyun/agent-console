@@ -336,7 +336,8 @@ function updateAgentModeField() {
   const profile = newForm.elements.profile.value;
   const field = $('#agent-mode-field');
   const select = newForm.elements.agent_mode;
-  const readOnly = ['planner', 'researcher', 'reviewer', 'scout'].includes(profile);
+  const p = state.identity.profiles.find(x => x.name === profile);
+  const readOnly = p ? p.read_write_capability === 'read_only' : false;
   const visible = tool === 'codex' || tool === 'opencode';
   field.hidden = !visible; select.disabled = !visible;
   if (!visible) return;
@@ -435,9 +436,9 @@ async function start() {
   newForm.elements.tool.replaceChildren(...state.identity.tool_status.map((item) => {
     const option = new Option(`${item.name} · ${item.status}`, item.name, false, item.name === state.identity.default_tool); option.disabled = item.status === 'disabled'; return option;
   }));
-  newForm.elements.profile.replaceChildren(...state.identity.profiles.map((profile) => new Option(profile, profile, false, profile === 'general')));
+  newForm.elements.profile.replaceChildren(...state.identity.profiles.map((p) => new Option(p.display_name || p.name, p.name, false, p.name === 'general')));
   $('#filter-tool').append(...state.identity.tool_status.map((item) => new Option(item.name, item.name)));
-  $('#filter-profile').append(...state.identity.profiles.map((profile) => new Option(profile, profile)));
+  $('#filter-profile').append(...state.identity.profiles.map((p) => new Option(p.display_name || p.name, p.name)));
   newForm.elements.tool.onchange = updateNewToolFields;
   newForm.elements.provider.onchange = loadModels;
   $('#estimate-models').onclick = estimateModelUsage;
@@ -452,7 +453,7 @@ async function start() {
     [$('#estimate-uncached'), $('#estimate-cached'), $('#estimate-output'), $('#estimate-reasoning')].forEach((input, index) => { input.value = values[index]; });
     if (button.dataset.costPreset !== 'custom') estimateModelUsage(); else $('#estimate-uncached').focus();
   });
-  newForm.elements.profile.onchange = () => { newForm.elements.worktree.checked = ['coder', 'bugfix'].includes(newForm.elements.profile.value); updateAgentModeField(); };
+  newForm.elements.profile.onchange = () => { const p = state.identity.profiles.find(x => x.name === newForm.elements.profile.value); newForm.elements.worktree.checked = p ? p.worktree_requirement !== 'none' : false; updateAgentModeField(); };
   delegateForm.elements.tool.onchange = () => { updateContextSelect(delegateForm.elements.tool, delegateForm.elements.auth_context); $('#delegate-mode-field').hidden = delegateForm.elements.tool.value !== 'opencode'; };
   updateNewToolFields(); selectView(location.hash.slice(1) || 'sessions', false); await refresh();
   setInterval(() => { if (!document.hidden && !$$('dialog').some((dialog) => dialog.open)) refresh().catch((error) => showNotice(error.message, 'error')); }, 10000);

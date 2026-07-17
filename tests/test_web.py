@@ -172,6 +172,7 @@ class WebTests(unittest.TestCase):
             self.assertIn("path", entry)
             self.assertIn("allowed_delegation_profiles", entry)
             self.assertIn("allowed_collaboration_profiles", entry)
+            self.assertIn("delegation_permissions", entry)
             self.assertIn("requires_human_approval", entry)
             self.assertIn("status", entry)
         coder = next(p for p in entries if p["name"] == "coder")

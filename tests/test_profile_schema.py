@@ -131,6 +131,24 @@ class ProfileSchemaTests(unittest.TestCase):
                 f"{name} should be active",
             )
 
+    def test_read_only_profiles_have_read_only_delegation_permission(self) -> None:
+        for name, meta in PROFILE_SCHEMA.items():
+            if meta["read_write_capability"] == "read_only":
+                self.assertEqual(
+                    meta["delegation_permissions"],
+                    frozenset({"read_only"}),
+                    f"{name} should have read_only delegation permission",
+                )
+
+    def test_write_profiles_have_empty_delegation_permission(self) -> None:
+        for name, meta in PROFILE_SCHEMA.items():
+            if meta["read_write_capability"] == "write":
+                self.assertEqual(
+                    meta["delegation_permissions"],
+                    frozenset(),
+                    f"{name} should have empty delegation permission set",
+                )
+
     def test_general_worktree_requirement_is_none(self) -> None:
         self.assertEqual(
             PROFILE_SCHEMA["general"]["worktree_requirement"], "none"
@@ -139,9 +157,9 @@ class ProfileSchemaTests(unittest.TestCase):
     def test_every_profile_has_all_expected_fields(self) -> None:
         expected_fields = {
             "name", "display_name", "description", "read_write_capability",
-            "worktree_requirement", "allowed_delegation_profiles",
-            "allowed_collaboration_profiles", "legacy_aliases",
-            "replacement_profile", "provider_mode_constraints",
+            "worktree_requirement", "delegation_permissions",
+            "allowed_delegation_profiles", "allowed_collaboration_profiles",
+            "legacy_aliases", "replacement_profile", "provider_mode_constraints",
             "requires_human_approval", "manages_session_links", "status",
         }
         for name, meta in PROFILE_SCHEMA.items():
@@ -170,7 +188,7 @@ class ProfileSummaryTests(unittest.TestCase):
 
     def test_general_is_first_summary(self) -> None:
         summaries = profile_summaries()
-        self.assertEqual(summaries[0]["name"], "bugfix")  # sorted alphabetically
+        self.assertEqual(summaries[0]["name"], "general")
 
 
 class ProfiledValidationFailureTests(unittest.TestCase):

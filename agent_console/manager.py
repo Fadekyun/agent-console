@@ -15,7 +15,7 @@ from .auth import AuthRegistry
 from .config import Settings
 from .database import Database, utc_now
 from .models import ModelCatalogue, estimate_models, lowest_cost_model
-from .profiles import READ_ONLY_PROFILES, profile_text, validate_profile_schema
+from .profiles import PROFILE_SCHEMA, READ_ONLY_PROFILES, profile_text, validate_profile_schema
 from .providers import TOOL_BINARIES, LaunchSpec, provider_adapter
 from .tmux import Tmux
 from .validation import (
@@ -1047,7 +1047,8 @@ class SessionManager:
         agent_mode: str | None = None,
         creator_surface: str = "CLI",
     ) -> dict[str, Any]:
-        if profile not in READ_ONLY_PROFILES:
+        profile_meta = PROFILE_SCHEMA.get(profile)
+        if profile_meta is None or profile_meta["read_write_capability"] != "read_only":
             raise ValueError("delegation may not automatically escalate to a write-capable profile")
         validate_tool(tool)
         if tool == "opencode" and agent_mode not in {None, "plan"}:
