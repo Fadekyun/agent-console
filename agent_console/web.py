@@ -89,7 +89,7 @@ class AttentionRequest(BaseModel):
 
 
 class DelegationRequest(BaseModel):
-    profile: str = Field(pattern="^(planner|researcher|reviewer|scout)$")
+    profile: str = Field(min_length=1)
     tool: str = "codex"
     auth_context: str | None = Field(default=None, max_length=64)
     agent_mode: str | None = Field(default=None, pattern="^(plan|build|auto)$")
@@ -97,6 +97,11 @@ class DelegationRequest(BaseModel):
     repository: str | None = None
     name: str | None = Field(default=None, max_length=80)
 
+
+class GroupCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    purpose: str | None = Field(default=None, max_length=2000)
+    parent_session: str | None = Field(default=None, max_length=80)
 
 class PlanExecuteRequest(BaseModel):
     confirmed: bool = False
@@ -233,6 +238,17 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     @app.get("/api/delegations")
     async def delegations(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         return session_manager.session_tree()
+
+    @app.get("/api/session-groups")
+    async def session_groups(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
+        return session_manager.list_groups()
+
+    @app.post("/api/session-groups")
+    async def create_session_group(
+        payload: GroupCreateRequest,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.create_group(payload.name, payload.purpose, payload.parent_session)
 
     @app.get("/api/sessions/{name}/wait-status")
     async def wait_status(

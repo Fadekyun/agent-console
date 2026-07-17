@@ -312,15 +312,45 @@ function renderTreeNode(session) {
   return node;
 }
 
-function renderOrchestration() {
-  treeEl.replaceChildren(...state.tree.roots.map(renderTreeNode));
-  if (!state.tree.roots.length) treeEl.innerHTML = '<p class="empty">No sessions discovered.</p>';
-  plansEl.replaceChildren(...state.plans.map((plan) => {
+async function renderOrchestration() {
+  const [groups, tree] = await Promise.all([
+    api('/api/session-groups').catch(() => []),
+    Promise.resolve(state.tree),
+  ]);
+  const groupEl = document.createElement('div'); groupEl.className = 'panel';
+  groupEl.innerHTML = '<div class="panel-heading"><h3>Session groups</h3></div>';
+  const groupList = document.createElement('div'); groupList.className = 'tree-list';
+  if (groups.length) {
+    groupList.replaceChildren(...groups.map(renderGroupCard));
+  } else {
+    groupList.innerHTML = '<p class="empty">No session groups yet. Create one from a running session.</p>';
+  }
+  groupEl.append(groupList);
+  treeEl.replaceChildren(groupEl, ...state.tree.roots.map(renderTreeNode));
+  if (!state.tree.roots.length && !groups.length) treeEl.innerHTML = '<p class="empty">No sessions discovered.</p>';
+  const activePlans = state.plans.filter(p => p.status === 'planned' || p.status === 'executing');
+  plansEl.replaceChildren(...activePlans.map((plan) => {
     const row = document.createElement('article'); row.className = 'plan-row';
     row.innerHTML = `<h3>${escapeHtml(plan.title || plan.id)}</h3><p class="meta">${escapeHtml(plan.status)} · ${escapeHtml(plan.repository || 'repository in metadata')}</p><button data-preview>Preview and execute</button>`;
     $('[data-preview]', row).onclick = () => openPlan(plan.id); return row;
   }));
-  if (!state.plans.length) plansEl.innerHTML = '<p class="empty">No shared plans found.</p>';
+  if (!activePlans.length) plansEl.innerHTML = '<p class="empty">No shared plans found.</p>';
+}
+
+function renderGroupCard(group) {
+  const card = document.createElement('article'); card.className = 'tree-node';
+  const statusBadge = group.status === 'active' ? '<span class="badge live">active</span>' : '<span class="badge stopped">completed</span>';
+  card.innerHTML = `<div class="session-title"><h3>${escapeHtml(group.name)}</h3>${statusBadge}</div><p class="meta">${escapeHtml(group.purpose || 'No purpose set')}</p>`;
+  if (group.sessions && group.sessions.length) {
+    const children = document.createElement('div'); children.className = 'tree-node-children';
+    children.replaceChildren(...group.sessions.map((s) => {
+      const child = document.createElement('div'); child.className = 'tree-node';
+      child.innerHTML = `<div class="session-title"><span>${escapeHtml(s.tmux_name || 'unknown')}</span><span class="badge ${s.status === 'detached' ? 'live' : 'stopped'}">${escapeHtml(s.profile || '')}</span></div><p class="meta">${escapeHtml(s.tool || '')} · ${escapeHtml(s.attention_state || 'normal')}</p>`;
+      return child;
+    }));
+    card.append(children);
+  }
+  return card;
 }
 
 async function openPlan(planId) {

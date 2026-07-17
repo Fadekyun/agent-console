@@ -550,5 +550,79 @@ class WaitProtocolTests(unittest.TestCase):
         self.assertIn("wait-for-children", child_ctx["context"])
 
 
+class SessionGroupTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.workspace = root / "workspace"
+        self.workspace.mkdir()
+        self.profile_dir = root / "profiles"
+        self.profile_dir.mkdir()
+        for profile in ("general", "planner", "coder", "scout", "reviewer", "researcher", "verifier", "bugfix", "release", "operator"):
+            (self.profile_dir / f"{profile}.md").write_text(f"# {profile}\n", encoding="utf-8")
+        self.socket = f"agent-console-group-test-{os.getpid()}-{id(self)}"
+        settings = Settings(
+            workspace_root=self.workspace,
+            state_dir=root / "state",
+            database_path=root / "state" / "test.sqlite3",
+            profile_dir=self.profile_dir,
+            handoff_dir=root / "handoffs",
+            worktree_root=self.workspace / "worktrees",
+            tmux_socket=self.socket,
+            max_children_per_parent=10,
+            max_managed_sessions=12,
+        )
+        self.manager = SessionManager(settings)
+        codex_home = self.manager.auth.codex_home("default")
+        (codex_home / "auth.json").write_text("{}\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        subprocess.run(["tmux", "-L", self.socket, "kill-server"], capture_output=True)
+        self.temp.cleanup()
+
+    def test_create_group(self) -> None:
+        parent = self.manager.create(
+            tool="shell", profile="general", name="group-parent",
+            repository=str(self.workspace),
+        )
+        group = self.manager.create_group("test-group", purpose="coordinate work", parent_session="group-parent")
+        self.assertEqual(group["name"], "test-group")
+        self.assertEqual(group["purpose"], "coordinate work")
+        self.assertEqual(group["status"], "active")
+
+    def test_list_groups(self) -> None:
+        parent = self.manager.create(
+            tool="shell", profile="general", name="list-group-parent",
+            repository=str(self.workspace),
+        )
+        self.manager.create_group("group-a", purpose="task A", parent_session="list-group-parent")
+        self.manager.create_group("group-b", purpose="task B", parent_session="list-group-parent")
+        groups = self.manager.list_groups()
+        self.assertGreaterEqual(len(groups), 2)
+
+    def test_group_without_parent(self) -> None:
+        group = self.manager.create_group("standalone", purpose="no parent")
+        self.assertEqual(group["name"], "standalone")
+        self.assertIsNone(group["parent_session_id"])
+
+    def test_delegation_guard_uses_schema(self) -> None:
+        parent = self.manager.create(
+            tool="shell", profile="general", name="deleg-guard-parent",
+            repository=str(self.workspace),
+        )
+        from agent_console.profiles import PROFILE_SCHEMA
+        for name, meta in PROFILE_SCHEMA.items():
+            if meta["read_write_capability"] == "read_only":
+                result = self.manager.delegate(
+                    profile=name, parent=parent["id"], task="test delegation with schema guard", tool="shell",
+                )
+                self.assertIn("session", result)
+            else:
+                with self.assertRaises(ValueError):
+                    self.manager.delegate(
+                        profile=name, parent=parent["id"], task="should fail", tool="shell",
+                    )
+
+
 if __name__ == "__main__":
     unittest.main()

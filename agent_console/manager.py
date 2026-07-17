@@ -429,6 +429,54 @@ class SessionManager:
                 del result["summary_json"]
             return result
 
+    def list_groups(self) -> list[dict[str, Any]]:
+        with self.database.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM session_groups ORDER BY created_at DESC"
+            ).fetchall()
+            groups = []
+            for row in rows:
+                g = dict(row)
+                g["sessions"] = []
+                if g["parent_session_id"]:
+                    children = conn.execute(
+                        "SELECT tmux_name, profile, tool, status, attention_state "
+                        "FROM sessions WHERE parent_session_id=? OR id=?",
+                        (g["parent_session_id"], g["parent_session_id"]),
+                    ).fetchall()
+                    g["sessions"] = [dict(c) for c in children]
+                groups.append(g)
+            return groups
+
+    def create_group(
+        self,
+        name: str,
+        purpose: str | None = None,
+        parent_session: str | None = None,
+    ) -> dict[str, Any]:
+        group_id = f"grp-{uuid.uuid4().hex}"
+        parent_id: str | None = None
+        if parent_session:
+            with self.database.connect() as conn:
+                row = conn.execute(
+                    "SELECT id FROM sessions WHERE tmux_name=?", (parent_session,)
+                ).fetchone()
+                if row is not None:
+                    parent_id = row["id"]
+        with self.database.connect() as conn:
+            conn.execute(
+                "INSERT INTO session_groups(id, name, purpose, parent_session_id, status, created_at) "
+                "VALUES(?, ?, ?, ?, 'active', ?)",
+                (group_id, name, purpose, parent_id, utc_now()),
+            )
+        return {
+            "id": group_id,
+            "name": name,
+            "purpose": purpose,
+            "parent_session_id": parent_id,
+            "status": "active",
+        }
+
     def review_session(
         self,
         name: str,

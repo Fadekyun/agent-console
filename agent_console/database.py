@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def utc_now() -> str:
@@ -97,6 +97,17 @@ class Database:
                     result_path TEXT,
                     FOREIGN KEY(parent_session_id) REFERENCES sessions(id),
                     FOREIGN KEY(child_session_id) REFERENCES sessions(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS session_groups (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    purpose TEXT,
+                    parent_session_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    FOREIGN KEY(parent_session_id) REFERENCES sessions(id)
                 );
 
                 CREATE TABLE IF NOT EXISTS audit_events (
