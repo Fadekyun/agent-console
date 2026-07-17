@@ -228,6 +228,12 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     async def delegations(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         return session_manager.session_tree()
 
+    @app.get("/api/sessions/{name}/wait-status")
+    async def wait_status(
+        name: str, _: AuthContext = Depends(require_identity)
+    ) -> dict[str, Any] | None:
+        return session_manager.wait_status(name)
+
     @app.get("/api/sessions/{name}/review")
     async def review_session(
         name: str,

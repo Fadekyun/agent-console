@@ -112,6 +112,10 @@ def parser() -> argparse.ArgumentParser:
     archive.add_argument("--kill", action="store_true")
     archive.add_argument("--yes", action="store_true")
     archive.add_argument("--allow-unmanaged", action="store_true")
+    wait_children = session_commands.add_parser("wait-for-children")
+    wait_children.add_argument("name")
+    wait_children.add_argument("--timeout", type=int, default=None)
+    wait_children.add_argument("--poll-interval", type=int, default=None)
 
     profile = commands.add_parser("profile")
     profile_commands = profile.add_subparsers(dest="profile_command", required=True)
@@ -331,6 +335,25 @@ def main(argv: list[str] | None = None) -> int:
                 if not args.yes and not confirm_twice("Kill the tmux session?"):
                     raise PermissionError("confirmation required")
                 emit(manager.kill(args.name, allow_unmanaged=args.allow_unmanaged))
+            elif args.session_command == "wait-for-children":
+                result = manager.wait_for_children(
+                    args.name,
+                    timeout=args.timeout,
+                    poll_interval=args.poll_interval,
+                )
+                if args.json:
+                    emit(result)
+                else:
+                    outcome = result.get("outcome", "unknown")
+                    exit_code = result.get("exit_code", 1)
+                    print(f"Wait outcome: {outcome} (exit code {exit_code})")
+                    for child in result.get("children", []):
+                        status = child.get("wait_status", "unknown")
+                        attn = child.get("attention_state", "normal")
+                        name = child["tmux_name"]
+                        note = f" — {child.get('attention_note', '')}" if child.get("attention_note") else ""
+                        print(f"  {name}: {status} (attention: {attn}){note}")
+                return result.get("exit_code", 1) or 0
             elif args.session_command == "archive":
                 if args.kill and not args.yes and not confirm_twice(
                     "Archive and kill the tmux session?"

@@ -431,5 +431,124 @@ class SessionIntegrationTests(unittest.TestCase):
         self.assertTrue(Path(session["worktree"]).is_dir())
 
 
+class WaitProtocolTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.workspace = root / "workspace"
+        self.workspace.mkdir()
+        self.profile_dir = root / "profiles"
+        self.profile_dir.mkdir()
+        for profile in ("general", "planner", "coder"):
+            (self.profile_dir / f"{profile}.md").write_text(f"# {profile}\n", encoding="utf-8")
+        self.socket = f"agent-console-wait-test-{os.getpid()}-{id(self)}"
+        settings = Settings(
+            workspace_root=self.workspace,
+            state_dir=root / "state",
+            database_path=root / "state" / "test.sqlite3",
+            profile_dir=self.profile_dir,
+            handoff_dir=root / "handoffs",
+            worktree_root=self.workspace / "worktrees",
+            tmux_socket=self.socket,
+            max_children_per_parent=4,
+            max_managed_sessions=8,
+        )
+        self.manager = SessionManager(settings)
+        codex_home = self.manager.auth.codex_home("default")
+        (codex_home / "auth.json").write_text("{}\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        subprocess.run(["tmux", "-L", self.socket, "kill-server"], capture_output=True)
+        self.temp.cleanup()
+
+    def test_wait_children_all_ready_for_review(self) -> None:
+        parent = self.manager.create(
+            tool="shell", profile="general", name="wait-parent-success",
+            repository=str(self.workspace),
+        )
+        child1 = self.manager.delegate(
+            profile="planner", parent=parent["id"], task="plan only",
+            tool="shell",
+        )["session"]
+        child2 = self.manager.delegate(
+            profile="planner", parent=parent["id"], task="plan more",
+            tool="shell",
+        )["session"]
+
+        self.manager.set_attention(child1["tmux_name"], state="ready_for_review", actor="test")
+        self.manager.set_attention(child2["tmux_name"], state="ready_for_review", actor="test")
+
+        self.manager.kill(child1["tmux_name"])
+        self.manager.kill(child2["tmux_name"])
+
+        result = self.manager.wait_for_children(
+            parent["tmux_name"], timeout=15, poll_interval=1
+        )
+        self.assertEqual(result["outcome"], "success")
+        self.assertEqual(result["exit_code"], 0)
+        for child in result["children"]:
+            self.assertEqual(child["wait_status"], "success")
+
+    def test_wait_timeout(self) -> None:
+        parent = self.manager.create(
+            tool="shell", profile="general", name="wait-parent-timeout",
+            repository=str(self.workspace),
+        )
+        self.manager.delegate(
+            profile="planner", parent=parent["id"], task="plan only",
+            tool="shell",
+        )
+
+        result = self.manager.wait_for_children(
+            parent["tmux_name"], timeout=3, poll_interval=1
+        )
+        self.assertEqual(result["outcome"], "timeout")
+        self.assertEqual(result["exit_code"], 1)
+
+    def test_wait_validation_rejects_invalid_params(self) -> None:
+        parent = self.manager.create(
+            tool="shell", profile="general", name="wait-validation",
+            repository=str(self.workspace),
+        )
+        with self.assertRaises(ValueError):
+            self.manager.wait_for_children(parent["tmux_name"], timeout=0)
+        with self.assertRaises(ValueError):
+            self.manager.wait_for_children(parent["tmux_name"], poll_interval=0)
+
+    def test_wait_status_returns_latest_wait(self) -> None:
+        parent = self.manager.create(
+            tool="shell", profile="general", name="wait-status-test",
+            repository=str(self.workspace),
+        )
+        child = self.manager.delegate(
+            profile="planner", parent=parent["id"], task="test wait status",
+            tool="shell",
+        )["session"]
+        self.manager.set_attention(child["tmux_name"], state="ready_for_review", actor="test")
+        self.manager.kill(child["tmux_name"])
+        result = self.manager.wait_for_children(
+            parent["tmux_name"], timeout=15, poll_interval=1
+        )
+        status = self.manager.wait_status(parent["tmux_name"])
+        self.assertIsNotNone(status)
+        self.assertEqual(status["outcome"], "success")
+
+    def test_context_file_includes_wait_protocol(self) -> None:
+        parent = self.manager.create(
+            tool="shell", profile="general", name="wait-ctx-parent",
+            repository=str(self.workspace),
+        )
+        ctx = self.manager.session_context("wait-ctx-parent")
+        self.assertIn("wait-for-children", ctx["context"])
+
+        child = self.manager.delegate(
+            profile="planner", parent=parent["id"], task="wait context test",
+            tool="shell",
+        )["session"]
+        child_ctx = self.manager.session_context(child["tmux_name"])
+        self.assertIn("ready_for_review", child_ctx["context"])
+        self.assertIn("wait-for-children", child_ctx["context"])
+
+
 if __name__ == "__main__":
     unittest.main()

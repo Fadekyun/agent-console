@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def utc_now() -> str:
@@ -108,6 +108,18 @@ class Database:
                     target TEXT,
                     outcome TEXT NOT NULL,
                     details_json TEXT NOT NULL DEFAULT '{}'
+                );
+
+                CREATE TABLE IF NOT EXISTS session_waits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    parent_session_id TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    deadline_at TEXT NOT NULL,
+                    poll_interval_seconds INTEGER NOT NULL DEFAULT 10,
+                    outcome TEXT,
+                    completed_at TEXT,
+                    summary_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY(parent_session_id) REFERENCES sessions(id)
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
