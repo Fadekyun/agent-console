@@ -611,8 +611,10 @@ class SessionGroupTests(unittest.TestCase):
             repository=str(self.workspace),
         )
         from agent_console.profiles import PROFILE_SCHEMA
+        parent_profile_meta = PROFILE_SCHEMA.get("general", {})
+        delegatable = parent_profile_meta.get("allowed_delegation_profiles", frozenset())
         for name, meta in PROFILE_SCHEMA.items():
-            if meta["read_write_capability"] == "read_only":
+            if name in delegatable:
                 result = self.manager.delegate(
                     profile=name, parent=parent["id"], task="test delegation with schema guard", tool="shell",
                 )

@@ -1448,13 +1448,14 @@ class SessionManager:
         agent_mode: str | None = None,
         creator_surface: str = "CLI",
     ) -> dict[str, Any]:
-        profile_meta = PROFILE_SCHEMA.get(profile)
-        if profile_meta is None or profile_meta["read_write_capability"] != "read_only":
-            raise ValueError("delegation may not automatically escalate to a write-capable profile")
         validate_tool(tool)
-        capability = validate_profile_capability(profile, tool, agent_mode)
-        if not capability["allowed"]:
-            raise ValueError(capability["reason"])
+        profile_meta = PROFILE_SCHEMA.get(profile)
+        if profile_meta is None:
+            raise ValueError(f"unknown profile: {profile}")
+        delegation_perm = profile_meta.get("delegation_permissions")
+        if not delegation_perm or "read_only" not in delegation_perm:
+            raise ValueError(f"profile {profile!r} does not permit delegation")
+        validate_profile_capability(profile, tool, agent_mode)
         if tool == "opencode" and agent_mode not in {None, "plan"}:
             raise ValueError("delegated OpenCode sessions must use Plan mode")
         self.reconcile()
@@ -1464,6 +1465,13 @@ class SessionManager:
             ).fetchone()
             if parent_row is None:
                 raise KeyError(f"parent session not found: {parent}")
+            parent_profile = parent_row["profile"] or "general"
+            parent_meta = PROFILE_SCHEMA.get(parent_profile, {})
+            parent_allowed = parent_meta.get("allowed_delegation_profiles") or set()
+            if profile not in parent_allowed:
+                raise ValueError(
+                    f"profile {parent_profile!r} is not allowed to delegate to {profile!r}"
+                )
             child_count = conn.execute(
                 "SELECT COUNT(*) FROM delegations WHERE parent_session_id=? AND status IN ('created', 'running')",
                 (parent_row["id"],),
