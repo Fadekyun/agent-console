@@ -771,6 +771,10 @@ class SessionManager:
             f"`agentctl session attention {session_name or '<name>'} --state <state>`."
         )
         wait_proto = (
+            "When you have completed your work, signal completion via "
+            "`agentctl session attention --current --state ready_for_review` before exiting. "
+            "Your orchestrator uses `agentctl session wait-for-children` to wait for you."
+        ) if parent_session_id else (
             "When delegating to child sessions, use "
             f"`agentctl session wait-for-children {session_name or '<parent-name>'}` "
             "to block until all children reach a terminal state. "
@@ -778,10 +782,6 @@ class SessionManager:
             "If a child is blocked or needs_input, provide input or escalate. "
             "Delegation completed without ready_for_review means the child disappeared or failed. "
             "Do not resolve the parent task while children are still running."
-        ) if parent_session_id else (
-            "When you have completed your work, signal completion via "
-            "`agentctl session attention --current --state ready_for_review` before exiting. "
-            "Your orchestrator uses `agentctl session wait-for-children` to wait for you."
         )
         navigation = "\n".join(
             [
