@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def utc_now() -> str:
@@ -110,6 +110,16 @@ class Database:
                     FOREIGN KEY(parent_session_id) REFERENCES sessions(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    repository TEXT,
+                    description TEXT,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS audit_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     created_at TEXT NOT NULL,
@@ -156,6 +166,8 @@ class Database:
             for name, definition in attention_columns.items():
                 if name not in columns:
                     conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {definition}")
+            if "project_id" not in columns:
+                conn.execute("ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id)")
             conn.execute(
                 "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",

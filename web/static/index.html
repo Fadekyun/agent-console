@@ -16,6 +16,7 @@
       <div class="brand"><span class="brand-mark">AC</span><span class="nav-label"><strong>Agent Console</strong><small>v0.1.0</small></span></div>
       <nav class="nav-list">
         <button class="nav-button" data-view="sessions"><span aria-hidden="true">●</span><span class="nav-label">Sessions</span></button>
+        <button class="nav-button" data-view="projects"><span aria-hidden="true">▣</span><span class="nav-label">Projects</span></button>
         <button class="nav-button" data-view="profiles"><span aria-hidden="true">◎</span><span class="nav-label">Profiles</span></button>
         <button class="nav-button" data-view="skills"><span aria-hidden="true">⚡</span><span class="nav-label">Skills</span></button>
         <button class="nav-button" data-view="orchestration"><span aria-hidden="true">⌘</span><span class="nav-label">Orchestration</span></button>
@@ -63,6 +64,11 @@
           <div class="view-heading"><div><h2>Skills &amp; Superpowers</h2><p class="muted">Retained skill catalog, per-tool sync status, and approval-gated superpowers.</p></div><div class="dialog-actions"><button id="skills-sync">Sync now</button><button id="skills-doctor">Run doctor</button></div></div>
           <div id="skills-status" role="status"></div>
           <div id="skills-list" class="skills-grid"></div>
+        </section>
+
+        <section class="view" data-view-panel="projects" hidden>
+          <div class="view-heading"><div><h2>Projects</h2><p class="muted">Project-scoped session pools with shared repository context.</p></div><button id="new-project-btn">New project</button></div>
+          <div id="projects-list" class="projects-grid"></div>
         </section>
 
         <section class="view" data-view-panel="orchestration" hidden>
@@ -144,6 +150,26 @@
 
   <dialog id="review-dialog">
     <form method="dialog" class="dialog-form review-dialog-form"><h2 id="review-title">Peer review</h2><p id="review-notice" class="muted"></p><pre id="review-content" class="plan-preview"></pre><div class="dialog-actions"><button value="close">Close</button></div></form>
+  </dialog>
+
+  <dialog id="new-project-dialog">
+    <form id="new-project-form" class="dialog-form">
+      <h2>New project</h2>
+      <label>Name<input name="name" required minlength="1"></label>
+      <label>Repository<input name="repository" placeholder="Optional repository path"></label>
+      <label>Description<textarea name="description" rows="3"></textarea></label>
+      <p id="new-project-status" role="status"></p>
+      <div class="dialog-actions"><button type="button" data-close="new-project-dialog">Cancel</button><button type="submit" class="primary">Create</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="project-detail-dialog">
+    <div class="dialog-form">
+      <h2 id="project-detail-title">Project</h2>
+      <p id="project-detail-repo" class="muted"></p>
+      <div id="project-detail-sessions" class="tree-list"></div>
+      <div class="dialog-actions"><button type="button" data-close="project-detail-dialog">Close</button></div>
+    </div>
   </dialog>
 
   <dialog id="profile-editor-dialog">

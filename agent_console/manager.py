@@ -477,6 +477,120 @@ class SessionManager:
             "status": "active",
         }
 
+    def list_projects(self) -> list[dict[str, Any]]:
+        with self.database.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM projects ORDER BY created_at DESC"
+            ).fetchall()
+            projects = []
+            for row in rows:
+                p = dict(row)
+                p["session_count"] = conn.execute(
+                    "SELECT COUNT(*) FROM sessions WHERE project_id=?", (p["id"],)
+                ).fetchone()[0]
+                projects.append(p)
+            return projects
+
+    def create_project(
+        self, name: str, repository: str | None = None, description: str | None = None
+    ) -> dict[str, Any]:
+        project_id = f"proj-{uuid.uuid4().hex}"
+        now = utc_now()
+        with self.database.connect() as conn:
+            conn.execute(
+                "INSERT INTO projects(id, name, repository, description, status, created_at, updated_at) "
+                "VALUES(?, ?, ?, ?, 'active', ?, ?)",
+                (project_id, name, repository, description, now, now),
+            )
+        return {
+            "id": project_id,
+            "name": name,
+            "repository": repository,
+            "description": description,
+            "status": "active",
+            "session_count": 0,
+        }
+
+    def get_project(self, project_id: str) -> dict[str, Any]:
+        with self.database.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM projects WHERE id=?", (project_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"project not found: {project_id}")
+            result = dict(row)
+            sessions = conn.execute(
+                "SELECT tmux_name, tool, profile, status, attention_state, initial_task "
+                "FROM sessions WHERE project_id=?", (project_id,)
+            ).fetchall()
+            result["sessions"] = [dict(s) for s in sessions]
+            return result
+
+    def update_project(
+        self, project_id: str, *, name: str | None = None,
+        repository: str | None = None, description: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        with self.database.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM projects WHERE id=?", (project_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"project not found: {project_id}")
+            updates: dict[str, Any] = dict(row)
+            if name is not None:
+                updates["name"] = name
+            if repository is not None:
+                updates["repository"] = repository
+            if description is not None:
+                updates["description"] = description
+            if status is not None:
+                if status not in ("active", "paused", "completed"):
+                    raise ValueError(f"invalid project status: {status}")
+                updates["status"] = status
+            updates["updated_at"] = utc_now()
+            conn.execute(
+                "UPDATE projects SET name=?, repository=?, description=?, status=?, updated_at=? WHERE id=?",
+                (updates["name"], updates["repository"], updates["description"],
+                 updates["status"], updates["updated_at"], project_id),
+            )
+        return self.get_project(project_id)
+
+    def delete_project(self, project_id: str) -> None:
+        with self.database.connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM projects WHERE id=?", (project_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"project not found: {project_id}")
+            conn.execute(
+                "UPDATE sessions SET project_id=NULL WHERE project_id=?", (project_id,)
+            )
+            conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
+
+    def assign_session_to_project(self, session_name: str, project_id: str) -> dict[str, Any]:
+        with self.database.connect() as conn:
+            proj = conn.execute(
+                "SELECT * FROM projects WHERE id=?", (project_id,)
+            ).fetchone()
+            if proj is None:
+                raise KeyError(f"project not found: {project_id}")
+            session = conn.execute(
+                "SELECT tmux_name, repository FROM sessions WHERE tmux_name=?", (session_name,)
+            ).fetchone()
+            if session is None:
+                raise KeyError(f"session not found: {session_name}")
+            proj_repo = proj["repository"]
+            sess_repo = session["repository"]
+            if proj_repo and sess_repo and proj_repo != sess_repo:
+                raise ValueError(
+                    f"session repository {sess_repo!r} does not match project repository {proj_repo!r}"
+                )
+            conn.execute(
+                "UPDATE sessions SET project_id=? WHERE tmux_name=?", (project_id, session_name)
+            )
+        return self.get_project(project_id)
+
     def review_session(
         self,
         name: str,
@@ -804,6 +918,7 @@ class SessionManager:
         agent_mode: str | None = None,
         provider: str | None = None,
         model: str | None = None,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         validate_tool(tool)
         validate_profile(profile)
@@ -925,8 +1040,8 @@ class SessionManager:
                         id, tmux_name, tool, profile, parent_session_id, created_at,
                         last_activity, initial_task, repository, worktree, status,
                         managed, creator_surface, linked_plan_id, launcher_path, socket_scope
-                        , auth_context, agent_mode, provider, model, permission_mode
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'detached', 1, ?, ?, ?, 'canonical', ?, ?, ?, ?, ?)
+                        , auth_context, agent_mode, provider, model, permission_mode, project_id
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'detached', 1, ?, ?, ?, 'canonical', ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(tmux_name) DO UPDATE SET
                         tool=excluded.tool,
                         profile=excluded.profile,
@@ -969,6 +1084,7 @@ class SessionManager:
                         provider,
                         model,
                         permission_mode,
+                        project_id,
                     ),
                 )
             self.database.audit("session.created", name, "success", surface=creator_surface)
@@ -1270,6 +1386,7 @@ class SessionManager:
         name: str | None = None,
         allow_revision_change: bool = False,
         creator_surface: str = "CLI",
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         if profile not in {"coder", "bugfix"}:
             raise ValueError("plan execution profile must be coder or bugfix")
@@ -1284,6 +1401,18 @@ class SessionManager:
             )
         if plan.get("recorded_revision") and plan["revision_state"] == "unavailable":
             raise ValueError("recorded repository revision cannot be verified")
+        if project_id is not None:
+            with self.database.connect() as conn:
+                proj = conn.execute(
+                    "SELECT repository FROM projects WHERE id=?", (project_id,)
+                ).fetchone()
+                if proj is None:
+                    raise KeyError(f"project not found: {project_id}")
+                proj_repo = proj["repository"]
+                if proj_repo and str(repository) != proj_repo:
+                    raise ValueError(
+                        f"plan repository {repository!r} does not match project repository {proj_repo!r}"
+                    )
         session = self.create(
             tool="codex",
             profile=profile,
@@ -1293,6 +1422,7 @@ class SessionManager:
             worktree=True,
             creator_surface=creator_surface,
             linked_plan_id=plan_id,
+            project_id=project_id,
         )
         with self.database.connect() as conn:
             conn.execute("UPDATE plans SET status='executing' WHERE id=?", (plan_id,))

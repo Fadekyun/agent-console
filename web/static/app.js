@@ -3,7 +3,7 @@ import { initTheme } from '/static/theme.js?v=7';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = { identity: null, sessions: [], plans: [], tree: { roots: [], delegations: [] }, view: 'sessions', selectedSession: null };
-const viewTitles = { sessions: 'Sessions', profiles: 'Profiles', skills: 'Skills', orchestration: 'Orchestration', new: 'New session' };
+const viewTitles = { sessions: 'Sessions', projects: 'Projects', profiles: 'Profiles', skills: 'Skills', orchestration: 'Orchestration', new: 'New session' };
 const activeEl = $('#active-sessions');
 const historyEl = $('#session-history');
 const historyCountEl = $('#history-count');
@@ -190,6 +190,7 @@ function selectView(view, updateHash = true) {
   $('#view-title').textContent = viewTitles[state.view];
   if (state.view === 'profiles') renderProfiles();
   if (state.view === 'skills') renderSkills();
+  if (state.view === 'projects') renderProjects();
   if (updateHash && location.hash !== `#${state.view}`) history.replaceState(null, '', `#${state.view}`);
 }
 
@@ -474,6 +475,54 @@ async function runSkillsDoctor() {
 
 $('#skills-sync').onclick = runSkillsSync;
 $('#skills-doctor').onclick = runSkillsDoctor;
+
+async function renderProjects() {
+  const projects = await api('/api/projects');
+  $('#projects-list').replaceChildren(...projects.map(projectCard));
+}
+
+function projectCard(project) {
+  const card = document.createElement('div'); card.className = 'profile-card';
+  const header = document.createElement('div'); header.className = 'profile-card-header';
+  const h3 = document.createElement('h3'); h3.textContent = project.name;
+  const badge = document.createElement('span'); badge.className = `badge ${project.status === 'active' ? 'live' : 'stopped'}`; badge.textContent = project.status;
+  header.append(h3, badge);
+  const meta = document.createElement('div'); meta.className = 'meta';
+  meta.innerHTML = `<span>sessions: ${project.session_count || 0}</span>${project.repository ? `<span>${escapeHtml(project.repository)}</span>` : ''}`;
+  const desc = document.createElement('p'); desc.textContent = project.description || '';
+  const actions = document.createElement('div'); actions.className = 'dialog-actions';
+  const viewBtn = document.createElement('button'); viewBtn.textContent = 'View sessions'; viewBtn.onclick = () => openProjectDetail(project.id, project.name);
+  actions.append(viewBtn);
+  card.append(header, meta, desc, actions);
+  return card;
+}
+
+async function openProjectDetail(id, name) {
+  try {
+    const project = await api(`/api/projects/${encodeURIComponent(id)}`);
+    $('#project-detail-title').textContent = name;
+    $('#project-detail-repo').textContent = project.repository || 'No repository';
+    const sessions = project.sessions || [];
+    $('#project-detail-sessions').replaceChildren(...sessions.map((s) => {
+      const el = document.createElement('article'); el.className = 'tree-node';
+      el.innerHTML = `<div class="session-title"><span>${escapeHtml(s.tmux_name || 'unknown')}</span><span class="badge ${s.status === 'detached' ? 'live' : 'stopped'}">${escapeHtml(s.profile || '')}</span></div><p class="meta">${escapeHtml(s.tool || '')} · ${escapeHtml(s.attention_state || 'normal')}${s.initial_task ? ` · ${escapeHtml(s.initial_task)}` : ''}</p>`;
+      return el;
+    }));
+    if (!sessions.length) $('#project-detail-sessions').innerHTML = '<p class="empty">No sessions assigned to this project.</p>';
+    $('#project-detail-dialog').showModal();
+  } catch (e) { showNotice(e.message, 'error'); }
+}
+
+$('#new-project-form').onsubmit = async (event) => {
+  event.preventDefault(); const submit = $('button[type="submit"]', event.target); submit.disabled = true;
+  const status = $('#new-project-status'); status.textContent = 'Creating…';
+  try {
+    await api('/api/projects', { method: 'POST', body: JSON.stringify({ name: event.target.elements.name.value, repository: event.target.elements.repository.value || null, description: event.target.elements.description.value || null }) });
+    status.textContent = 'Created.'; $('#new-project-dialog').close();
+    renderProjects();
+  } catch (e) { status.textContent = e.message; } finally { submit.disabled = false; }
+};
+$('#new-project-btn').onclick = () => { $('#new-project-form').reset(); $('#new-project-status').textContent = ''; $('#new-project-dialog').showModal(); };
 
 function updateAgentModeField() {
   const tool = newForm.elements.tool.value;

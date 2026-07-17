@@ -108,6 +108,21 @@ class PlanExecuteRequest(BaseModel):
     profile: str = Field(default="coder", pattern="^(coder|bugfix)$")
     name: str | None = Field(default=None, max_length=80)
     allow_revision_change: bool = False
+    project_id: str | None = Field(default=None, max_length=80)
+
+class AssignSessionRequest(BaseModel):
+    session_name: str = Field(min_length=1, max_length=80)
+
+class ProjectCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    repository: str | None = Field(default=None, max_length=1000)
+    description: str | None = Field(default=None, max_length=2000)
+
+class ProjectUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    repository: str | None = Field(default=None, max_length=1000)
+    description: str | None = Field(default=None, max_length=2000)
+    status: str | None = Field(default=None, pattern="^(active|paused|completed)$")
 
 
 def create_app(manager: SessionManager | None = None) -> FastAPI:
@@ -250,6 +265,52 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         return session_manager.create_group(payload.name, payload.purpose, payload.parent_session)
 
+    @app.get("/api/projects")
+    async def projects_list(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
+        return session_manager.list_projects()
+
+    @app.post("/api/projects")
+    async def projects_create(
+        payload: ProjectCreateRequest,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.create_project(payload.name, payload.repository, payload.description)
+
+    @app.get("/api/projects/{project_id}")
+    async def projects_get(
+        project_id: str, _: AuthContext = Depends(require_identity)
+    ) -> dict[str, Any]:
+        return session_manager.get_project(project_id)
+
+    @app.put("/api/projects/{project_id}")
+    async def projects_update(
+        project_id: str,
+        payload: ProjectUpdateRequest,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.update_project(
+            project_id,
+            name=payload.name,
+            repository=payload.repository,
+            description=payload.description,
+            status=payload.status,
+        )
+
+    @app.delete("/api/projects/{project_id}")
+    async def projects_delete(
+        project_id: str, _: AuthContext = Depends(require_identity)
+    ) -> dict[str, str]:
+        session_manager.delete_project(project_id)
+        return {"status": "deleted"}
+
+    @app.post("/api/projects/{project_id}/assign")
+    async def projects_assign(
+        project_id: str,
+        payload: AssignSessionRequest,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.assign_session_to_project(payload.session_name, project_id)
+
     @app.get("/api/sessions/{name}/wait-status")
     async def wait_status(
         name: str, _: AuthContext = Depends(require_identity)
@@ -373,6 +434,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             name=payload.name,
             allow_revision_change=payload.allow_revision_change,
             creator_surface="web",
+            project_id=payload.project_id,
         )
 
     @app.post("/api/sessions/{name}/interrupt")

@@ -624,5 +624,87 @@ class SessionGroupTests(unittest.TestCase):
                     )
 
 
+class ProjectTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.workspace = root / "workspace"
+        self.workspace.mkdir()
+        self.profile_dir = root / "profiles"
+        self.profile_dir.mkdir()
+        for profile in ("general", "planner", "coder"):
+            (self.profile_dir / f"{profile}.md").write_text(f"# {profile}\n", encoding="utf-8")
+        self.socket = f"agent-console-proj-test-{os.getpid()}-{id(self)}"
+        settings = Settings(
+            workspace_root=self.workspace,
+            state_dir=root / "state",
+            database_path=root / "state" / "test.sqlite3",
+            profile_dir=self.profile_dir,
+            handoff_dir=root / "handoffs",
+            worktree_root=self.workspace / "worktrees",
+            tmux_socket=self.socket,
+            max_children_per_parent=4,
+            max_managed_sessions=8,
+        )
+        self.manager = SessionManager(settings)
+        codex_home = self.manager.auth.codex_home("default")
+        (codex_home / "auth.json").write_text("{}\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        subprocess.run(["tmux", "-L", self.socket, "kill-server"], capture_output=True)
+        self.temp.cleanup()
+
+    def test_create_project(self) -> None:
+        p = self.manager.create_project("test-proj", repository="/workspace/repo", description="A test")
+        self.assertEqual(p["name"], "test-proj")
+        self.assertEqual(p["repository"], "/workspace/repo")
+        self.assertEqual(p["status"], "active")
+
+    def test_list_projects(self) -> None:
+        self.manager.create_project("proj-a")
+        self.manager.create_project("proj-b", repository="/workspace/repo")
+        projects = self.manager.list_projects()
+        self.assertGreaterEqual(len(projects), 2)
+
+    def test_get_project(self) -> None:
+        p = self.manager.create_project("get-proj")
+        got = self.manager.get_project(p["id"])
+        self.assertEqual(got["name"], "get-proj")
+        self.assertIn("sessions", got)
+
+    def test_update_project(self) -> None:
+        p = self.manager.create_project("upd-proj")
+        updated = self.manager.update_project(p["id"], status="paused")
+        self.assertEqual(updated["status"], "paused")
+
+    def test_delete_project(self) -> None:
+        p = self.manager.create_project("del-proj")
+        self.manager.delete_project(p["id"])
+        with self.assertRaises(KeyError):
+            self.manager.get_project(p["id"])
+
+    def test_assign_session_to_project(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("assign-proj", repository=repo)
+        session = self.manager.create(
+            tool="shell", profile="general", name="assign-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        self.assertIsNotNone(session.get("id"))
+
+    def test_assign_session_repo_mismatch(self) -> None:
+        repo_a = str(self.workspace / "repo-a")
+        repo_b = str(self.workspace / "repo-b")
+        (self.workspace / "repo-a").mkdir(exist_ok=True)
+        (self.workspace / "repo-b").mkdir(exist_ok=True)
+        proj = self.manager.create_project("mismatch-proj", repository=repo_a)
+        session = self.manager.create(
+            tool="shell", profile="general", name="mismatch-sess",
+            repository=repo_b,
+        )
+        with self.assertRaises(ValueError):
+            self.manager.assign_session_to_project("mismatch-sess", proj["id"])
+
+
 if __name__ == "__main__":
     unittest.main()
