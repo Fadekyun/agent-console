@@ -65,7 +65,7 @@ function connect() {
     const output = typeof event.data === 'string' ? event.data : decoder.decode(event.data, { stream: true });
     terminal.write(output, () => {
       if (keepAtBottom) terminal.scrollToBottom();
-      else newOutput.hidden = false;
+      else { newOutput.hidden = false; newOutput.textContent = 'New output \u00b7 Scroll to bottom'; }
     });
   };
   socket.onclose = (event) => {
@@ -210,7 +210,7 @@ async function openPeers() {
 
 terminal.onData((value) => { if (mode === 'type') { try { send(value); } catch { /* status is visible */ } } });
 terminal.onSelectionChange(() => { /* xterm selection is secondary to selectable Text View */ });
-terminal.onScroll(() => { if (atBottom()) newOutput.hidden = true; });
+terminal.onScroll(() => { newOutput.hidden = atBottom(); if (!newOutput.hidden) newOutput.textContent = 'Scroll to bottom'; });
 $('#terminal').addEventListener('touchstart', (event) => {
   if (mode === 'scroll' && event.touches.length === 1) touchStartY = event.touches[0].clientY;
 }, { passive: true });
