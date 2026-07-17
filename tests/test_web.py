@@ -176,7 +176,6 @@ class WebTests(unittest.TestCase):
             self.assertIn("status", entry)
         coder = next(p for p in entries if p["name"] == "coder")
         self.assertTrue(coder["installed"])
-        self.assertTrue(coder["prefers_worktree"])
         self.assertEqual(coder["worktree_requirement"], "preferred")
         self.assertEqual(coder["read_write_capability"], "write")
 
