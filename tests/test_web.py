@@ -16,6 +16,7 @@ from starlette.websockets import WebSocketDisconnect
 from agent_console.config import Settings
 from agent_console.manager import SessionManager
 from agent_console.providers import LaunchSpec
+from agent_console.profiles import PROFILE_SCHEMA
 from agent_console.validation import PROFILES
 from agent_console.web import create_app
 
@@ -65,6 +66,14 @@ class WebTests(unittest.TestCase):
         me = self.client.get("/api/me", headers=self.headers).json()
         self.assertEqual(me["default_tool"], "codex")
         self.assertEqual(me["default_agent_modes"]["codex"], "auto")
+        profiles = me["profiles"]
+        self.assertIsInstance(profiles, list)
+        self.assertGreater(len(profiles), 0)
+        for summary in profiles:
+            self.assertIn("read_write_capability", summary)
+            self.assertIn("worktree_requirement", summary)
+        general = next(p for p in profiles if p["name"] == "general")
+        self.assertEqual(general["read_write_capability"], "write")
         self.assertEqual(me["default_agent_modes"]["opencode"], "plan")
         default_opencode = next(
             item for item in me["auth_contexts"]
@@ -146,6 +155,30 @@ class WebTests(unittest.TestCase):
             "/api/me", headers={"Tailscale-User-Login": "wrong@example.com"}
         )
         self.assertEqual(denied.status_code, 403)
+
+    def test_profiles_endpoint_returns_full_schema(self) -> None:
+        response = self.client.get("/api/profiles", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        entries = response.json()
+        self.assertIsInstance(entries, list)
+        self.assertEqual(len(entries), len(PROFILE_SCHEMA))
+        for entry in entries:
+            self.assertIn("name", entry)
+            self.assertIn("display_name", entry)
+            self.assertIn("description", entry)
+            self.assertIn("read_write_capability", entry)
+            self.assertIn("worktree_requirement", entry)
+            self.assertIn("installed", entry)
+            self.assertIn("path", entry)
+            self.assertIn("allowed_delegation_profiles", entry)
+            self.assertIn("allowed_collaboration_profiles", entry)
+            self.assertIn("requires_human_approval", entry)
+            self.assertIn("status", entry)
+        coder = next(p for p in entries if p["name"] == "coder")
+        self.assertTrue(coder["installed"])
+        self.assertTrue(coder["prefers_worktree"])
+        self.assertEqual(coder["worktree_requirement"], "preferred")
+        self.assertEqual(coder["read_write_capability"], "write")
 
     def test_kill_endpoint_verifies_exit_and_moves_to_history(self) -> None:
         self.manager.create(

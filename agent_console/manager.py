@@ -15,7 +15,7 @@ from .auth import AuthRegistry
 from .config import Settings
 from .database import Database, utc_now
 from .models import ModelCatalogue, estimate_models, lowest_cost_model
-from .profiles import READ_ONLY_PROFILES, profile_text
+from .profiles import READ_ONLY_PROFILES, profile_text, validate_profile_schema
 from .providers import TOOL_BINARIES, LaunchSpec, provider_adapter
 from .tmux import Tmux
 from .validation import (
@@ -48,6 +48,7 @@ class SessionManager:
         self.database = Database(self.settings.database_path)
         self.database.migrate()
         self.models = ModelCatalogue(self.settings.state_dir / "model-cache")
+        validate_profile_schema()
         self.tmux = Tmux(
             self.settings.tmux_socket,
             self.settings.tmux_socket_path if not self.settings.tmux_socket else None,

@@ -22,7 +22,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 
 from .manager import SessionManager
-from .validation import PROFILES, TOOLS, validate_session_name
+from .profiles import profile_summaries
+from .validation import TOOLS, validate_session_name
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -182,7 +183,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             "auth_contexts": session_manager.auth_contexts(),
             "default_tool": "codex",
             "default_agent_modes": {"codex": "auto", "opencode": "plan"},
-            "profiles": sorted(PROFILES),
+            "profiles": profile_summaries(),
         }
 
     @app.get("/api/sessions")
