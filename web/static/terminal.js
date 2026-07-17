@@ -213,6 +213,7 @@ async function openPeers() {
 terminal.onData((value) => { if (mode === 'type') { try { send(value); } catch { /* status is visible */ } } });
 terminal.onSelectionChange(() => { /* xterm selection is secondary to selectable Text View */ });
 terminal.onScroll(() => { newOutput.hidden = atBottom(); if (!newOutput.hidden) newOutput.textContent = 'Scroll to bottom'; });
+window.__terminal = terminal;
 $('#terminal').addEventListener('touchstart', (event) => {
   if (mode === 'scroll' && event.touches.length === 1) touchStartY = event.touches[0].clientY;
 }, { passive: true });

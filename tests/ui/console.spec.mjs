@@ -281,3 +281,73 @@ test('Codex exposes safe Auto and read-only Plan modes', async ({ page }, testIn
   await expect(form.locator('select[name="agent_mode"]')).toHaveValue('plan');
   await expect(form.locator('select[name="agent_mode"] option[value="auto"]')).toHaveCount(0);
 });
+
+test('profiles view shows profile cards with metadata', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop profiles coverage.');
+  await mockApi(page);
+  await page.goto('/desktop#profiles');
+  await expect(page.locator('#profiles-list')).toBeVisible();
+  await expect(page.locator('.profile-card')).not.toHaveCount(0);
+  await expect(page.locator('.profile-card').first()).toContainText('General');
+});
+
+test('skills view renders skill cards from catalog', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop skills coverage.');
+  await page.route('**/api/skills', async (route) => {
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ entries: [{ name: 'test-skill', description: 'A test skill', kind: 'standard', tools: ['codex', 'claude'], synced: [{ tool: 'codex', linked: true }, { tool: 'claude', linked: false }], source_present: true }], errors: [] }),
+    });
+  });
+  await mockApi(page);
+  await page.goto('/desktop#skills');
+  await expect(page.locator('#skills-list')).toBeVisible();
+  await expect(page.locator('.skill-card')).not.toHaveCount(0);
+  await expect(page.locator('.skill-card').first()).toContainText('test-skill');
+});
+
+test('orchestration view shows session groups', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop orchestration coverage.');
+  await page.route('**/api/session-groups', async (route) => {
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([{ id: 'grp-1', name: 'test-group', purpose: 'coordinate work', status: 'active', sessions: [{ tmux_name: 'child-1', profile: 'planner', tool: 'codex', status: 'detached', attention_state: 'normal' }] }]),
+    });
+  });
+  await mockApi(page);
+  await page.goto('/desktop#orchestration');
+  await expect(page.locator('#session-tree')).toBeVisible();
+});
+
+test('projects view shows project cards', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop projects coverage.');
+  await page.route('**/api/projects', async (route) => {
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([{ id: 'proj-1', name: 'test-project', repository: '/workspace/repo', description: 'A test project', status: 'active', session_count: 2 }]),
+    });
+  });
+  await mockApi(page);
+  await page.goto('/desktop#projects');
+  await expect(page.locator('#projects-list')).toBeVisible();
+  await expect(page.locator('.profile-card').first()).toContainText('test-project');
+});
+
+test('new-output button appears when not at bottom and contextual label works', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Scroll-to-bottom coverage on desktop.');
+  await installFakeWebSocket(page);
+  await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  // Simulate scroll away from bottom by setting viewportY < baseY via page.evaluate
+  await page.evaluate(() => {
+    const term = window.__terminal;
+    if (term) { term.buffer.active.viewportY = 0; term.buffer.active.baseY = 100; term.scrollLines(10); }
+    // Trigger onScroll
+    term?.scrollLines(1);
+  });
+  await expect(page.locator('#new-output')).toBeVisible();
+  await expect(page.locator('#new-output')).toContainText('Scroll to bottom');
+  // Click to scroll to bottom
+  await page.locator('#new-output').click();
+  await expect(page.locator('#new-output')).toBeHidden();
+});
