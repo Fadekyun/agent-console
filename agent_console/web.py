@@ -4,6 +4,7 @@ import asyncio
 import fcntl
 import ipaddress
 import json
+import logging
 import os
 import pty
 import signal
@@ -21,9 +22,13 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 
+from .logging_config import configure_logging
 from .manager import SessionManager
 from .profiles import profile_summaries
 from .validation import TOOLS, validate_session_name
+
+configure_logging()
+log = logging.getLogger(__name__)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -377,9 +382,10 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="allow_unmanaged is required")
         return session_manager.kill(name, allow_unmanaged=payload.allow_unmanaged)
 
-    async def operation_error(_: Request, exc: Exception):
+    async def operation_error(request: Request, exc: Exception):
         from fastapi.responses import JSONResponse
 
+        log.warning("request=%s %s error=%s", request.method, request.url.path, exc)
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
     for exception_type in (

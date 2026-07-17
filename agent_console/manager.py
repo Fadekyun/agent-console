@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import shlex
@@ -14,6 +15,7 @@ from typing import Any
 from .auth import AuthRegistry
 from .config import Settings
 from .database import Database, utc_now
+from .logging_config import configure_logging
 from .models import ModelCatalogue, estimate_models, lowest_cost_model
 from .profiles import PROFILE_SCHEMA, profile_text, validate_profile_capability, validate_profile_schema
 from .providers import TOOL_BINARIES, LaunchSpec, provider_adapter
@@ -27,6 +29,9 @@ from .validation import (
     validate_session_name,
     validate_tool,
 )
+
+configure_logging()
+log = logging.getLogger(__name__)
 
 SHELL_COMMANDS = {"ash", "bash", "dash", "fish", "sh", "zsh"}
 REVIEW_DEFAULT_LINES = 200
@@ -919,6 +924,8 @@ class SessionManager:
                     ),
                 )
             self.database.audit("session.created", name, "success", surface=creator_surface)
+            log.info("session=%s id=%s tool=%s profile=%s mode=%s provider=%s worktree=%s surface=%s",
+                     name, session_id, tool, profile, agent_mode, provider, worktree, creator_surface)
         except Exception:
             try:
                 self.tmux.kill(name)
@@ -963,6 +970,7 @@ class SessionManager:
             provider_adapter(session["tool"], self.auth).interrupt(session)
         self.tmux_for_name(name).interrupt(name)
         self.database.audit("session.interrupted", name, "success")
+        log.info("session=%s action=interrupt tool=%s profile=%s", name, session.get("tool"), session.get("profile"))
         return self.inspect(name)
 
     def restart(self, name: str) -> dict[str, Any]:
@@ -972,6 +980,7 @@ class SessionManager:
         provider_adapter(session["tool"], self.auth).restart(session)
         self.tmux_for_name(name).restart(name, Path(session["launcher_path"]))
         self.database.audit("session.restarted", name, "success")
+        log.info("session=%s action=restart tool=%s profile=%s", name, session.get("tool"), session.get("profile"))
         return self.inspect(name)
 
     def rename(self, name: str, new_name: str) -> dict[str, Any]:
@@ -1014,6 +1023,7 @@ class SessionManager:
             time.sleep(0.1)
         if tmux.exists(name):
             self.database.audit("session.killed", name, "failed")
+            log.error("session=%s action=kill status=failed tmux still exists", name)
             raise RuntimeError("tmux session still exists after kill request")
         alive_pids = []
         for pid in pane_pids:
@@ -1032,6 +1042,7 @@ class SessionManager:
                 (name,),
             )
         self.database.audit("session.killed", name, "success")
+        log.info("session=%s action=kill managed=%s", name, session["managed"])
         result = self.inspect(name)
         result["running"] = False
         return result
@@ -1065,6 +1076,7 @@ class SessionManager:
         if session["managed"] and session.get("tool"):
             provider_adapter(session["tool"], self.auth).resume(session)
         self.database.audit("session.attached", name, "success")
+        log.info("session=%s action=attach tool=%s profile=%s", name, session.get("tool"), session.get("profile"))
         tmux.attach(name)
 
     def list_profiles(self) -> list[dict[str, Any]]:
@@ -1242,6 +1254,7 @@ class SessionManager:
             "success",
             details={"session": session["tmux_name"], "profile": profile},
         )
+        log.info("plan=%s action=execute session=%s profile=%s", plan_id, session["tmux_name"], profile)
         return session
 
     def delegate(
@@ -1315,6 +1328,8 @@ class SessionManager:
             "success",
             details={"parent": parent_row["tmux_name"], "profile": profile},
         )
+        log.info("session=%s action=delegate parent=%s profile=%s tool=%s",
+                 session["tmux_name"], parent_row["tmux_name"], profile, tool)
         return {"delegation_id": delegation_id, "session": session}
 
     def doctor(self) -> dict[str, Any]:
