@@ -17,6 +17,7 @@
       <nav class="nav-list">
         <button class="nav-button" data-view="sessions"><span aria-hidden="true">●</span><span class="nav-label">Sessions</span></button>
         <button class="nav-button" data-view="profiles"><span aria-hidden="true">◎</span><span class="nav-label">Profiles</span></button>
+        <button class="nav-button" data-view="skills"><span aria-hidden="true">⚡</span><span class="nav-label">Skills</span></button>
         <button class="nav-button" data-view="orchestration"><span aria-hidden="true">⌘</span><span class="nav-label">Orchestration</span></button>
         <button class="nav-button" data-view="new"><span aria-hidden="true">＋</span><span class="nav-label">New session</span></button>
       </nav>
@@ -56,6 +57,12 @@
         <section class="view" data-view-panel="profiles" hidden>
           <div class="view-heading"><div><h2>Agent Profiles</h2><p class="muted">Role-specific instructions and capability metadata from the profile schema.</p></div><button id="refresh-profiles">Refresh</button></div>
           <div id="profiles-list" class="profiles-grid"></div>
+        </section>
+
+        <section class="view" data-view-panel="skills" hidden>
+          <div class="view-heading"><div><h2>Skills &amp; Superpowers</h2><p class="muted">Retained skill catalog, per-tool sync status, and approval-gated superpowers.</p></div><div class="dialog-actions"><button id="skills-sync">Sync now</button><button id="skills-doctor">Run doctor</button></div></div>
+          <div id="skills-status" role="status"></div>
+          <div id="skills-list" class="skills-grid"></div>
         </section>
 
         <section class="view" data-view-panel="orchestration" hidden>

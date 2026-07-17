@@ -3,7 +3,7 @@ import { initTheme } from '/static/theme.js?v=7';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = { identity: null, sessions: [], plans: [], tree: { roots: [], delegations: [] }, view: 'sessions', selectedSession: null };
-const viewTitles = { sessions: 'Sessions', profiles: 'Profiles', orchestration: 'Orchestration', new: 'New session' };
+const viewTitles = { sessions: 'Sessions', profiles: 'Profiles', skills: 'Skills', orchestration: 'Orchestration', new: 'New session' };
 const activeEl = $('#active-sessions');
 const historyEl = $('#session-history');
 const historyCountEl = $('#history-count');
@@ -189,6 +189,7 @@ function selectView(view, updateHash = true) {
   });
   $('#view-title').textContent = viewTitles[state.view];
   if (state.view === 'profiles') renderProfiles();
+  if (state.view === 'skills') renderSkills();
   if (updateHash && location.hash !== `#${state.view}`) history.replaceState(null, '', `#${state.view}`);
 }
 
@@ -389,6 +390,60 @@ $('#profile-editor-form').onsubmit = async (event) => {
 };
 
 $('#refresh-profiles').onclick = renderProfiles;
+
+async function renderSkills() {
+  const data = await api('/api/skills');
+  const status = $('#skills-status');
+  if (data.errors && data.errors.length) {
+    status.textContent = `Catalog errors: ${data.errors.join(', ')}`;
+    status.className = 'muted';
+  } else {
+    status.textContent = '';
+  }
+  $('#skills-list').replaceChildren(...data.entries.map(skillCard));
+}
+
+function skillCard(entry) {
+  const card = document.createElement('div'); card.className = 'skill-card';
+  const header = document.createElement('div'); header.className = 'skill-card-header';
+  const h3 = document.createElement('h3'); h3.textContent = entry.name;
+  const kind = document.createElement('span'); kind.className = `skill-kind ${entry.kind}`; kind.textContent = entry.kind;
+  header.append(h3, kind);
+  const desc = document.createElement('p'); desc.textContent = entry.description || 'No description';
+  const tools = document.createElement('div'); tools.className = 'skill-tools';
+  (entry.synced || []).forEach((s) => {
+    const badge = document.createElement('span'); badge.className = `skill-tool-badge ${s.linked ? 'linked' : 'missing'}`;
+    badge.textContent = `${s.tool}: ${s.linked ? 'synced' : 'missing'}`;
+    badge.title = s.linked ? 'Symlink present and valid' : 'Symlink missing or broken';
+    tools.append(badge);
+  });
+  const sourceBadge = document.createElement('span'); sourceBadge.className = `skill-tool-badge ${entry.source_present ? 'linked' : 'missing'}`;
+  sourceBadge.textContent = entry.source_present ? 'source present' : 'source missing';
+  tools.append(sourceBadge);
+  card.append(header, desc, tools);
+  return card;
+}
+
+async function runSkillsSync() {
+  const status = $('#skills-status'); status.textContent = 'Syncing…';
+  try {
+    const result = await api('/api/skills/sync', { method: 'POST', body: '{}' });
+    status.textContent = `Sync complete: ${result.skills} skills synced`;
+    renderSkills();
+  } catch (e) { status.textContent = `Sync failed: ${e.message}`; }
+}
+
+async function runSkillsDoctor() {
+  const status = $('#skills-status'); status.textContent = 'Running doctor…';
+  try {
+    const result = await api('/api/skills/doctor', { method: 'POST', body: '{}' });
+    status.textContent = result.ok ? `Doctor OK (${result.skills} skills)` : `Doctor: ${result.problems.join('; ')}`;
+    renderSkills();
+  } catch (e) { status.textContent = `Doctor failed: ${e.message}`; }
+}
+
+$('#skills-sync').onclick = runSkillsSync;
+$('#skills-doctor').onclick = runSkillsDoctor;
 
 function updateAgentModeField() {
   const tool = newForm.elements.tool.value;
