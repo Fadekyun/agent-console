@@ -131,6 +131,10 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     app = FastAPI(title="Agent Console", docs_url=None, redoc_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
     app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
+    for uvi_name in ("uvicorn.access", "uvicorn.error", "uvicorn.asgi"):
+        uvi_log = logging.getLogger(uvi_name)
+        if not uvi_log.handlers:
+            uvi_log.addHandler(logging.getLogger().handlers[0] if logging.getLogger().handlers else logging.StreamHandler())
 
     def require_identity(
         request: Request,
@@ -506,6 +510,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                 allowed = False
             actor = client_host
         if not allowed:
+            log.warning("ws session=%s actor=%s denied", name, actor)
             await websocket.close(code=4403, reason="Tailscale identity or trusted LAN is required")
             return
         try:
@@ -543,6 +548,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             actor=actor,
             surface="web",
         )
+        log.info("ws session=%s actor=%s surface=web attached", name, actor)
 
         async def read_pty() -> None:
             try:
@@ -551,7 +557,8 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                     if not data:
                         break
                     await websocket.send_bytes(data)
-            except (OSError, RuntimeError, WebSocketDisconnect):
+            except (OSError, RuntimeError, WebSocketDisconnect) as pty_exc:
+                log.warning("ws session=%s pty error=%s", name, pty_exc, exc_info=True)
                 return
             finally:
                 if process.poll() is not None:
@@ -582,8 +589,8 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                     elif control.get("type") == "detach":
                         await websocket.close(code=4000, reason="detached by user")
                         break
-        except (json.JSONDecodeError, OSError, WebSocketDisconnect):
-            pass
+        except (json.JSONDecodeError, OSError, WebSocketDisconnect) as ws_exc:
+            log.warning("ws session=%s error=%s", name, ws_exc, exc_info=True)
         finally:
             reader.cancel()
             if process.poll() is None:
