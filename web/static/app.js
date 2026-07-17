@@ -678,14 +678,25 @@ $('#terminal-dock-fullscreen').onclick = async () => {
 };
 $('#terminal-dock-handle').addEventListener('pointerdown', (event) => {
   const startY = event.clientY; const startHeight = terminalDock.getBoundingClientRect().height;
+  const maxDock = window.innerHeight - 56;
   const move = (moveEvent) => {
-    const height = Math.max(240, Math.min(window.innerHeight * 0.82, startHeight + startY - moveEvent.clientY));
+    const height = Math.max(240, Math.min(maxDock, startHeight + startY - moveEvent.clientY));
     terminalDock.style.height = `${Math.round(height)}px`;
     updateDockLayout();
   };
-  const stop = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); };
+  const stop = () => {
+    window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop);
+    try { localStorage.setItem('agent-console-dock-height', String(Math.round(terminalDock.getBoundingClientRect().height))); } catch {}
+  };
   window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop, { once: true });
 });
+(function restoreDock() {
+  const saved = localStorage.getItem('agent-console-dock-height');
+  if (saved) {
+    const h = parseInt(saved, 10);
+    if (h > 0 && h <= window.innerHeight - 56) { terminalDock.style.height = `${h}px`; updateDockLayout(); }
+  }
+})();
 
 window.addEventListener('keydown', (event) => {
   const target = event.target;

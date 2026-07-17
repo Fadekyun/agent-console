@@ -9,6 +9,7 @@ if (!name) location.href = '/';
 $('#session-name').textContent = name;
 
 const coarsePointer = matchMedia('(pointer: coarse)').matches;
+if (isEmbedded) document.body.classList.add('terminal-embedded');
 const terminal = new Terminal({ cursorBlink: true, scrollback: 10000, fontSize: coarsePointer ? 13 : 14, theme: xtermTheme() });
 const fit = new FitAddon();
 terminal.loadAddon(fit); terminal.open($('#terminal'));
@@ -19,6 +20,7 @@ const connection = $('#connection');
 const reconnect = $('#reconnect');
 const composer = $('#composer');
 const newOutput = $('#new-output');
+const isEmbedded = location.search.includes('embed=1');
 let socket;
 let mode = coarsePointer ? 'scroll' : 'type';
 let resizeFrame;
