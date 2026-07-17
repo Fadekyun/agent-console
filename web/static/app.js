@@ -253,6 +253,7 @@ function openDelegate(session) {
   delegateForm.reset(); delegateForm.elements.parent.value = session.tmux_name;
   delegateForm.elements.repository.value = session.repository || '';
   $('#delegate-parent').textContent = `Parent: ${session.tmux_name} · ${session.child_count}/${state.tree.max_children_per_parent || 3} children`;
+  delegateForm.elements.profile.replaceChildren(...state.identity.profiles.filter((p) => p.read_write_capability === 'read_only').map((p) => new Option(p.display_name || p.name, p.name, false, p.name === 'planner')));
   const toolSelect = delegateForm.elements.tool;
   toolSelect.replaceChildren(...state.identity.tool_status.filter((item) => item.status === 'ready' && item.name !== 'claude').map((item) => new Option(item.name, item.name, false, item.name === state.identity.default_tool)));
   updateContextSelect(toolSelect, delegateForm.elements.auth_context);

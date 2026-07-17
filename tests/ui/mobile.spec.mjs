@@ -87,7 +87,7 @@ test.describe('mobile lifecycle button clicks', () => {
         body: JSON.stringify({
           access_surface: 'test', login: 'test',
           tool_status: [{ name: 'shell', status: 'ready' }],
-          profiles: ['general'],
+          profiles: [{ name: 'general', display_name: 'General', read_write_capability: 'write', worktree_requirement: 'none', requires_human_approval: false, status: 'active' }],
           auth_contexts: [{ tool: 'shell', name: 'default', status: 'ready', default: true }],
           default_tool: 'shell',
         }),

@@ -50,11 +50,11 @@ human-readable instruction layer; the schema controls machine behavior.
 
 ## Legacy / Future
 
-- `operator` is active. A future rename to `orchestrator` is under consideration
-  (see issue #2); historical `operator` sessions would remain inspectable via
+- `operator` is active. A future rename to `orchestrator` is pending human
+  approval; historical `operator` sessions would remain inspectable via
   `legacy_aliases` metadata.
 - `verifier` is technically read-only. An explicit-approval write escape hatch
-  is under consideration.
+  is pending human approval.
 
 ## Schema vs. Markdown
 

@@ -140,13 +140,13 @@ class ProfileSchemaTests(unittest.TestCase):
                     f"{name} should have read_only delegation permission",
                 )
 
-    def test_write_profiles_have_empty_delegation_permission(self) -> None:
+    def test_write_profiles_have_read_only_delegation_permission(self) -> None:
         for name, meta in PROFILE_SCHEMA.items():
             if meta["read_write_capability"] == "write":
                 self.assertEqual(
                     meta["delegation_permissions"],
-                    frozenset(),
-                    f"{name} should have empty delegation permission set",
+                    frozenset({"read_only"}),
+                    f"{name} should have read_only delegation permission set",
                 )
 
     def test_general_worktree_requirement_is_none(self) -> None:

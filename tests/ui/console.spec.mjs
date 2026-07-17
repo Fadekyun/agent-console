@@ -23,7 +23,15 @@ async function mockApi(page) {
   const requests = [];
   const identity = {
     login: '10.0.0.40', access_surface: 'local-lan', default_tool: 'codex',
-    default_agent_modes: { codex: 'auto', opencode: 'plan' }, profiles: ['bugfix', 'coder', 'general', 'planner', 'researcher', 'reviewer', 'scout'],
+    default_agent_modes: { codex: 'auto', opencode: 'plan' }, profiles: [
+      { name: 'general', display_name: 'General', read_write_capability: 'write', worktree_requirement: 'none', requires_human_approval: false, status: 'active' },
+      { name: 'coder', display_name: 'Coder', read_write_capability: 'write', worktree_requirement: 'preferred', requires_human_approval: false, status: 'active' },
+      { name: 'planner', display_name: 'Planner', read_write_capability: 'read_only', worktree_requirement: 'none', requires_human_approval: false, status: 'active' },
+      { name: 'scout', display_name: 'Scout', read_write_capability: 'read_only', worktree_requirement: 'none', requires_human_approval: false, status: 'active' },
+      { name: 'reviewer', display_name: 'Reviewer', read_write_capability: 'read_only', worktree_requirement: 'none', requires_human_approval: false, status: 'active' },
+      { name: 'researcher', display_name: 'Researcher', read_write_capability: 'read_only', worktree_requirement: 'none', requires_human_approval: false, status: 'active' },
+      { name: 'bugfix', display_name: 'Bugfix', read_write_capability: 'write', worktree_requirement: 'preferred', requires_human_approval: false, status: 'active' },
+    ],
     tool_status: [
       { name: 'codex', status: 'ready', reason: null }, { name: 'opencode', status: 'ready', reason: null },
       { name: 'hermes', status: 'ready', reason: null }, { name: 'claude', status: 'disabled', reason: 'subscription inactive' },
