@@ -15,7 +15,7 @@ from .auth import AuthRegistry
 from .config import Settings
 from .database import Database, utc_now
 from .models import ModelCatalogue, estimate_models, lowest_cost_model
-from .profiles import PROFILE_SCHEMA, READ_ONLY_PROFILES, profile_text, validate_profile_schema
+from .profiles import PROFILE_SCHEMA, profile_text, validate_profile_schema
 from .providers import TOOL_BINARIES, LaunchSpec, provider_adapter
 from .tmux import Tmux
 from .validation import (
@@ -482,7 +482,7 @@ class SessionManager:
             context_path=context_path,
             agent_mode=agent_mode,
             model=model,
-            read_only=profile in READ_ONLY_PROFILES,
+            read_only=PROFILE_SCHEMA[profile]["read_write_capability"] == "read_only",
         )
 
     def _launcher_args(
@@ -603,10 +603,11 @@ class SessionManager:
                 raise ValueError("selected OpenCode model is deprecated or unavailable")
             permission_mode = "auto"
         elif tool == "codex":
-            agent_mode = agent_mode or ("plan" if profile in READ_ONLY_PROFILES else "auto")
+            profile_read_only = PROFILE_SCHEMA[profile]["read_write_capability"] == "read_only"
+            agent_mode = agent_mode or ("plan" if profile_read_only else "auto")
             if agent_mode not in {"plan", "auto"}:
                 raise ValueError("Codex mode must be plan or auto")
-            if profile in READ_ONLY_PROFILES and agent_mode != "plan":
+            if profile_read_only and agent_mode != "plan":
                 raise ValueError("read-only profiles must use Codex Plan mode")
             provider = context.get("provider")
             model = None
@@ -910,7 +911,7 @@ class SessionManager:
         validate_profile(profile)
         return {
             "name": profile,
-            "read_only": profile in READ_ONLY_PROFILES,
+            "read_only": PROFILE_SCHEMA[profile]["read_write_capability"] == "read_only",
             "path": str(self.settings.profile_dir / f"{profile}.md"),
             "content": profile_text(self.settings.profile_dir, profile),
         }

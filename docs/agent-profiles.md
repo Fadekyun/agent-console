@@ -8,16 +8,16 @@ human-readable instruction layer; the schema controls machine behavior.
 
 | Profile | Type | Worktree | Delegation | Approval | Description |
 |---------|------|----------|------------|----------|-------------|
-| `general` | write | none | — | no | Default interactive profile, no role personality |
-| `coder` | write | preferred | — | no | Bounded implementation, isolated worktree |
+| `general` | write | none | read_only | no | Default interactive profile, no role personality |
+| `coder` | write | preferred | read_only | no | Bounded implementation, isolated worktree |
 | `planner` | read_only | none | read_only | no | Hard read-only planning |
 | `scout` | read_only | none | read_only | no | Read-only repository tracing |
 | `reviewer` | read_only | none | read_only | no | Read-only diff/branch review |
 | `researcher` | read_only | none | read_only | no | Read-only external research |
 | `verifier` | read_only | none | read_only | no | Test acceptance criteria without production edits |
-| `bugfix` | write | preferred | — | no | Reproduce, isolate, fix minimally, add regression tests |
-| `release` | write | none | — | yes | Explicit approval and approved scope only |
-| `operator` | write | none | — | yes | Infrastructure operation with rollback |
+| `bugfix` | write | preferred | read_only | no | Reproduce, isolate, fix minimally, add regression tests |
+| `release` | write | none | read_only | yes | Explicit approval and approved scope only |
+| `operator` | write | none | read_only | yes | Infrastructure operation with rollback |
 
 ## Relationship Matrix
 
