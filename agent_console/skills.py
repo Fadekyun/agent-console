@@ -37,6 +37,22 @@ SKILL_CATALOG: list[dict[str, Any]] = [
 ]
 
 
+def _parse_frontmatter(path: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if text.startswith("---"):
+            parts = text.split("---", 2)
+            if len(parts) >= 3:
+                for line in parts[1].strip().splitlines():
+                    if ":" in line:
+                        key, _, value = line.partition(":")
+                        result[key.strip()] = value.strip()
+    except OSError:
+        pass
+    return result
+
+
 def validate_catalog(
     canonical_root: Path | None = None,
 ) -> list[str]:
@@ -71,6 +87,8 @@ def skill_catalog(
     for entry in SKILL_CATALOG:
         name = entry["name"]
         source = root / name / "SKILL.md"
+        frontmatter = _parse_frontmatter(source) if source.is_file() else {}
+        description = frontmatter.get("description", entry["description"])
         synced = []
         for tool in entry["tools"]:
             link = _tool_root(tool) / name
@@ -80,7 +98,7 @@ def skill_catalog(
             })
         entries.append({
             "name": name,
-            "description": entry["description"],
+            "description": description,
             "kind": entry["kind"],
             "tools": entry["tools"],
             "allowed_profiles": entry.get("allowed_profiles"),
