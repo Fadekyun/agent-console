@@ -53,12 +53,59 @@ def _parse_frontmatter(path: Path) -> dict[str, str]:
     return result
 
 
+def _build_catalog_entry(
+    name: str,
+    source: Path,
+    root: Path,
+) -> dict[str, Any]:
+    frontmatter = _parse_frontmatter(source) if source.is_file() else {}
+    kind = frontmatter.get("kind", "standard")
+    if kind not in SKILL_KINDS:
+        kind = "standard"
+    description = frontmatter.get("description", "")
+    tools_raw = frontmatter.get("tools", "")
+    tools = [t.strip() for t in tools_raw.split(",") if t.strip() in SUPPORTED_TOOLS] if tools_raw else sorted(SUPPORTED_TOOLS)
+    allowed_raw = frontmatter.get("allowed_profiles", "")
+    allowed = [a.strip() for a in allowed_raw.split(",") if a.strip() in PROFILES] if allowed_raw else None
+    requires_approval = frontmatter.get("requires_approval", "").lower() in ("true", "yes", "1")
+    return {
+        "name": name,
+        "description": description,
+        "tools": tools,
+        "kind": kind,
+        "source_path": str(root / name),
+        "allowed_profiles": frozenset(allowed) if allowed else None,
+        "requires_approval": requires_approval,
+    }
+
+
+def _discover_skills(canonical_root: Path) -> list[dict[str, Any]]:
+    if not canonical_root.is_dir():
+        return list(SKILL_CATALOG)
+    entries = []
+    seen = set()
+    for entry in SKILL_CATALOG:
+        name = entry["name"]
+        source = canonical_root / name / "SKILL.md"
+        meta = _build_catalog_entry(name, source, canonical_root)
+        entries.append(meta)
+        seen.add(name)
+    for item in canonical_root.iterdir():
+        if item.is_dir() and item.name not in seen:
+            source = item / "SKILL.md"
+            if source.is_file():
+                meta = _build_catalog_entry(item.name, source, canonical_root)
+                entries.append(meta)
+    return entries
+
+
 def validate_catalog(
     canonical_root: Path | None = None,
 ) -> list[str]:
     root = canonical_root or _resolve_canonical_root()
     errors: list[str] = []
-    for entry in SKILL_CATALOG:
+    entries = _discover_skills(root)
+    for entry in entries:
         name = entry["name"]
         kind = entry["kind"]
         if kind not in SKILL_KINDS:
@@ -83,12 +130,11 @@ def skill_catalog(
 ) -> dict[str, Any]:
     root = canonical_root or _resolve_canonical_root()
     errors = validate_catalog(root)
-    entries = []
-    for entry in SKILL_CATALOG:
+    entries = _discover_skills(root)
+    result = []
+    for entry in entries:
         name = entry["name"]
         source = root / name / "SKILL.md"
-        frontmatter = _parse_frontmatter(source) if source.is_file() else {}
-        description = frontmatter.get("description", entry["description"])
         synced = []
         for tool in entry["tools"]:
             link = _tool_root(tool) / name
@@ -96,17 +142,17 @@ def skill_catalog(
                 "tool": tool,
                 "linked": link.is_symlink() and (link / "SKILL.md").is_file(),
             })
-        entries.append({
+        result.append({
             "name": name,
-            "description": description,
+            "description": entry["description"],
             "kind": entry["kind"],
             "tools": entry["tools"],
-            "allowed_profiles": entry.get("allowed_profiles"),
+            "allowed_profiles": sorted(entry.get("allowed_profiles") or []) if entry.get("allowed_profiles") else None,
             "requires_approval": entry.get("requires_approval", False),
             "source_present": source.is_file(),
             "synced": synced,
         })
-    return {"entries": entries, "errors": errors}
+    return {"entries": result, "errors": errors}
 
 
 def _tool_root(tool: str, home: Path | None = None) -> Path:
@@ -137,6 +183,10 @@ def _prepare_root(path: Path, canonical_root: Path) -> None:
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
+def _live_entries(canonical_root: Path) -> list[dict[str, Any]]:
+    return _discover_skills(canonical_root) if canonical_root.is_dir() else list(SKILL_CATALOG)
+
+
 def sync_skills(
     *,
     canonical_root: Path | None = None,
@@ -144,18 +194,19 @@ def sync_skills(
 ) -> dict[str, Any]:
     root = canonical_root or _resolve_canonical_root()
     h = home or Path.home()
-    names = [entry["name"] for entry in SKILL_CATALOG]
+    entries = _live_entries(root)
+    names = [e["name"] for e in entries]
     missing = [name for name in names if not (root / name / "SKILL.md").is_file()]
     if missing:
         raise FileNotFoundError(f"canonical skills missing: {', '.join(missing)}")
 
-    tool_set = {tool for entry in SKILL_CATALOG for tool in entry["tools"]}
+    tool_set = {tool for e in entries for tool in e["tools"]}
     roots = {tool: _tool_root(tool, h) for tool in tool_set}
     for r in roots.values():
         _prepare_root(r, root)
 
     for tool, r in roots.items():
-        catalog_names = {e["name"] for e in SKILL_CATALOG if tool in e["tools"]}
+        catalog_names = {e["name"] for e in entries if tool in e["tools"]}
         for name in catalog_names:
             _replace_link(r / name, root / name)
         for path in r.iterdir():
@@ -169,7 +220,7 @@ def sync_skills(
     return {
         "ok": True,
         "canonical_root": str(root),
-        "skills": len(SKILL_CATALOG),
+        "skills": len(entries),
         "roots": {name: str(p) for name, p in roots.items()},
     }
 
@@ -181,8 +232,9 @@ def doctor_skills(
 ) -> dict[str, Any]:
     root = canonical_root or _resolve_canonical_root()
     h = home or Path.home()
+    entries = _live_entries(root)
     problems: list[str] = []
-    for entry in SKILL_CATALOG:
+    for entry in entries:
         name = entry["name"]
         source = root / name / "SKILL.md"
         if not source.is_file():
@@ -199,7 +251,7 @@ def doctor_skills(
                 problems.append(f"{tool} link has wrong target: {name}")
     return {
         "ok": not problems,
-        "skills": len(SKILL_CATALOG),
+        "skills": len(entries),
         "problems": problems,
     }
 
@@ -209,8 +261,11 @@ def check_superpower_approval(
     skill_name: str,
     *,
     approved: bool = False,
+    canonical_root: Path | None = None,
 ) -> dict[str, Any]:
-    entry = next((e for e in SKILL_CATALOG if e["name"] == skill_name), None)
+    root = canonical_root or _resolve_canonical_root()
+    entries = _live_entries(root)
+    entry = next((e for e in entries if e["name"] == skill_name), None)
     if entry is None:
         return {"allowed": False, "reason": f"unknown skill: {skill_name}", "enforcement": "enforced"}
     if entry["kind"] != "superpower":
