@@ -13,7 +13,7 @@ Environment=AGENT_CONSOLE_TMUX_SOCKET_PATH=/run/user/%U/agent-console/tmux.sock
 Environment=AGENT_CONSOLE_LEGACY_TMUX_SOCKET_PATH=/tmp/tmux-%U/default
 Environment=AGENT_CONSOLE_LAN_CIDR=10.0.0.0/8
 Environment=AGENT_CONSOLE_TRUSTED_HOSTS=your-tailscale-host.ts.net,your-lan-ip,localhost,127.0.0.1
-ExecStart=/path/to/venv/bin/uvicorn agent_console.web:app --host 0.0.0.0 --port 3210 --no-proxy-headers --log-level ${AGENT_CONSOLE_LOG_LEVEL:-info}
+ExecStart=/path/to/venv/bin/uvicorn agent_console.web:app --host 0.0.0.0 --port 3210 --no-proxy-headers --log-config /path/to/agent-console/deploy/logging-config.json
 Restart=on-failure
 RestartSec=3
 KillMode=process
