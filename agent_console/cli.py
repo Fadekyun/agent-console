@@ -221,6 +221,24 @@ def parser() -> argparse.ArgumentParser:
     context_disable.add_argument("name")
     context_disable.add_argument("--reason", default="context disabled")
 
+    deploy = commands.add_parser("deploy")
+    deploy_commands = deploy.add_subparsers(dest="deploy_command", required=True)
+    deploy_apply = deploy_commands.add_parser("apply")
+    deploy_apply.add_argument("plan_id")
+    deploy_apply.add_argument("--yes", action="store_true")
+    deploy_commands.add_parser("list")
+    deploy_commands.add_parser("current")
+    deploy_commands.add_parser("canary")
+    deploy_validate = deploy_commands.add_parser("validate")
+    deploy_validate.add_argument("release_name")
+    deploy_promote_user = deploy_commands.add_parser("promote-user-service")
+    deploy_promote_user.add_argument("release_name")
+    deploy_promote_user.add_argument("--yes", action="store_true")
+    deploy_rollback = deploy_commands.add_parser("rollback")
+    deploy_rollback.add_argument("--target", default="previous")
+    deploy_rollback.add_argument("--yes", action="store_true")
+    deploy_commands.add_parser("doctor")
+
     commands.add_parser("doctor")
     return root
 
@@ -275,6 +293,42 @@ def main(argv: list[str] | None = None) -> int:
                 return 0 if result["ok"] else 1
             elif args.context_command == "disable":
                 emit(manager.auth.disable(args.tool, args.name, args.reason))
+            return 0
+        if args.command == "deploy":
+            if args.deploy_command == "apply":
+                confirmed = args.yes or confirm_typed(
+                    "Create immutable release and select canary?",
+                    expected=args.plan_id,
+                )
+                emit(manager.deploy_apply(args.plan_id, confirmed=confirmed))
+            elif args.deploy_command == "list":
+                emit(manager.list_releases())
+            elif args.deploy_command == "current":
+                result = manager.current_release()
+                emit(result or {"release_name": None, "release_path": None})
+            elif args.deploy_command == "canary":
+                result = manager.canary_release()
+                emit(result or {"release_name": None, "release_path": None})
+            elif args.deploy_command == "validate":
+                emit(manager.validate_release(args.release_name))
+            elif args.deploy_command == "promote-user-service":
+                confirmed = args.yes or confirm_typed(
+                    "Promote canary release to user-service? This is equivalent to selecting current.",
+                    expected=args.release_name,
+                )
+                if not confirmed:
+                    raise PermissionError("promotion confirmation required")
+                emit(manager.promote_user_service(args.release_name))
+            elif args.deploy_command == "rollback":
+                confirmed = args.yes or confirm_typed(
+                    "Rollback to previous release?",
+                    expected="rollback",
+                )
+                if not confirmed:
+                    raise PermissionError("rollback confirmation required")
+                emit(manager.rollback_release(target=args.target))
+            elif args.deploy_command == "doctor":
+                emit(manager.deployer_doctor())
             return 0
         if args.command == "doctor":
             result = manager.doctor()

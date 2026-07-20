@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 EVIDENCE_TYPES = frozenset({"review", "verification", "scout"})
 EVIDENCE_RESULTS = frozenset({"pass", "fail", "blocked"})
@@ -194,6 +194,30 @@ class Database:
             if "release_blocked_at" not in plans_columns:
                 conn.execute("ALTER TABLE plans ADD COLUMN release_blocked_at TEXT")
                 conn.execute("ALTER TABLE plans ADD COLUMN release_blocked_reason TEXT")
+            releases_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(releases)").fetchall()
+            } if conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='releases'"
+            ).fetchone() else set()
+            if not releases_columns:
+                conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS releases (
+                        release_name TEXT PRIMARY KEY,
+                        created_at TEXT NOT NULL,
+                        source_sha TEXT,
+                        plan_id TEXT,
+                        file_count INTEGER NOT NULL DEFAULT 0,
+                        status TEXT NOT NULL DEFAULT 'created',
+                        current_at TEXT,
+                        canary_at TEXT,
+                        promoted_at TEXT,
+                        rollback_at TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_releases_status ON releases(status);
+                    """
+                )
+
             conn.execute(
                 "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
