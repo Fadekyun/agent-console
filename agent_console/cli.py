@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Any
 
@@ -134,6 +135,23 @@ def parser() -> argparse.ArgumentParser:
     plan_execute.add_argument("--name")
     plan_execute.add_argument("--allow-revision-change", action="store_true")
     plan_execute.add_argument("--yes", action="store_true")
+
+    plan_evidence = plan_commands.add_parser("evidence")
+    plan_evidence.add_argument("plan_id")
+    plan_evidence.add_argument("--type", required=True, choices=["review", "verification", "scout"])
+    plan_evidence.add_argument("--result", required=True, choices=["pass", "fail", "blocked"])
+    plan_evidence.add_argument("--sha", required=True)
+    plan_evidence.add_argument("--detail")
+    plan_evidence.add_argument("--capability")
+
+    plan_gate = plan_commands.add_parser("gate")
+    plan_gate.add_argument("plan_id")
+    plan_gate.add_argument("--json", action="store_true")
+
+    plan_promote = plan_commands.add_parser("promote")
+    plan_promote.add_argument("plan_id")
+    plan_promote.add_argument("--sha")
+    plan_promote.add_argument("--yes", action="store_true")
 
     delegate = commands.add_parser("delegate")
     delegate.add_argument("profile", choices=["planner", "researcher", "reviewer", "scout"])
@@ -377,6 +395,41 @@ def main(argv: list[str] | None = None) -> int:
                 emit(manager.list_plans())
             elif args.plan_command == "inspect":
                 emit(manager.inspect_plan(args.plan_id))
+            elif args.plan_command == "evidence":
+                cap = args.capability or os.environ.get("AGENT_CONSOLE_EVIDENCE_CAPABILITY")
+                emit(
+                    manager.record_evidence(
+                        args.plan_id,
+                        evidence_type=args.type,
+                        result=args.result,
+                        candidate_sha=args.sha,
+                        detail=args.detail,
+                        capability=cap,
+                    )
+                )
+            elif args.plan_command == "gate":
+                gate = manager.check_release_gate(args.plan_id)
+                if args.json:
+                    emit(gate)
+                else:
+                    status = "ALLOWED" if gate["allowed"] else "BLOCKED"
+                    print(f"Release gate: {status}")
+                    print(f"  Plan: {args.plan_id}")
+                    print(f"  SHA: {gate.get('candidate_sha', 'none')}")
+                    print(f"  Reason: {gate['reason']}")
+                    if gate.get("blocked_by"):
+                        print(f"  Blocked by: {gate['blocked_by']}")
+            elif args.plan_command == "promote":
+                if not args.yes and not confirm_typed(
+                    "Promote plan to releasable?", expected=args.plan_id
+                ):
+                    raise PermissionError("confirmation required")
+                emit(
+                    manager.promote_plan(
+                        args.plan_id,
+                        candidate_sha=args.sha,
+                    )
+                )
             elif args.plan_command == "execute":
                 plan = manager.inspect_plan(args.plan_id)
                 print(plan["plan"])

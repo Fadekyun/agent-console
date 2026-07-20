@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
+
+EVIDENCE_TYPES = frozenset({"review", "verification", "scout"})
+EVIDENCE_RESULTS = frozenset({"pass", "fail", "blocked"})
+REQUIRED_EVIDENCE_TYPES = frozenset({"review", "verification", "scout"})
 
 
 def utc_now() -> str:
@@ -131,6 +135,19 @@ class Database:
                     details_json TEXT NOT NULL DEFAULT '{}'
                 );
 
+                CREATE TABLE IF NOT EXISTS plan_evidence (
+                    id TEXT PRIMARY KEY,
+                    plan_id TEXT NOT NULL,
+                    candidate_sha TEXT NOT NULL,
+                    evidence_type TEXT NOT NULL,
+                    result TEXT NOT NULL,
+                    detail TEXT,
+                    session_id TEXT,
+                    session_name TEXT,
+                    recorded_at TEXT NOT NULL,
+                    FOREIGN KEY(plan_id) REFERENCES plans(id)
+                );
+
                 CREATE TABLE IF NOT EXISTS session_waits (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     parent_session_id TEXT NOT NULL,
@@ -168,6 +185,15 @@ class Database:
                     conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {definition}")
             if "project_id" not in columns:
                 conn.execute("ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id)")
+            if "evidence_capability_hash" not in columns:
+                conn.execute("ALTER TABLE sessions ADD COLUMN evidence_capability_hash TEXT")
+
+            plans_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(plans)").fetchall()
+            }
+            if "release_blocked_at" not in plans_columns:
+                conn.execute("ALTER TABLE plans ADD COLUMN release_blocked_at TEXT")
+                conn.execute("ALTER TABLE plans ADD COLUMN release_blocked_reason TEXT")
             conn.execute(
                 "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",

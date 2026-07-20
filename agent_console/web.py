@@ -110,6 +110,17 @@ class PlanExecuteRequest(BaseModel):
     allow_revision_change: bool = False
     project_id: str | None = Field(default=None, max_length=80)
 
+class RecordEvidenceRequest(BaseModel):
+    evidence_type: str = Field(min_length=1)
+    result: str = Field(min_length=1)
+    candidate_sha: str = Field(min_length=1, max_length=128)
+    detail: str | None = Field(default=None, max_length=5000)
+    capability: str | None = Field(default=None, min_length=1, max_length=256)
+
+class PromoteRequest(BaseModel):
+    confirmed: bool = False
+    candidate_sha: str | None = Field(default=None, max_length=128)
+
 class AssignSessionRequest(BaseModel):
     session_name: str = Field(min_length=1, max_length=80)
 
@@ -439,6 +450,43 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             allow_revision_change=payload.allow_revision_change,
             creator_surface="web",
             project_id=payload.project_id,
+        )
+
+    @app.post("/api/plans/{plan_id}/evidence")
+    async def record_evidence(
+        plan_id: str,
+        payload: RecordEvidenceRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.record_evidence(
+            plan_id,
+            evidence_type=payload.evidence_type,
+            result=payload.result,
+            candidate_sha=payload.candidate_sha,
+            detail=payload.detail,
+            capability=payload.capability,
+        )
+
+    @app.get("/api/plans/{plan_id}/gate")
+    async def release_gate(
+        plan_id: str,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.check_release_gate(plan_id)
+
+    @app.post("/api/plans/{plan_id}/promote")
+    async def promote_plan_api(
+        plan_id: str,
+        payload: PromoteRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        if not payload.confirmed:
+            raise HTTPException(status_code=400, detail="promote confirmation is required")
+        return session_manager.promote_plan(
+            plan_id,
+            candidate_sha=payload.candidate_sha,
+            actor=auth.actor,
+            surface="web",
         )
 
     @app.post("/api/sessions/{name}/interrupt")
