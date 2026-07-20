@@ -4,6 +4,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .logging_config import _safe_parse_int
+
+
+def _clamp_positive(value: int, default: int) -> int:
+    return value if value > 0 else default
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -19,6 +25,9 @@ class Settings:
     config_dir: Path | None = None
     max_children_per_parent: int = 3
     max_managed_sessions: int = 12
+    log_dir: Path | None = None
+    log_retention_days: int = 395
+    log_backup_count: int = 400
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -66,8 +75,21 @@ class Settings:
                     home / ".config" / "agent-console",
                 )
             ).expanduser(),
-            max_children_per_parent=int(os.getenv("AGENT_CONSOLE_MAX_CHILDREN", "3")),
-            max_managed_sessions=int(os.getenv("AGENT_CONSOLE_MAX_SESSIONS", "12")),
+            max_children_per_parent=_safe_parse_int(
+                os.getenv("AGENT_CONSOLE_MAX_CHILDREN"), 3
+            ),
+            max_managed_sessions=_safe_parse_int(
+                os.getenv("AGENT_CONSOLE_MAX_SESSIONS"), 12
+            ),
+            log_dir=Path(
+                os.getenv("AGENT_CONSOLE_LOG_DIR", state_dir / "logs")
+            ).expanduser(),
+            log_retention_days=_clamp_positive(
+                _safe_parse_int(os.getenv("AGENT_CONSOLE_LOG_RETENTION_DAYS"), 395), 395
+            ),
+            log_backup_count=_clamp_positive(
+                _safe_parse_int(os.getenv("AGENT_CONSOLE_LOG_BACKUP_COUNT"), 400), 400
+            ),
         )
 
     def ensure_state_dirs(self) -> None:
@@ -76,6 +98,8 @@ class Settings:
         (self.state_dir / "transcripts").mkdir(parents=True, exist_ok=True, mode=0o700)
         (self.state_dir / "contexts").mkdir(parents=True, exist_ok=True, mode=0o700)
         (self.state_dir / "model-cache").mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.log_dir:
+            self.log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         config_dir = self.config_dir or self.state_dir / "config"
         config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         config_dir.chmod(0o700)

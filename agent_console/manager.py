@@ -7,6 +7,7 @@ import secrets
 import shlex
 import subprocess
 import time
+import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +53,10 @@ class SessionManager:
         self.auth = AuthRegistry(self.settings.config_dir or self.settings.state_dir / "config")
         self.database = Database(self.settings.database_path)
         self.database.migrate()
+        try:
+            self.database.prune_audit_events(self.settings.log_retention_days)
+        except Exception:
+            log.warning("audit prune failed: %s", traceback.format_exc())
         self.models = ModelCatalogue(self.settings.state_dir / "model-cache")
         validate_profile_schema()
         self.tmux = Tmux(
