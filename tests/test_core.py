@@ -603,6 +603,36 @@ class WaitProtocolTests(unittest.TestCase):
         for child in result["children"]:
             self.assertEqual(child["wait_status"], "completed")
 
+    def test_wait_failed_child_while_sibling_waiting(self) -> None:
+        parent = self.manager.create(
+            tool="shell", profile="general", name="wait-fail-sibling-parent",
+            repository=str(self.workspace),
+        )
+        child1 = self.manager.delegate(
+            profile="planner", parent=parent["id"], task="fail child",
+            tool="shell",
+        )["session"]
+        child2 = self.manager.delegate(
+            profile="planner", parent=parent["id"], task="waiting sibling",
+            tool="shell",
+        )["session"]
+
+        self.manager.kill(child1["tmux_name"])
+
+        t0 = time.monotonic()
+        result = self.manager.wait_for_children(
+            parent["tmux_name"], timeout=15, poll_interval=1
+        )
+        elapsed = time.monotonic() - t0
+        self.assertLess(
+            elapsed, 10,
+            f"should break immediately, not wait for timeout or sibling; took {elapsed:.1f}s",
+        )
+        self.assertEqual(result["outcome"], "failure")
+        self.assertEqual(result["exit_code"], 3)
+
+        self.manager.kill(child2["tmux_name"])
+
     def test_wait_web_endpoint(self) -> None:
         os.environ["AGENT_CONSOLE_TAILSCALE_LOGIN"] = "test@example.com"
         from fastapi.testclient import TestClient

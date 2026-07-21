@@ -384,9 +384,7 @@ class SessionManager:
                     outcome = "success" if exit_code == 0 else "failure"
                     break
 
-                if failure_detected and not any(
-                    c.get("wait_status") == "waiting" for c in child_states
-                ):
+                if failure_detected:
                     outcome = "failure"
                     break
 
