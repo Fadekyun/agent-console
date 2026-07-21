@@ -445,14 +445,20 @@ class SessionManager:
             groups = []
             for row in rows:
                 g = dict(row)
-                g["sessions"] = []
-                if g["parent_session_id"]:
-                    children = conn.execute(
-                        "SELECT tmux_name, profile, tool, status, attention_state "
-                        "FROM sessions WHERE parent_session_id=? OR id=?",
-                        (g["parent_session_id"], g["parent_session_id"]),
-                    ).fetchall()
-                    g["sessions"] = [dict(c) for c in children]
+                members = conn.execute(
+                    "SELECT s.tmux_name, s.profile, s.tool, s.status, s.attention_state "
+                    "FROM group_members gm JOIN sessions s ON s.id=gm.session_id "
+                    "WHERE gm.group_id=? ORDER BY gm.added_at",
+                    (g["id"],),
+                ).fetchall()
+                live = self._live_sessions()
+                session_list = []
+                for m in members:
+                    member = dict(m)
+                    member["running"] = m["tmux_name"] in live
+                    session_list.append(member)
+                g["sessions"] = session_list
+                g["member_count"] = len(session_list)
                 groups.append(g)
             return groups
 
@@ -461,29 +467,164 @@ class SessionManager:
         name: str,
         purpose: str | None = None,
         parent_session: str | None = None,
+        *,
+        actor: str = "system",
+        surface: str = "CLI",
     ) -> dict[str, Any]:
         group_id = f"grp-{uuid.uuid4().hex}"
         parent_id: str | None = None
         if parent_session:
+            validate_session_name(parent_session)
             with self.database.connect() as conn:
                 row = conn.execute(
                     "SELECT id FROM sessions WHERE tmux_name=?", (parent_session,)
                 ).fetchone()
-                if row is not None:
-                    parent_id = row["id"]
+                if row is None:
+                    raise KeyError(f"parent session not found: {parent_session}")
+                parent_id = row["id"]
         with self.database.connect() as conn:
             conn.execute(
                 "INSERT INTO session_groups(id, name, purpose, parent_session_id, status, created_at) "
                 "VALUES(?, ?, ?, ?, 'active', ?)",
                 (group_id, name, purpose, parent_id, utc_now()),
             )
+        self.database.audit(
+            "group.created", group_id, "success",
+            actor=actor, surface=surface,
+            details={"name": name, "purpose": purpose},
+        )
         return {
             "id": group_id,
             "name": name,
             "purpose": purpose,
             "parent_session_id": parent_id,
             "status": "active",
+            "sessions": [],
+            "member_count": 0,
         }
+
+    def get_group(self, group_id: str) -> dict[str, Any]:
+        with self.database.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM session_groups WHERE id=?", (group_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"session group not found: {group_id}")
+            g = dict(row)
+            members = conn.execute(
+                "SELECT s.tmux_name, s.profile, s.tool, s.status, s.attention_state "
+                "FROM group_members gm JOIN sessions s ON s.id=gm.session_id "
+                "WHERE gm.group_id=? ORDER BY gm.added_at",
+                (g["id"],),
+            ).fetchall()
+            live = self._live_sessions()
+            session_list = []
+            for m in members:
+                member = dict(m)
+                member["running"] = m["tmux_name"] in live
+                session_list.append(member)
+            g["sessions"] = session_list
+            g["member_count"] = len(session_list)
+            return g
+
+    def add_group_session(
+        self,
+        group_id: str,
+        session_name: str,
+        *,
+        actor: str = "system",
+        surface: str = "CLI",
+    ) -> dict[str, Any]:
+        validate_session_name(session_name)
+        with self.database.connect() as conn:
+            group = conn.execute(
+                "SELECT id FROM session_groups WHERE id=?", (group_id,)
+            ).fetchone()
+            if group is None:
+                raise KeyError(f"session group not found: {group_id}")
+            session = conn.execute(
+                "SELECT id FROM sessions WHERE tmux_name=?", (session_name,)
+            ).fetchone()
+            if session is None:
+                raise KeyError(f"session not found: {session_name}")
+            existing = conn.execute(
+                "SELECT id FROM group_members WHERE group_id=? AND session_id=?",
+                (group_id, session["id"]),
+            ).fetchone()
+            if existing is not None:
+                raise ValueError(f"session {session_name} is already a member of group {group_id}")
+            member_id = f"gmem-{uuid.uuid4().hex}"
+            conn.execute(
+                "INSERT INTO group_members(id, group_id, session_id, added_at, added_by) "
+                "VALUES(?, ?, ?, ?, ?)",
+                (member_id, group_id, session["id"], utc_now(), actor),
+            )
+        self.database.audit(
+            "group.member.added", group_id, "success",
+            actor=actor, surface=surface,
+            details={"session": session_name, "member_id": member_id},
+        )
+        return self.get_group(group_id)
+
+    def remove_group_session(
+        self,
+        group_id: str,
+        session_name: str,
+        *,
+        actor: str = "system",
+        surface: str = "CLI",
+    ) -> dict[str, Any]:
+        validate_session_name(session_name)
+        with self.database.connect() as conn:
+            group = conn.execute(
+                "SELECT id FROM session_groups WHERE id=?", (group_id,)
+            ).fetchone()
+            if group is None:
+                raise KeyError(f"session group not found: {group_id}")
+            session = conn.execute(
+                "SELECT id FROM sessions WHERE tmux_name=?", (session_name,)
+            ).fetchone()
+            if session is None:
+                raise KeyError(f"session not found: {session_name}")
+            member = conn.execute(
+                "SELECT id FROM group_members WHERE group_id=? AND session_id=?",
+                (group_id, session["id"]),
+            ).fetchone()
+            if member is None:
+                raise ValueError(f"session {session_name} is not a member of group {group_id}")
+            conn.execute(
+                "DELETE FROM group_members WHERE id=?", (member["id"],)
+            )
+        self.database.audit(
+            "group.member.removed", group_id, "success",
+            actor=actor, surface=surface,
+            details={"session": session_name},
+        )
+        return self.get_group(group_id)
+
+    def open_group(self, group_id: str) -> list[dict[str, Any]]:
+        live = self._live_sessions()
+        with self.database.connect() as conn:
+            group = conn.execute(
+                "SELECT id FROM session_groups WHERE id=?", (group_id,)
+            ).fetchone()
+            if group is None:
+                raise KeyError(f"session group not found: {group_id}")
+            members = conn.execute(
+                "SELECT s.tmux_name, s.tool, s.profile, s.status "
+                "FROM group_members gm JOIN sessions s ON s.id=gm.session_id "
+                "WHERE gm.group_id=? ORDER BY gm.added_at",
+                (group_id,),
+            ).fetchall()
+            available = []
+            unavailable = []
+            for m in members:
+                entry = dict(m)
+                if m["tmux_name"] in live:
+                    available.append(entry)
+                else:
+                    unavailable.append(entry)
+        return {"available": available, "unavailable": unavailable, "member_count": len(members)}
 
     def list_projects(self) -> list[dict[str, Any]]:
         with self.database.connect() as conn:

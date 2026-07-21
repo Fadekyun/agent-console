@@ -356,6 +356,34 @@ test('skill unassign button dispatches unassign API call', async ({ page }, test
   await unassignRequest;
 });
 
+test('orchestration view shows session groups with interactive controls', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop orchestration coverage.');
+  await page.route('**/api/session-groups', async (route) => {
+    const url = new URL(route.request().url());
+    const method = route.request().method();
+    if (method === 'GET') {
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify([{ id: 'grp-1', name: 'test-group', purpose: 'coordinate work', status: 'active', member_count: 1, sessions: [{ tmux_name: 'child-1', profile: 'planner', tool: 'codex', status: 'detached', attention_state: 'normal', running: true }] }]),
+      });
+    } else if (url.pathname.endsWith('/members') && method === 'POST') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'grp-1', name: 'test-group', member_count: 2, sessions: [] }) });
+    } else if (url.pathname.includes('/open') && method === 'POST') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ member_count: 1, available: [{ tmux_name: 'child-1' }], unavailable: [] }) });
+    } else {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'grp-1', name: 'test-group', member_count: 1, sessions: [{ tmux_name: 'child-1', profile: 'planner', tool: 'codex', status: 'detached', attention_state: 'normal', running: true }] }) });
+    }
+  });
+  await mockApi(page);
+  await page.goto('/desktop#orchestration');
+  await expect(page.locator('#session-tree')).toBeVisible();
+  await expect(page.locator('#session-tree')).toContainText('test-group');
+  await expect(page.locator('#new-group-btn')).toBeVisible();
+  await expect(page.locator('[data-group-open]').first()).toBeVisible();
+  await page.locator('[data-group-open]').first().click();
+  await expect(page.locator('#notice')).toContainText('Opened');
+});
+
 test('orchestration view shows session groups', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop orchestration coverage.');
   await page.route('**/api/session-groups', async (route) => {

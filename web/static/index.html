@@ -163,6 +163,26 @@
     </form>
   </dialog>
 
+  <dialog id="group-dialog">
+    <form id="group-form" class="dialog-form">
+      <h2 id="group-dialog-title">New session group</h2>
+      <label>Group name<input name="group_name" required minlength="1" maxlength="80"></label>
+      <label>Purpose<textarea name="group_purpose" rows="3" maxlength="2000" placeholder="Optional description of this group's goal"></textarea></label>
+      <p id="group-dialog-status" role="status"></p>
+      <div class="dialog-actions"><button type="button" data-close="group-dialog">Cancel</button><button type="submit" class="primary">Create group</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="group-detail-dialog">
+    <div class="dialog-form">
+      <h2 id="group-detail-title">Group</h2>
+      <p id="group-detail-purpose" class="muted"></p>
+      <p id="group-detail-meta" class="muted"></p>
+      <div id="group-detail-sessions" class="tree-list"></div>
+      <div class="dialog-actions"><button type="button" data-close="group-detail-dialog">Close</button></div>
+    </div>
+  </dialog>
+
   <dialog id="project-detail-dialog">
     <div class="dialog-form">
       <h2 id="project-detail-title">Project</h2>

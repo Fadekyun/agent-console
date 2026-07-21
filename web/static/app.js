@@ -22,6 +22,9 @@ const reviewDialog = $('#review-dialog');
 const inspector = $('#session-inspector');
 const attentionForm = $('#attention-form');
 const terminalDock = $('#terminal-dock');
+const groupDialog = $('#group-dialog');
+const groupForm = $('#group-form');
+const groupDetailDialog = $('#group-detail-dialog');
 const terminalTabs = new Map();
 let activeTerminal = null;
 
@@ -330,14 +333,15 @@ async function renderOrchestration() {
     Promise.resolve(state.tree),
   ]);
   const groupEl = document.createElement('div'); groupEl.className = 'panel';
-  groupEl.innerHTML = '<div class="panel-heading"><h3>Session groups</h3></div>';
+  groupEl.innerHTML = '<div class="panel-heading"><h3>Session groups</h3><button id="new-group-btn" class="compact">New group</button></div>';
   const groupList = document.createElement('div'); groupList.className = 'tree-list';
   if (groups.length) {
     groupList.replaceChildren(...groups.map(renderGroupCard));
   } else {
-    groupList.innerHTML = '<p class="empty">No session groups yet. Create one from a running session.</p>';
+    groupList.innerHTML = '<p class="empty">No session groups yet. Create one to coordinate multiple sessions.</p>';
   }
   groupEl.append(groupList);
+  $('#new-group-btn')?.addEventListener('click', openNewGroup);
   treeEl.replaceChildren(groupEl, ...state.tree.roots.map(renderTreeNode));
   if (!state.tree.roots.length && !groups.length) treeEl.innerHTML = '<p class="empty">No sessions discovered.</p>';
   const activePlans = state.plans.filter(p => p.status === 'planned' || p.status === 'executing');
@@ -349,20 +353,153 @@ async function renderOrchestration() {
   if (!activePlans.length) plansEl.innerHTML = '<p class="empty">No shared plans found.</p>';
 }
 
+function openNewGroup() {
+  groupForm.reset();
+  groupForm.elements.group_name.value = '';
+  groupForm.elements.group_purpose.value = '';
+  groupForm.dataset.edit = '';
+  $('#group-dialog-title').textContent = 'New session group';
+  $('#group-dialog-status').textContent = '';
+  groupDialog.showModal();
+}
+
+groupForm.onsubmit = async (event) => {
+  event.preventDefault(); const status = $('#group-dialog-status');
+  const submit = $('button[type="submit"]', groupForm); submit.disabled = true;
+  status.textContent = 'Creating…';
+  try {
+    const payload = { name: groupForm.elements.group_name.value };
+    const purpose = groupForm.elements.group_purpose.value?.trim();
+    if (purpose) payload.purpose = purpose;
+    await api('/api/session-groups', { method: 'POST', body: JSON.stringify(payload) });
+    status.textContent = 'Created.';
+    groupDialog.close();
+    await renderOrchestration();
+    showNotice(`Group "${payload.name}" created`);
+  } catch (error) { status.textContent = error.message; }
+  finally { submit.disabled = false; }
+};
+
 function renderGroupCard(group) {
   const card = document.createElement('article'); card.className = 'tree-node';
   const statusBadge = group.status === 'active' ? '<span class="badge live">active</span>' : '<span class="badge stopped">completed</span>';
-  card.innerHTML = `<div class="session-title"><h3>${escapeHtml(group.name)}</h3>${statusBadge}</div><p class="meta">${escapeHtml(group.purpose || 'No purpose set')}</p>`;
+  const memberInfo = `<span class="muted">${group.member_count || 0} session${group.member_count === 1 ? '' : 's'}</span>`;
+  card.innerHTML = `<div class="session-title"><h3>${escapeHtml(group.name)}</h3>${statusBadge}${memberInfo}</div><p class="meta">${escapeHtml(group.purpose || 'No purpose set')}</p><div class="tree-node-actions"><button class="compact" data-group-detail>Details</button><button class="compact primary" data-group-open>Open terminals</button></div>`;
   if (group.sessions && group.sessions.length) {
     const children = document.createElement('div'); children.className = 'tree-node-children';
     children.replaceChildren(...group.sessions.map((s) => {
       const child = document.createElement('div'); child.className = 'tree-node';
-      child.innerHTML = `<div class="session-title"><span>${escapeHtml(s.tmux_name || 'unknown')}</span><span class="badge ${s.status === 'detached' ? 'live' : 'stopped'}">${escapeHtml(s.profile || '')}</span></div><p class="meta">${escapeHtml(s.tool || '')} · ${escapeHtml(s.attention_state || 'normal')}</p>`;
+      const liveClass = s.running ? 'live' : 'stopped';
+      child.innerHTML = `<div class="session-title"><span>${escapeHtml(s.tmux_name || 'unknown')}</span><span class="badge ${liveClass}">${escapeHtml(s.profile || '')}</span></div><p class="meta">${escapeHtml(s.tool || '')} · ${escapeHtml(s.attention_state || 'normal')}</p>`;
       return child;
     }));
     card.append(children);
   }
+  $('[data-group-detail]', card).onclick = () => openGroupDetail(group.id, group.name);
+  $('[data-group-open]', card).onclick = () => openGroupTerminals(group.id, group.name);
   return card;
+}
+
+async function openGroupDetail(groupId, groupName) {
+  try {
+    const group = await api(`/api/session-groups/${encodeURIComponent(groupId)}`);
+    $('#group-detail-title').textContent = groupName;
+    $('#group-detail-purpose').textContent = group.purpose || 'No purpose set';
+    $('#group-detail-meta').textContent = `${group.member_count} session${group.member_count === 1 ? '' : 's'} · status: ${group.status}`;
+    const sessionList = $('#group-detail-sessions');
+    sessionList.replaceChildren();
+    const allSessions = state.sessions.filter((s) => s.running && s.managed);
+    const members = group.sessions || [];
+    if (members.length) {
+      const memberNames = new Set(members.map((m) => m.tmux_name));
+      members.forEach((s) => {
+        const el = document.createElement('div'); el.className = 'member-row';
+        const liveClass = s.running ? 'live' : 'stopped';
+        el.innerHTML = `<span class="session-name">${escapeHtml(s.tmux_name)}</span><span class="badge ${liveClass}">${escapeHtml(s.profile || '')}</span><span class="muted">${escapeHtml(s.tool || '')}</span><button class="compact danger" data-remove="${escapeHtml(s.tmux_name)}">Remove</button>`;
+        $('[data-remove]', el).onclick = async () => {
+          try {
+            await api(`/api/session-groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(s.tmux_name)}`, { method: 'DELETE' });
+            showNotice(`Removed ${s.tmux_name} from group`);
+            openGroupDetail(groupId, groupName);
+          } catch (e) { showNotice(e.message, 'error'); }
+        };
+        sessionList.append(el);
+      });
+      const addSection = document.createElement('div'); addSection.className = 'group-add-section';
+      addSection.innerHTML = '<hr><p class="muted">Add a running session to this group:</p><div class="group-add-controls"><select id="group-add-select"><option value="">Select a session…</option></select><button id="group-add-btn" class="primary compact" disabled>Add</button></div>';
+      const addSelect = addSection.querySelector('#group-add-select');
+      const addBtn = addSection.querySelector('#group-add-btn');
+      const eligible = allSessions.filter((s) => !memberNames.has(s.tmux_name));
+      eligible.forEach((s) => {
+        const opt = document.createElement('option');
+        opt.value = s.tmux_name;
+        opt.textContent = `${s.tmux_name} · ${s.tool || 'legacy'} · ${s.profile || 'legacy'}`;
+        addSelect.append(opt);
+      });
+      if (eligible.length) {
+        addSelect.onchange = () => { addBtn.disabled = !addSelect.value; };
+        addBtn.onclick = async () => {
+          const name = addSelect.value; if (!name) return;
+          try {
+            await api(`/api/session-groups/${encodeURIComponent(groupId)}/members`, { method: 'POST', body: JSON.stringify({ session_name: name }) });
+            showNotice(`Added ${name} to group`);
+            openGroupDetail(groupId, groupName);
+          } catch (e) { showNotice(e.message, 'error'); }
+        };
+      } else {
+        addSection.innerHTML += '<p class="empty">No additional running managed sessions available.</p>';
+      }
+      sessionList.append(addSection);
+    } else {
+      sessionList.innerHTML = '<p class="empty">No sessions in this group yet.</p>';
+      const addAll = document.createElement('div'); addAll.className = 'group-add-section';
+      addAll.innerHTML = '<hr><p class="muted">Add a running session to this group:</p><div class="group-add-controls"><select id="group-add-select"><option value="">Select a session…</option></select><button id="group-add-btn" class="primary compact" disabled>Add</button></div>';
+      const addSelect = addAll.querySelector('#group-add-select');
+      const addBtn = addAll.querySelector('#group-add-btn');
+      allSessions.forEach((s) => {
+        const opt = document.createElement('option');
+        opt.value = s.tmux_name;
+        opt.textContent = `${s.tmux_name} · ${s.tool || 'legacy'} · ${s.profile || 'legacy'}`;
+        addSelect.append(opt);
+      });
+      if (allSessions.length) {
+        addSelect.onchange = () => { addBtn.disabled = !addSelect.value; };
+        addBtn.onclick = async () => {
+          const name = addSelect.value; if (!name) return;
+          try {
+            await api(`/api/session-groups/${encodeURIComponent(groupId)}/members`, { method: 'POST', body: JSON.stringify({ session_name: name }) });
+            showNotice(`Added ${name} to group`);
+            openGroupDetail(groupId, groupName);
+          } catch (e) { showNotice(e.message, 'error'); }
+        };
+      } else {
+        addAll.innerHTML += '<p class="empty">No running managed sessions available.</p>';
+      }
+      sessionList.append(addAll);
+    }
+    $('#group-detail-dialog').showModal();
+  } catch (e) { showNotice(e.message, 'error'); }
+}
+
+async function openGroupTerminals(groupId, groupName) {
+  try {
+    const result = await api(`/api/session-groups/${encodeURIComponent(groupId)}/open`, { method: 'POST' });
+    const available = result.available || [];
+    const unavailable = result.unavailable || [];
+    let opened = 0;
+    for (const s of available) {
+      if (terminalTabs.size >= 4) break;
+      openTerminal(s.tmux_name);
+      opened++;
+    }
+    const skipped = available.length - opened;
+    const parts = [];
+    if (opened) parts.push(`Opened ${opened} terminal${opened === 1 ? '' : 's'} for "${groupName}"`);
+    if (skipped) parts.push(`${skipped} session${skipped === 1 ? '' : 's'} not opened due to tab limit (max 4)`);
+    const closedNames = unavailable.map((s) => s.tmux_name).join(', ');
+    if (closedNames) parts.push(`Not running: ${closedNames}`);
+    showNotice(parts.join('. ') || `No available sessions in group "${groupName}"`);
+  } catch (e) { showNotice(e.message, 'error'); }
 }
 
 async function openPlan(planId) {
