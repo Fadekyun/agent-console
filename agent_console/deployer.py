@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 import hashlib
 import json
 import logging
@@ -20,7 +21,11 @@ MANIFEST_NAME = "manifest.json"
 CURRENT_LINK = "current"
 CANARY_LINK = "canary"
 RELEASE_NAME_RE = re.compile(r"^release-[A-Za-z0-9._-]+$")
-LIVE_ACTIONS_FORBIDDEN = True
+
+
+class DeploymentMode(enum.Enum):
+    DISABLED = "disabled"
+    STAGING = "staging"
 
 EXCLUDED_DIRS = frozenset({
     ".git", "__pycache__", ".venv", "venv", "node_modules",
@@ -123,6 +128,7 @@ class ServiceConfig:
     canary_bind: str = "127.0.0.1"
     canary_port_range: tuple[int, int] = (33100, 33199)
     user_service_port: int = 3210
+    deployment_mode: DeploymentMode = DeploymentMode.DISABLED
 
 
 class ServiceRunner(ABC):
@@ -145,12 +151,19 @@ class ServiceRunner(ABC):
 
 class ProductionServiceRunner(ServiceRunner):
     def __init__(self, config: ServiceConfig | None = None):
-        self.config = config or ServiceConfig()
+        config = config or ServiceConfig()
+        self.config = config
+        self._deployment_mode = config.deployment_mode
         self._canary_process: subprocess.Popen | None = None
 
+    def _check_mode(self) -> None:
+        if self._deployment_mode != DeploymentMode.STAGING:
+            raise RuntimeError(
+                f"live service actions are disabled (mode={self._deployment_mode.value})"
+            )
+
     def start_canary(self, release_path: Path, bind: str, port: int) -> bool:
-        if LIVE_ACTIONS_FORBIDDEN:
-            raise RuntimeError("live service actions are forbidden during this task")
+        self._check_mode()
         log.info("canary start release=%s bind=%s port=%d", release_path.name, bind, port)
         try:
             self._canary_process = subprocess.Popen(
@@ -171,8 +184,7 @@ class ProductionServiceRunner(ServiceRunner):
             return False
 
     def stop_canary(self) -> bool:
-        if LIVE_ACTIONS_FORBIDDEN:
-            raise RuntimeError("live service actions are forbidden during this task")
+        self._check_mode()
         if self._canary_process:
             self._canary_process.terminate()
             try:
@@ -183,8 +195,7 @@ class ProductionServiceRunner(ServiceRunner):
         return True
 
     def check_health(self, *, port: int | None = None) -> bool:
-        if LIVE_ACTIONS_FORBIDDEN:
-            raise RuntimeError("live service actions are forbidden during this task")
+        self._check_mode()
         target_port = port or self.config.user_service_port
         try:
             import httpx
@@ -194,8 +205,7 @@ class ProductionServiceRunner(ServiceRunner):
             return False
 
     def restart(self, *, service_name: str | None = None) -> bool:
-        if LIVE_ACTIONS_FORBIDDEN:
-            raise RuntimeError("live service actions are forbidden during this task")
+        self._check_mode()
         name = service_name or self.config.user_service_name
         log.info("service restart name=%s", name)
         try:
@@ -358,6 +368,12 @@ class Deployer:
             raise RuntimeError(
                 f"canary verification failed for {release_name}: "
                 "isolated candidate did not become healthy"
+            )
+        if not self.runner.check_health(port=actual_port):
+            self.runner.stop_canary()
+            raise RuntimeError(
+                f"canary health check failed for {release_name}: "
+                "health check did not pass before canary link change"
             )
         self.runner.stop_canary()
         previous = _release_name_from_path(self._link_target(CANARY_LINK)) if self._link_target(CANARY_LINK) else None

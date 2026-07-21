@@ -16,7 +16,7 @@ from typing import Any
 from .auth import AuthRegistry
 from .config import Settings
 from .database import Database, EVIDENCE_RESULTS, EVIDENCE_TYPES, REQUIRED_EVIDENCE_TYPES, utc_now
-from .deployer import Deployer, ProductionServiceRunner, ServiceConfig
+from .deployer import DeploymentMode, Deployer, ProductionServiceRunner, ServiceConfig
 
 EVIDENCE_TYPE_TO_PROFILE: dict[str, str] = {
     "review": "reviewer",
@@ -78,10 +78,16 @@ class SessionManager:
     def deployer(self) -> Deployer:
         if self._deployer_override is not None:
             return self._deployer_override
+        mode_str = self.settings.deployment_mode
+        try:
+            mode = DeploymentMode(mode_str)
+        except ValueError:
+            mode = DeploymentMode.DISABLED
         runner = ProductionServiceRunner(ServiceConfig(
             user_service_name=getattr(self.settings, 'user_service_name', 'agent-console-web.service'),
             canary_bind=getattr(self.settings, 'canary_bind', '127.0.0.1'),
             user_service_port=getattr(self.settings, 'user_service_port', 3210),
+            deployment_mode=mode,
         ))
         return Deployer(
             self.settings.releases_root or self.settings.state_dir / "releases",

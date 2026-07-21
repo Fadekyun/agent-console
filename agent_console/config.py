@@ -20,6 +20,7 @@ class Settings:
     releases_root: Path | None = None
     max_children_per_parent: int = 3
     max_managed_sessions: int = 12
+    deployment_mode: str = "disabled"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -75,6 +76,7 @@ class Settings:
             ).expanduser(),
             max_children_per_parent=int(os.getenv("AGENT_CONSOLE_MAX_CHILDREN", "3")),
             max_managed_sessions=int(os.getenv("AGENT_CONSOLE_MAX_SESSIONS", "12")),
+            deployment_mode=os.getenv("AGENT_CONSOLE_DEPLOYMENT_MODE", "disabled").lower().strip(),
         )
 
     def ensure_state_dirs(self) -> None:

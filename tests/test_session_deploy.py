@@ -8,10 +8,19 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+from unittest import mock
 
 from agent_console.config import Settings
 from agent_console.manager import SessionManager
-from agent_console.deployer import Deployer, ServiceRunner, FakeServiceRunner, validate_manifest_at
+from agent_console.deployer import (
+    DeploymentMode,
+    Deployer,
+    FakeServiceRunner,
+    ProductionServiceRunner,
+    ServiceConfig,
+    ServiceRunner,
+    validate_manifest_at,
+)
 
 
 def _make_source(temp_root: Path, name: str = "src", content_suffix: str = "") -> Path:
@@ -268,7 +277,8 @@ class DeployerUnitTests(unittest.TestCase):
         result = d.promote_user_service(rel["release_name"])
         self.assertEqual(result["status"], "user_service_active")
         self.assertEqual(len(runner.restart_calls), 1)
-        self.assertEqual(len(runner.health_calls), 1)
+        self.assertEqual(len(runner.health_calls), 2,
+                         "one from promote_canary explicit check, one from promote_user_service health check")
 
     def test_user_service_rolls_back_on_restart_failure(self) -> None:
         runner = FakeServiceRunner(restart_ok=False)
@@ -284,13 +294,14 @@ class DeployerUnitTests(unittest.TestCase):
                          "must roll back to previous current on restart failure")
 
     def test_user_service_rolls_back_on_health_failure(self) -> None:
-        runner = FakeServiceRunner(restart_ok=True, health_ok=False)
+        runner = FakeServiceRunner(restart_ok=True, health_ok=True)
         d = Deployer(self.releases_root, source_tracker=None, runner=runner)
         rel1 = d.create_release(self.source, candidate_sha=uuid.uuid4().hex[:12])
         d.select_release(rel1["release_name"])
         src2 = _make_source(self.root, "src2", "2")
         rel2 = d.create_release(src2, candidate_sha=uuid.uuid4().hex[:12])
         d.promote_canary(rel2["release_name"])
+        runner.health_ok = False
         result = d.promote_user_service(rel2["release_name"])
         self.assertIn("health_failed", result["status"])
         self.assertEqual(self.deployer.current_release()["release_name"], rel1["release_name"],
@@ -635,6 +646,297 @@ class DeployerManagerIntegrationTests(unittest.TestCase):
         db_stat2 = self.manager.database.path.stat()
         self.assertEqual(db_stat.st_ino, db_stat2.st_ino,
                          "DB inode unchanged = state persisted outside releases")
+
+
+class DeploymentModeTests(unittest.TestCase):
+    """ProductionServiceRunner must reject all actions unless mode is exactly staging."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.release_path = self.root / "release-some"
+        self.release_path.mkdir()
+        (self.release_path / "app.py").write_text("x", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    # --- disabled mode ---
+
+    def _assert_disabled(self, runner: ProductionServiceRunner) -> None:
+        with self.assertRaises(RuntimeError) as ctx:
+            runner.start_canary(self.release_path, "127.0.0.1", 33100)
+        self.assertIn("disabled", str(ctx.exception).lower())
+        with self.assertRaises(RuntimeError) as ctx:
+            runner.stop_canary()
+        self.assertIn("disabled", str(ctx.exception).lower())
+        with self.assertRaises(RuntimeError) as ctx:
+            runner.check_health()
+        self.assertIn("disabled", str(ctx.exception).lower())
+        with self.assertRaises(RuntimeError) as ctx:
+            runner.restart()
+        self.assertIn("disabled", str(ctx.exception).lower())
+
+    def test_disabled_mode_rejects_all_runner_actions(self) -> None:
+        runner = ProductionServiceRunner(ServiceConfig(deployment_mode=DeploymentMode.DISABLED))
+        self._assert_disabled(runner)
+
+    def test_default_mode_is_disabled(self) -> None:
+        runner = ProductionServiceRunner()
+        self._assert_disabled(runner)
+
+    # --- staging mode ---
+
+    def test_staging_mode_does_not_raise_runtime_error(self) -> None:
+        runner = ProductionServiceRunner(ServiceConfig(deployment_mode=DeploymentMode.STAGING))
+        runner._check_mode()
+
+    def test_staging_mode_proceeds_to_runner_implementation(self) -> None:
+        runner = ProductionServiceRunner(ServiceConfig(deployment_mode=DeploymentMode.STAGING))
+        with mock.patch.object(subprocess, "Popen", side_effect=OSError("mock no uvicorn")):
+            result = runner.start_canary(self.release_path, "127.0.0.1", 33100)
+            self.assertFalse(result, "staging: reaches Popen but subprocess fails")
+        with mock.patch("httpx.get", side_effect=Exception("mock connection refused")):
+            result = runner.check_health()
+            self.assertFalse(result, "staging: reaches httpx.get but connection fails")
+
+    # --- production / unrecognized mode ---
+
+    def test_production_mode_rejected_in_settings(self) -> None:
+        settings = Settings(
+            workspace_root=self.root,
+            state_dir=self.root / "state",
+            database_path=self.root / "state" / "test.sqlite3",
+            profile_dir=self.root / "profiles",
+            handoff_dir=self.root / "handoffs",
+            worktree_root=self.root / "worktrees",
+            tmux_socket=None,
+            deployment_mode="production",
+        )
+        with self.assertRaises(ValueError):
+            DeploymentMode(settings.deployment_mode)
+
+    def test_unrecognized_mode_rejected_in_settings(self) -> None:
+        settings = Settings(
+            workspace_root=self.root,
+            state_dir=self.root / "state",
+            database_path=self.root / "state" / "test.sqlite3",
+            profile_dir=self.root / "profiles",
+            handoff_dir=self.root / "handoffs",
+            worktree_root=self.root / "worktrees",
+            tmux_socket=None,
+            deployment_mode="unrecognized",
+        )
+        with self.assertRaises(ValueError):
+            DeploymentMode(settings.deployment_mode)
+
+
+class DeployerModeFailClosedTests(unittest.TestCase):
+    """ProductionServiceRunner in non-staging mode (disabled/production/unrecognized)
+    must block all runner actions and prevent canary/current symlink mutation
+    through the public Deployer path."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.releases_root = self.root / "releases"
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def _make_source(self) -> Path:
+        src = self.root / "src"
+        src.mkdir()
+        (src / "app.py").write_text("print('ok')\n", encoding="utf-8")
+        return src
+
+    def _assert_fail_closed(self, config: ServiceConfig) -> None:
+        runner = ProductionServiceRunner(config)
+        d = Deployer(self.releases_root, runner=runner, source_tracker=None)
+        src = self._make_source()
+        rel = d.create_release(src, candidate_sha="deadbeef0001")
+        self.assertTrue(d.validate_release(rel["release_name"])["valid"])
+        with self.assertRaises(RuntimeError) as ctx:
+            d.promote_canary(rel["release_name"])
+        self.assertIn("disabled", str(ctx.exception).lower())
+        self.assertIsNone(d.canary_release(),
+                          "canary symlink must not be set when runner is disabled")
+        self.assertIsNone(d.current_release(),
+                          "current symlink must not be set when runner is disabled")
+        with self.assertRaises(RuntimeError):
+            runner.start_canary(Path(rel["release_path"]), "127.0.0.1", 33100)
+        with self.assertRaises(RuntimeError):
+            runner.stop_canary()
+        with self.assertRaises(RuntimeError):
+            runner.check_health()
+        with self.assertRaises(RuntimeError):
+            runner.restart()
+
+    def test_disabled_mode_fail_closed(self) -> None:
+        self._assert_fail_closed(ServiceConfig(deployment_mode=DeploymentMode.DISABLED))
+
+    def test_default_mode_fail_closed(self) -> None:
+        self._assert_fail_closed(ServiceConfig())
+
+    def test_staging_failure_does_not_set_link(self) -> None:
+        runner = ProductionServiceRunner(
+            ServiceConfig(deployment_mode=DeploymentMode.STAGING)
+        )
+        d = Deployer(self.releases_root, runner=runner, source_tracker=None)
+        src = self._make_source()
+        with mock.patch.object(subprocess, "Popen", side_effect=OSError("mock")):
+            with mock.patch("httpx.get", side_effect=Exception("mock")):
+                rel = d.create_release(src, candidate_sha="deadbeef0002")
+                with self.assertRaises(RuntimeError) as ctx:
+                    d.promote_canary(rel["release_name"])
+                self.assertIn("canary verification failed", str(ctx.exception).lower())
+        self.assertIsNone(d.canary_release(),
+                          "canary symlink must not be set on start failure even in staging")
+
+    def test_staging_mocked_success_sets_canary_link(self) -> None:
+        runner = ProductionServiceRunner(
+            ServiceConfig(deployment_mode=DeploymentMode.STAGING)
+        )
+        d = Deployer(self.releases_root, runner=runner, source_tracker=None)
+        src = self._make_source()
+        rel = d.create_release(src, candidate_sha="deadbeef0003")
+        mock_proc = mock.MagicMock()
+        mock_proc.poll.return_value = None
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 200
+        with mock.patch.object(subprocess, "Popen", return_value=mock_proc):
+            with mock.patch("httpx.get", return_value=mock_resp):
+                canary = d.promote_canary(rel["release_name"])
+        self.assertEqual(canary["release_name"], rel["release_name"])
+        self.assertIsNotNone(d.canary_release())
+        self.assertEqual(d.canary_release()["release_name"], rel["release_name"])
+        self.assertIsNone(d.current_release(),
+                          "promote_canary must NOT set current symlink")
+
+
+class DeployerManagerFailClosedTests(unittest.TestCase):
+    """SessionManager with deployment_mode='production' or unrecognized must
+    produce a disabled ProductionServiceRunner that blocks actions and prevents
+    canary/current symlink mutation through the public deployer path."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.workspace = root / "workspace"
+        self.workspace.mkdir()
+        self.profile_dir = root / "profiles"
+        self.profile_dir.mkdir()
+        for profile in ("general", "planner", "coder", "reviewer", "verifier", "scout", "release"):
+            (self.profile_dir / f"{profile}.md").write_text(f"# {profile}\n", encoding="utf-8")
+        self.releases_root = root / "releases"
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def _make_source(self) -> Path:
+        src = self.workspace / "src"
+        src.mkdir()
+        (src / "app.py").write_text("print('ok')\n", encoding="utf-8")
+        return src
+
+    def _assert_manager_fail_closed(self, deployment_mode: str) -> None:
+        settings = Settings(
+            workspace_root=self.workspace,
+            state_dir=self.temp.name / Path("state"),
+            database_path=self.temp.name / Path("state") / "test.sqlite3",
+            profile_dir=self.profile_dir,
+            handoff_dir=self.temp.name / Path("handoffs"),
+            worktree_root=self.workspace / "worktrees",
+            releases_root=self.releases_root,
+            tmux_socket=None,
+            max_children_per_parent=4,
+            max_managed_sessions=12,
+            deployment_mode=deployment_mode,
+        )
+        manager = SessionManager(settings)
+        self.assertIsNone(manager._deployer_override,
+                          "manager must NOT have deployer override for this test")
+        deployer = manager.deployer
+        runner = deployer.runner
+        self.assertIsInstance(runner, ProductionServiceRunner)
+        src = self._make_source()
+        rel = deployer.create_release(src, candidate_sha="deadbeef0001")
+        self.assertTrue(deployer.validate_release(rel["release_name"])["valid"])
+        with self.assertRaises(RuntimeError) as ctx:
+            deployer.promote_canary(rel["release_name"])
+        self.assertIn("disabled", str(ctx.exception).lower())
+        self.assertIsNone(deployer.canary_release(),
+                          "canary symlink must not be set when manager deployer is disabled")
+        self.assertIsNone(deployer.current_release(),
+                          "current symlink must not be set when manager deployer is disabled")
+
+    def test_production_mode_fail_closed(self) -> None:
+        self._assert_manager_fail_closed("production")
+
+    def test_unrecognized_mode_fail_closed(self) -> None:
+        self._assert_manager_fail_closed("unrecognized")
+
+    def test_nonsense_mode_fail_closed(self) -> None:
+        self._assert_manager_fail_closed("garbage")
+
+
+class CanaryHealthCheckRegressionTests(unittest.TestCase):
+    """promote_canary must stop on health check failure and preserve current/canary links."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.releases_root = self.root / "releases"
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def _make_source(self) -> Path:
+        src = self.root / "src"
+        src.mkdir()
+        (src / "app.py").write_text("print('hello')\n", encoding="utf-8")
+        return src
+
+    def test_health_check_failure_before_canary_link_preserves_links(self) -> None:
+        runner = FakeServiceRunner(canary_ok=True, health_ok=False)
+        d = Deployer(self.releases_root, runner=runner, source_tracker=None)
+        src = self._make_source()
+        rel = d.create_release(src, candidate_sha="test00000001")
+        self.assertIsNone(d.canary_release(), "no canary before promote")
+        with self.assertRaises(RuntimeError) as ctx:
+            d.promote_canary(rel["release_name"])
+        self.assertIn("health check failed", str(ctx.exception))
+        self.assertIsNone(d.canary_release(), "canary link must not be set on failure")
+        self.assertIsNone(d.current_release(), "current link must not change on failure")
+        self.assertEqual(len(runner.canary_starts), 1, "start_canary was called")
+        self.assertEqual(len(runner.canary_stops), 1, "stop_canary was called after failure")
+        self.assertIn(33100, runner.health_calls, "check_health was called on the canary port")
+
+    def test_health_check_passes_before_canary_link(self) -> None:
+        runner = FakeServiceRunner(canary_ok=True, health_ok=True)
+        d = Deployer(self.releases_root, runner=runner, source_tracker=None)
+        src = self._make_source()
+        rel = d.create_release(src, candidate_sha="test00000002")
+        canary = d.promote_canary(rel["release_name"])
+        self.assertEqual(canary["release_name"], rel["release_name"])
+        self.assertIsNotNone(d.canary_release(), "canary link was set")
+        self.assertEqual(len(runner.health_calls), 1, "check_health called explicitly before canary link change")
+        self.assertEqual(len(runner.canary_stops), 1, "canary stopped after health check passed")
+
+    def test_health_check_failure_with_existing_canary_preserves_previous_canary(self) -> None:
+        runner = FakeServiceRunner(canary_ok=True, health_ok=True)
+        d = Deployer(self.releases_root, runner=runner, source_tracker=None)
+        src = self._make_source()
+        rel1 = d.create_release(src, candidate_sha="test00000003")
+        d.promote_canary(rel1["release_name"])
+        self.assertEqual(d.canary_release()["release_name"], rel1["release_name"])
+        runner.health_ok = False
+        rel2 = d.create_release(src, candidate_sha="test00000004")
+        with self.assertRaises(RuntimeError) as ctx:
+            d.promote_canary(rel2["release_name"])
+        self.assertIn("health check failed", str(ctx.exception))
+        self.assertEqual(d.canary_release()["release_name"], rel1["release_name"],
+                         "existing canary must be preserved on failure")
 
 
 class TempPathSafetyTests(unittest.TestCase):
