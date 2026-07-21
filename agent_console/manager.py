@@ -5,6 +5,7 @@ import logging
 import os
 import secrets
 import shlex
+import shutil
 import subprocess
 import time
 import uuid
@@ -18,6 +19,13 @@ from .database import Database, utc_now
 from .logging_config import configure_logging
 from .models import ModelCatalogue, estimate_models, lowest_cost_model
 from .profiles import PROFILE_SCHEMA, profile_text, validate_profile_capability, validate_profile_schema
+from .skills import (
+    _resolve_canonical_root,
+    cleanup_isolated_skills,
+    get_effective_skills,
+    isolate_skills,
+    validate_profile_skills,
+)
 from .providers import TOOL_BINARIES, LaunchSpec, provider_adapter
 from .tmux import Tmux
 from .validation import (
@@ -760,6 +768,7 @@ class SessionManager:
         parent_session_id: str | None = None,
         linked_plan_id: str | None = None,
         enforcement_note: str | None = None,
+        effective_skills: list[dict[str, Any]] | None = None,
     ) -> LaunchSpec:
         role = profile_text(self.settings.profile_dir, profile).strip()
         session_identity = (
@@ -803,6 +812,16 @@ class SessionManager:
             f"Read {self.settings.workspace_root / 'AGENTS.md'} and all applicable repository instructions before acting.",
             navigation,
         ]
+        if effective_skills:
+            skill_lines = [
+                f"- {s['name']} ({s['kind']})"
+                + (f" — {s['description']}" if s.get("description") else "")
+                for s in effective_skills
+            ]
+            parts.append(
+                "Effective skills (persisted profile assignments):\n"
+                + "\n".join(skill_lines)
+            )
         if enforcement_note:
             parts.append(f"Enforcement note: {enforcement_note}")
         role_text = "\n\n".join(parts)
@@ -861,24 +880,24 @@ class SessionManager:
         *,
         parent_session_id: str | None = None,
         linked_plan_id: str | None = None,
+        overlay_env: dict[str, str] | None = None,
     ) -> Path:
         path = self.settings.state_dir / "launchers" / f"{session_name}.sh"
         lines = [
             "#!/usr/bin/env bash\n"
             "set -euo pipefail\n"
-            "if ! agentctl skills doctor --quiet; then\n"
-            "  echo 'warning: Agent Console skill links need repair; run agentctl skills sync' >&2\n"
-            "fi\n"
         ]
-        console_environment = {
+        console_environment: dict[str, str] = {
             "AGENT_CONSOLE_SESSION_NAME": session_name,
             "AGENT_CONSOLE_SESSION_ID": session_id,
             "AGENT_CONSOLE_PARENT_SESSION_ID": parent_session_id or "",
             "AGENT_CONSOLE_LINKED_PLAN_ID": linked_plan_id or "",
         }
-        for key, value in sorted(console_environment.items()):
-            lines.append(f"export {key}={shlex.quote(value)}\n")
-        for key, value in sorted(spec.environment.items()):
+        merged: dict[str, str] = dict(spec.environment)
+        merged.update(console_environment)
+        if overlay_env:
+            merged.update(overlay_env)
+        for key, value in sorted(merged.items()):
             lines.append(f"export {key}={shlex.quote(value)}\n")
         for secret_file in spec.secret_files:
             lines.append(f"test -r {shlex.quote(str(secret_file))}\n")
@@ -889,6 +908,51 @@ class SessionManager:
         path.write_text("".join(lines), encoding="utf-8")
         path.chmod(0o700)
         return path
+
+    def _create_session_tool_overlay(
+        self,
+        session_name: str,
+        tool: str,
+        auth_context: dict[str, Any],
+        isolated_skills_root: Path,
+    ) -> dict[str, str]:
+        overlay_env: dict[str, str] = {}
+        base = self.settings.state_dir / "tool-overlays" / session_name
+        if base.exists():
+            shutil.rmtree(base)
+        base.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if tool == "codex":
+            context_name = auth_context.get("name", "default")
+            real_home = self.auth.codex_home(context_name)
+            overlay = base / "codex-home"
+            overlay.mkdir(parents=True, exist_ok=True, mode=0o700)
+            auth_json = real_home / "auth.json"
+            if auth_json.is_file():
+                overlay_link = overlay / "auth.json"
+                if overlay_link.exists():
+                    overlay_link.unlink()
+                overlay_link.symlink_to(auth_json)
+            skills_link = overlay / "skills"
+            if skills_link.exists():
+                skills_link.unlink()
+            skills_link.symlink_to(isolated_skills_root, target_is_directory=True)
+            overlay_env["CODEX_HOME"] = str(overlay)
+        elif tool == "claude":
+            overlay = base / "claude-home"
+            overlay.mkdir(parents=True, exist_ok=True, mode=0o700)
+            skills_link = overlay / "skills"
+            if skills_link.exists():
+                skills_link.unlink()
+            skills_link.symlink_to(isolated_skills_root, target_is_directory=True)
+            overlay_env["CLAUDE_HOME"] = str(overlay)
+        elif tool in ("opencode", "hermes"):
+            overlay_env["AGENT_CONSOLE_ISOLATED_SKILLS_ROOT"] = str(isolated_skills_root)
+        return overlay_env
+
+    def _cleanup_session_tool_overlay(self, session_name: str) -> None:
+        base = self.settings.state_dir / "tool-overlays" / session_name
+        if base.exists():
+            shutil.rmtree(base)
 
     def _create_worktree(self, repository: Path, name: str) -> Path:
         target = self.settings.worktree_root / name
@@ -925,6 +989,22 @@ class SessionManager:
         capability = validate_profile_capability(profile, tool, agent_mode, worktree=worktree)
         if not capability["allowed"]:
             raise ValueError(capability["reason"])
+        skill_validation = validate_profile_skills(self.database, profile)
+        if not skill_validation["valid"]:
+            issues = "; ".join(skill_validation["issues"])
+            raise ValueError(
+                f"profile {profile!r} has invalid skill assignments: {issues}"
+            )
+        if skill_validation["effective"]:
+            adapter = provider_adapter(tool, self.auth)
+            if not adapter.can_isolate_skills:
+                raise RuntimeError(
+                    f"tool {tool!r} cannot isolate per-session skills; "
+                    f"profile {profile!r} has {len(skill_validation['effective'])} "
+                    f"effective assigned skill(s) that would leak to the global "
+                    f"discovery root. Remove assignments or use a tool that "
+                    f"supports skill isolation (codex)."
+                )
         context = self.auth.get_context(tool, auth_context)
         if context["status"] in {"disabled", "error"}:
             raise RuntimeError(f"{tool}/{context['name']} is {context['status']}: {context['reason']}")
@@ -1019,6 +1099,15 @@ class SessionManager:
                 parent_session_id=parent_session_id,
                 linked_plan_id=linked_plan_id,
                 enforcement_note=capability["reason"],
+                effective_skills=skill_validation["effective"],
+            )
+
+            canonical_root = _resolve_canonical_root()
+            isolated_root = self.settings.state_dir / "skills-isolated" / name
+            effective = skill_validation["effective"]
+            isolate_skills(isolated_root, canonical_root, effective)
+            overlay_env = self._create_session_tool_overlay(
+                name, tool, context, isolated_root,
             )
 
             launcher_created = True
@@ -1028,6 +1117,7 @@ class SessionManager:
                 spec,
                 parent_session_id=parent_session_id,
                 linked_plan_id=linked_plan_id,
+                overlay_env=overlay_env,
             )
 
             created_at = utc_now()
@@ -1087,7 +1177,10 @@ class SessionManager:
                         project_id,
                     ),
                 )
-            self.database.audit("session.created", name, "success", surface=creator_surface)
+            self.database.audit(
+                "session.created", name, "success", surface=creator_surface,
+                details={"effective_skills": [s["name"] for s in skill_validation["effective"]]},
+            )
             log.info("session=%s id=%s tool=%s profile=%s mode=%s provider=%s worktree=%s surface=%s",
                      name, session_id, tool, profile, agent_mode, provider, worktree, creator_surface)
         except Exception:
@@ -1125,6 +1218,14 @@ class SessionManager:
                     )
                 except (subprocess.CalledProcessError, OSError):
                     pass
+            try:
+                self._cleanup_session_tool_overlay(name)
+            except Exception:
+                pass
+            try:
+                cleanup_isolated_skills(self.settings.state_dir / "skills-isolated" / name)
+            except Exception:
+                pass
             raise
         return self.inspect(name)
 
@@ -1141,10 +1242,52 @@ class SessionManager:
         session = self.inspect(name)
         if not session["managed"] or not session["launcher_path"]:
             raise ValueError("restart-agent is available only for managed sessions")
-        provider_adapter(session["tool"], self.auth).restart(session)
-        self.tmux_for_name(name).restart(name, Path(session["launcher_path"]))
-        self.database.audit("session.restarted", name, "success")
-        log.info("session=%s action=restart tool=%s profile=%s", name, session.get("tool"), session.get("profile"))
+        profile = session.get("profile") or "general"
+        skill_validation = validate_profile_skills(self.database, profile)
+        if not skill_validation["valid"]:
+            issues = "; ".join(skill_validation["issues"])
+            raise ValueError(
+                f"profile {profile!r} has invalid skill assignments preventing restart: {issues}"
+            )
+        tool = session.get("tool") or "shell"
+        if skill_validation["effective"]:
+            adapter = provider_adapter(tool, self.auth)
+            if not adapter.can_isolate_skills:
+                raise RuntimeError(
+                    f"tool {tool!r} cannot isolate per-session skills; "
+                    f"profile {profile!r} has {len(skill_validation['effective'])} "
+                    f"effective assigned skill(s) that would leak to the global "
+                    f"discovery root. Remove assignments or use a tool that "
+                    f"supports skill isolation (codex)."
+                )
+        canonical_root = _resolve_canonical_root()
+        isolated_root = self.settings.state_dir / "skills-isolated" / name
+        effective = skill_validation["effective"]
+        isolate_skills(isolated_root, canonical_root, effective)
+        auth_context = self.auth.get_context(tool, session.get("auth_context"))
+        overlay_env = self._create_session_tool_overlay(
+            name, tool, auth_context, isolated_root,
+        )
+        launcher_path = Path(session["launcher_path"])
+        launcher_text = launcher_path.read_text(encoding="utf-8")
+        for key, value in overlay_env.items():
+            line = f"export {key}={shlex.quote(value)}\n"
+            if f"export {key}=" in launcher_text:
+                old_line = [l for l in launcher_text.splitlines() if l.startswith(f"export {key}=")]
+                if old_line:
+                    launcher_text = launcher_text.replace(old_line[0] + "\n", line)
+            else:
+                insert_pos = launcher_text.index("exec ") if "exec " in launcher_text else len(launcher_text)
+                launcher_text = launcher_text[:insert_pos] + line + launcher_text[insert_pos:]
+        launcher_path.write_text(launcher_text, encoding="utf-8")
+        launcher_path.chmod(0o700)
+        provider_adapter(tool, self.auth).restart(session)
+        self.tmux_for_name(name).restart(name, launcher_path)
+        self.database.audit(
+            "session.restarted", name, "success",
+            details={"effective_skills": [s["name"] for s in skill_validation["effective"]]},
+        )
+        log.info("session=%s action=restart tool=%s profile=%s", name, tool, profile)
         return self.inspect(name)
 
     def rename(self, name: str, new_name: str) -> dict[str, Any]:
@@ -1207,6 +1350,8 @@ class SessionManager:
             )
         self.database.audit("session.killed", name, "success")
         log.info("session=%s action=kill managed=%s", name, session["managed"])
+        self._cleanup_session_tool_overlay(name)
+        cleanup_isolated_skills(self.settings.state_dir / "skills-isolated" / name)
         result = self.inspect(name)
         result["running"] = False
         return result

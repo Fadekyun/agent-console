@@ -131,6 +131,16 @@ class Database:
                     details_json TEXT NOT NULL DEFAULT '{}'
                 );
 
+                CREATE TABLE IF NOT EXISTS superpower_approvals (
+                    profile TEXT NOT NULL,
+                    skill_name TEXT NOT NULL,
+                    approved_by TEXT NOT NULL,
+                    approved_surface TEXT NOT NULL DEFAULT 'CLI',
+                    approved_at TEXT NOT NULL,
+                    revoked_at TEXT,
+                    PRIMARY KEY (profile, skill_name)
+                );
+
                 CREATE TABLE IF NOT EXISTS skill_assignments (
                     profile TEXT NOT NULL,
                     skill_name TEXT NOT NULL,

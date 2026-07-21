@@ -26,13 +26,18 @@ from .logging_config import configure_logging
 from .manager import SessionManager
 from .profiles import profile_summaries
 from .skills import (
+    approve_superpower,
     assign_skill,
     doctor_skills,
     enrich_catalog_with_assignments,
+    get_effective_skills,
     list_assignments,
+    list_superpower_approvals,
+    revoke_superpower,
     skill_catalog,
     sync_skills,
     unassign_skill,
+    validate_profile_skills,
 )
 from .validation import TOOLS, validate_session_name
 
@@ -122,6 +127,13 @@ class AssignSessionRequest(BaseModel):
     session_name: str = Field(min_length=1, max_length=80)
 
 class SkillAssignRequest(BaseModel):
+    profile: str = Field(min_length=1, pattern="^[a-z_]+$")
+    skill_name: str = Field(min_length=1, max_length=200)
+
+class SkillEffectiveRequest(BaseModel):
+    profile: str = Field(min_length=1, pattern="^[a-z_]+$")
+
+class SkillApprovalRequest(BaseModel):
     profile: str = Field(min_length=1, pattern="^[a-z_]+$")
     skill_name: str = Field(min_length=1, max_length=200)
 
@@ -507,6 +519,52 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             actor=auth.actor,
             surface=auth.access_surface,
         )
+
+    @app.post("/api/skills/effective")
+    async def skills_effective(
+        payload: SkillEffectiveRequest,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return get_effective_skills(session_manager.database, payload.profile)
+
+    @app.post("/api/skills/validate")
+    async def skills_validate(
+        payload: SkillEffectiveRequest,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return validate_profile_skills(session_manager.database, payload.profile)
+
+    @app.post("/api/skills/approve")
+    async def skills_approve(
+        payload: SkillApprovalRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return approve_superpower(
+            session_manager.database,
+            payload.profile,
+            payload.skill_name,
+            actor=auth.actor,
+            surface=auth.access_surface,
+        )
+
+    @app.post("/api/skills/revoke")
+    async def skills_revoke(
+        payload: SkillApprovalRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return revoke_superpower(
+            session_manager.database,
+            payload.profile,
+            payload.skill_name,
+            actor=auth.actor,
+            surface=auth.access_surface,
+        )
+
+    @app.get("/api/skills/approvals")
+    async def skills_approvals_list(
+        _: AuthContext = Depends(require_identity),
+    ) -> list[dict[str, Any]]:
+        return list_superpower_approvals(session_manager.database)
 
     @app.post("/api/sessions/{name}/kill")
     async def kill(

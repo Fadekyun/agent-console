@@ -7,7 +7,7 @@ from typing import Any
 
 from .manager import SessionManager
 from .secrets_store import migrate_openrouter_secret, secret_status, set_openrouter_secret
-from .skills import doctor_skills, sync_skills
+from .skills import approve_superpower, doctor_skills, get_effective_skills, list_superpower_approvals, revoke_superpower, sync_skills
 from .validation import PROFILES, TOOLS
 
 
@@ -163,6 +163,17 @@ def parser() -> argparse.ArgumentParser:
     skills_commands.add_parser("sync")
     skills_doctor = skills_commands.add_parser("doctor")
     skills_doctor.add_argument("--quiet", action="store_true")
+    skills_effective = skills_commands.add_parser("effective")
+    skills_effective.add_argument("profile", choices=sorted(PROFILES))
+    skills_validate = skills_commands.add_parser("validate")
+    skills_validate.add_argument("profile", choices=sorted(PROFILES))
+    skills_approve = skills_commands.add_parser("approve")
+    skills_approve.add_argument("profile", choices=sorted(PROFILES))
+    skills_approve.add_argument("skill_name")
+    skills_revoke = skills_commands.add_parser("revoke")
+    skills_revoke.add_argument("profile", choices=sorted(PROFILES))
+    skills_revoke.add_argument("skill_name")
+    skills_commands.add_parser("approvals")
 
     secrets = commands.add_parser("secrets")
     secrets_commands = secrets.add_subparsers(dest="secrets_command", required=True)
@@ -211,6 +222,32 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         if args.command == "skills":
+            if args.skills_command == "effective":
+                manager = SessionManager()
+                emit(get_effective_skills(manager.database, args.profile))
+                return 0
+            if args.skills_command == "validate":
+                manager = SessionManager()
+                from .skills import validate_profile_skills
+                result = validate_profile_skills(manager.database, args.profile)
+                emit(result)
+                return 0 if result["valid"] else 1
+            if args.skills_command == "approve":
+                manager = SessionManager()
+                from .skills import approve_superpower
+                emit(approve_superpower(manager.database, args.profile, args.skill_name,
+                                         actor="CLI-user", surface="CLI"))
+                return 0
+            if args.skills_command == "revoke":
+                manager = SessionManager()
+                from .skills import revoke_superpower
+                emit(revoke_superpower(manager.database, args.profile, args.skill_name,
+                                        actor="CLI-user", surface="CLI"))
+                return 0
+            if args.skills_command == "approvals":
+                manager = SessionManager()
+                emit(list_superpower_approvals(manager.database))
+                return 0
             result = sync_skills() if args.skills_command == "sync" else doctor_skills()
             if not getattr(args, "quiet", False):
                 emit(result)

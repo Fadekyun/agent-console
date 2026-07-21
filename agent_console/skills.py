@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
 from .database import Database, utc_now
 from .validation import PROFILES
+
+log = logging.getLogger(__name__)
 
 SUPPORTED_TOOLS = frozenset({"codex", "claude", "hermes"})
 SKILL_KINDS = frozenset({"standard", "superpower"})
@@ -390,6 +394,232 @@ def get_profile_assignments(db: Database, profile: str) -> list[dict[str, Any]]:
             (profile,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def is_superpower_approved(db: Database, profile: str, skill_name: str) -> bool:
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT revoked_at FROM superpower_approvals WHERE profile=? AND skill_name=?",
+            (profile, skill_name),
+        ).fetchone()
+    if row is None:
+        return False
+    return row["revoked_at"] is None
+
+
+def approve_superpower(
+    db: Database,
+    profile: str,
+    skill_name: str,
+    *,
+    actor: str = "system",
+    surface: str = "CLI",
+    canonical_root: Path | None = None,
+) -> dict[str, Any]:
+    if profile not in PROFILES:
+        raise ValueError(f"unknown profile: {profile!r}")
+    root = canonical_root or _resolve_canonical_root()
+    entries = _live_entries(root)
+    entry = next((e for e in entries if e["name"] == skill_name), None)
+    if entry is None:
+        raise ValueError(f"unknown skill in catalog: {skill_name!r}")
+    if entry["kind"] != "superpower":
+        raise ValueError(
+            f"skill {skill_name!r} is kind {entry['kind']!r}, not superpower; "
+            f"only superpowers require explicit approval"
+        )
+    allowed = entry.get("allowed_profiles")
+    if allowed is not None and profile not in allowed:
+        raise ValueError(
+            f"profile {profile!r} is not allowed to use superpower "
+            f"{skill_name!r} (allowed: {sorted(allowed)})"
+        )
+    with db.connect() as conn:
+        existing = conn.execute(
+            "SELECT revoked_at FROM superpower_approvals WHERE profile=? AND skill_name=?",
+            (profile, skill_name),
+        ).fetchone()
+        if existing is not None and existing["revoked_at"] is None:
+            raise ValueError(
+                f"superpower {skill_name!r} is already approved for profile {profile!r}"
+            )
+        conn.execute(
+            "INSERT INTO superpower_approvals(profile, skill_name, approved_by, approved_surface, approved_at) "
+            "VALUES(?, ?, ?, ?, ?) "
+            "ON CONFLICT(profile, skill_name) DO UPDATE SET "
+            "approved_by=excluded.approved_by, approved_surface=excluded.approved_surface, "
+            "approved_at=excluded.approved_at, revoked_at=NULL",
+            (profile, skill_name, actor, surface, utc_now()),
+        )
+    db.audit(
+        "superpower.approved",
+        f"{profile}/{skill_name}",
+        "success",
+        actor=actor,
+        surface=surface,
+        details={"profile": profile, "skill_name": skill_name},
+    )
+    return {"profile": profile, "skill_name": skill_name, "approved": True}
+
+
+def revoke_superpower(
+    db: Database,
+    profile: str,
+    skill_name: str,
+    *,
+    actor: str = "system",
+    surface: str = "CLI",
+) -> dict[str, Any]:
+    if profile not in PROFILES:
+        raise ValueError(f"unknown profile: {profile!r}")
+    with db.connect() as conn:
+        existing = conn.execute(
+            "SELECT revoked_at FROM superpower_approvals WHERE profile=? AND skill_name=?",
+            (profile, skill_name),
+        ).fetchone()
+        if existing is None or existing["revoked_at"] is not None:
+            raise ValueError(
+                f"superpower {skill_name!r} is not currently approved for profile {profile!r}"
+            )
+        conn.execute(
+            "UPDATE superpower_approvals SET revoked_at=? WHERE profile=? AND skill_name=?",
+            (utc_now(), profile, skill_name),
+        )
+    db.audit(
+        "superpower.revoked",
+        f"{profile}/{skill_name}",
+        "success",
+        actor=actor,
+        surface=surface,
+        details={"profile": profile, "skill_name": skill_name},
+    )
+    return {"profile": profile, "skill_name": skill_name, "revoked": True}
+
+
+def list_superpower_approvals(db: Database) -> list[dict[str, Any]]:
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT profile, skill_name, approved_by, approved_surface, approved_at, revoked_at "
+            "FROM superpower_approvals ORDER BY approved_at"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def isolate_skills(
+    isolated_root: Path,
+    canonical_root: Path,
+    effective_skills: list[dict[str, Any]],
+    *,
+    cleanup_first: bool = True,
+) -> Path:
+    if cleanup_first and isolated_root.exists():
+        shutil.rmtree(isolated_root)
+    isolated_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for skill in effective_skills:
+        name = skill["name"]
+        target = canonical_root / name
+        link = isolated_root / name
+        if link.exists():
+            if link.is_symlink():
+                link.unlink()
+            else:
+                log.warning("isolated path exists and is not a symlink, skipping: %s", link)
+                continue
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except OSError:
+            log.warning("failed to create isolated symlink for %s", name)
+    return isolated_root
+
+
+def cleanup_isolated_skills(isolated_root: Path) -> None:
+    if isolated_root.exists():
+        shutil.rmtree(isolated_root)
+
+
+def get_effective_skills(
+    db: Database,
+    profile: str,
+    *,
+    canonical_root: Path | None = None,
+) -> dict[str, Any]:
+    if profile not in PROFILES:
+        raise ValueError(f"unknown profile: {profile!r}")
+    root = canonical_root or _resolve_canonical_root()
+    entries = _live_entries(root)
+    assignments = get_profile_assignments(db, profile)
+    effective: list[dict[str, Any]] = []
+    issues: list[str] = []
+    for a in assignments:
+        skill_name = a["skill_name"]
+        entry = next((e for e in entries if e["name"] == skill_name), None)
+        skill_dir = root / skill_name
+        if entry is None:
+            if skill_dir.is_dir():
+                issues.append(
+                    f"assigned skill {skill_name!r} has stale source: "
+                    f"SKILL.md not found in {skill_dir}"
+                )
+            else:
+                issues.append(
+                    f"assigned skill {skill_name!r} is missing from catalog "
+                    "(was removed or skill path changed)"
+                )
+            continue
+        source = skill_dir / "SKILL.md"
+        if not source.is_file():
+            issues.append(
+                f"assigned skill {skill_name!r} has stale source: "
+                f"SKILL.md not found at {source}"
+            )
+            continue
+        allowed = entry.get("allowed_profiles")
+        if allowed is not None and profile not in allowed:
+            issues.append(
+                f"profile {profile!r} is disallowed from assigned skill "
+                f"{skill_name!r} (allowed: {sorted(allowed)})"
+            )
+            continue
+        if entry["kind"] == "superpower":
+            already_approved = is_superpower_approved(db, profile, skill_name)
+            ap_result = check_superpower_approval(
+                profile, skill_name, approved=already_approved, canonical_root=root
+            )
+            if not ap_result["allowed"]:
+                if ap_result["enforcement"] == "enforced":
+                    issues.append(ap_result["reason"])
+                    continue
+                issues.append(ap_result["reason"])
+        effective.append({
+            "name": skill_name,
+            "kind": entry["kind"],
+            "description": entry.get("description", ""),
+            "tools": entry["tools"],
+            "allowed_profiles": sorted(allowed) if allowed else None,
+            "requires_approval": entry.get("requires_approval", False),
+            "assigned_at": a["assigned_at"],
+            "assigned_by": a["assigned_by"],
+        })
+    return {
+        "profile": profile,
+        "total": len(assignments),
+        "effective": effective,
+        "issues": issues,
+    }
+
+
+def validate_profile_skills(
+    db: Database,
+    profile: str,
+    *,
+    canonical_root: Path | None = None,
+) -> dict[str, Any]:
+    result = get_effective_skills(db, profile, canonical_root=canonical_root)
+    return {
+        "valid": len(result["issues"]) == 0,
+        "effective": result["effective"],
+        "issues": result["issues"],
+    }
 
 
 def enrich_catalog_with_assignments(
