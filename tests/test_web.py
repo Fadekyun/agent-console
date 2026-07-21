@@ -9,6 +9,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 os.environ["AGENT_CONSOLE_TAILSCALE_LOGIN"] = "test@example.com"
+os.environ["AGENT_CONSOLE_TRUSTED_HOSTS"] = "localhost,127.0.0.1,testserver,10.0.0.1"
+os.environ["AGENT_CONSOLE_LAN_CIDR"] = "10.0.0.0/8"
+os.environ["AGCONSOLE_RETAINED_SKILLS"] = "test-skill-for-web"
 
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -31,6 +34,18 @@ class WebTests(unittest.TestCase):
         root = Path(self.temp.name)
         self.workspace = root / "workspace"
         self.workspace.mkdir()
+
+        skills_root = root / "skills"
+        skills_root.mkdir()
+        for skill_name in ("test-skill-for-web",):
+            (skills_root / skill_name).mkdir(exist_ok=True)
+            (skills_root / skill_name / "SKILL.md").write_text(
+                "---\nname: test-skill\ndescription: Web test skill\n---\n",
+                encoding="utf-8",
+            )
+        self._old_skills_root = os.environ.get("AGCONSOLE_SKILLS_ROOT")
+        os.environ["AGCONSOLE_SKILLS_ROOT"] = str(skills_root)
+
         profiles = root / "profiles"
         profiles.mkdir()
         for profile in PROFILES:
@@ -55,6 +70,10 @@ class WebTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         subprocess.run(["tmux", "-L", self.socket, "kill-server"], capture_output=True)
+        if self._old_skills_root is not None:
+            os.environ["AGCONSOLE_SKILLS_ROOT"] = self._old_skills_root
+        else:
+            os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
         self.temp.cleanup()
 
     def test_health_and_identity_gate(self) -> None:
@@ -431,6 +450,146 @@ class WebTests(unittest.TestCase):
             self.assertEqual(closed.exception.code, 4001)
         self.assertFalse(self.manager.tmux.exists("kill-attached-test"))
         self.assertTrue(self.manager.tmux.exists("other-live-session"))
+
+
+    def test_skills_assign_success(self) -> None:
+        response = self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "general", "skill_name": "test-skill-for-web"},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["profile"], "general")
+        self.assertEqual(data["skill_name"], "test-skill-for-web")
+        self.assertIn("kind", data)
+
+    def test_skills_assign_unknown_profile_returns_400(self) -> None:
+        response = self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "nonexistent", "skill_name": "test-skill-for-web"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("nonexistent", response.json()["detail"])
+
+    def test_skills_assign_unknown_skill_returns_400(self) -> None:
+        response = self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "general", "skill_name": "no-such-skill"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("no-such-skill", response.json()["detail"])
+
+    def test_skills_assign_duplicate_returns_400(self) -> None:
+        self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "coder", "skill_name": "test-skill-for-web"},
+        )
+        response = self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "coder", "skill_name": "test-skill-for-web"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("already assigned", response.json()["detail"])
+
+    def test_skills_assign_disallowed_profile_returns_400(self) -> None:
+        restricted_root = Path(self.temp.name) / "restricted-skills"
+        restricted_root.mkdir(parents=True, exist_ok=True)
+        (restricted_root / "restricted-web").mkdir(exist_ok=True)
+        (restricted_root / "restricted-web" / "SKILL.md").write_text(
+            "---\nkind: superpower\ndescription: Only for coder\nallowed_profiles: coder\n---\n",
+            encoding="utf-8",
+        )
+        old_root = os.environ.get("AGCONSOLE_SKILLS_ROOT")
+        os.environ["AGCONSOLE_SKILLS_ROOT"] = str(restricted_root)
+        try:
+            response = self.client.post(
+                "/api/skills/assign",
+                headers=self.headers,
+                json={"profile": "general", "skill_name": "restricted-web"},
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("general", response.json()["detail"])
+            self.assertIn("restricted-web", response.json()["detail"])
+            self.assertIn("coder", response.json()["detail"])
+        finally:
+            if old_root is not None:
+                os.environ["AGCONSOLE_SKILLS_ROOT"] = old_root
+            else:
+                os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
+
+    def test_skills_assignments_list_after_assign(self) -> None:
+        self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "planner", "skill_name": "test-skill-for-web"},
+        )
+        response = self.client.get("/api/skills/assignments", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIsInstance(data, list)
+        self.assertTrue(any(
+            a["profile"] == "planner" and a["skill_name"] == "test-skill-for-web"
+            for a in data
+        ))
+
+    def test_skills_unassign_success(self) -> None:
+        self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "scout", "skill_name": "test-skill-for-web"},
+        )
+        response = self.client.post(
+            "/api/skills/unassign",
+            headers=self.headers,
+            json={"profile": "scout", "skill_name": "test-skill-for-web"},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["profile"], "scout")
+        self.assertEqual(data["skill_name"], "test-skill-for-web")
+
+    def test_skills_unassign_not_assigned_returns_400(self) -> None:
+        response = self.client.post(
+            "/api/skills/unassign",
+            headers=self.headers,
+            json={"profile": "general", "skill_name": "test-skill-for-web"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not assigned", response.json()["detail"])
+
+    def test_skills_catalog_includes_assignments(self) -> None:
+        self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "reviewer", "skill_name": "test-skill-for-web"},
+        )
+        response = self.client.get("/api/skills", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("entries", data)
+        skill = next((e for e in data["entries"] if e["name"] == "test-skill-for-web"), None)
+        self.assertIsNotNone(skill, "test-skill-for-web should be in catalog entries")
+        self.assertIn("assigned_to", skill)
+        self.assertTrue(
+            any(a["profile"] == "reviewer" for a in skill["assigned_to"]),
+            f"expected reviewer assignment in {skill['assigned_to']}",
+        )
+
+    def test_skills_assignments_list_no_auth_returns_403(self) -> None:
+        response = self.client.get("/api/skills/assignments")
+        self.assertEqual(response.status_code, 403)
+
+    def test_skills_assign_no_auth_returns_403(self) -> None:
+        response = self.client.post(
+            "/api/skills/assign",
+            json={"profile": "general", "skill_name": "test-skill-for-web"},
+        )
+        self.assertEqual(response.status_code, 403)
 
 
 if __name__ == "__main__":

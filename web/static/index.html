@@ -183,6 +183,17 @@
     </form>
   </dialog>
 
+  <dialog id="assign-skill-dialog">
+    <form id="assign-skill-form" class="dialog-form">
+      <h2 id="assign-skill-title">Assign skill to profile</h2>
+      <input name="skill_name" type="hidden">
+      <label>Profile<select name="profile"></select></label>
+      <p class="muted">Assigning a skill enables it for the selected profile. Superpowers may require additional human approval before use.</p>
+      <p id="assign-skill-status" role="status"></p>
+      <div class="dialog-actions"><button type="button" data-close="assign-skill-dialog">Cancel</button><button type="submit" class="primary">Assign</button></div>
+    </form>
+  </dialog>
+
   <textarea id="clipboard-fallback" class="visually-hidden" aria-hidden="true"></textarea>
   <script type="module" src="/static/app.js?v=7"></script>
 </body>

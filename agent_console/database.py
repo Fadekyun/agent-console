@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def utc_now() -> str:
@@ -129,6 +129,15 @@ class Database:
                     target TEXT,
                     outcome TEXT NOT NULL,
                     details_json TEXT NOT NULL DEFAULT '{}'
+                );
+
+                CREATE TABLE IF NOT EXISTS skill_assignments (
+                    profile TEXT NOT NULL,
+                    skill_name TEXT NOT NULL,
+                    assigned_by TEXT NOT NULL DEFAULT 'system',
+                    assigned_surface TEXT NOT NULL DEFAULT 'CLI',
+                    assigned_at TEXT NOT NULL,
+                    PRIMARY KEY (profile, skill_name)
                 );
 
                 CREATE TABLE IF NOT EXISTS session_waits (
