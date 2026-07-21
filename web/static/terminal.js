@@ -7,6 +7,9 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const name = new URLSearchParams(location.search).get('session');
 if (!name) location.href = '/';
 $('#session-name').textContent = name;
+document.title = `Agent Terminal - ${name}`;
+const terminalFrame = $('.terminal-frame');
+if (terminalFrame) terminalFrame.setAttribute('aria-label', `Terminal session ${name}`);
 
 const isEmbedded = location.search.includes('embed=1');
 const coarsePointer = matchMedia('(pointer: coarse)').matches;

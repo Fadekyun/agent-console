@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import socket
 import subprocess
 import tempfile
@@ -315,6 +316,118 @@ class SessionIntegrationTests(unittest.TestCase):
         tmux.create("stale-recovery", self.workspace, launcher)
         self.assertTrue(tmux.exists("stale-recovery"))
         tmux.kill("stale-recovery")
+
+    def test_rename_updates_context_and_launcher(self) -> None:
+        session = self.manager.create(
+            tool="shell",
+            profile="general",
+            name="ctx-rename-test",
+            repository=str(self.workspace),
+        )
+        ctx_path = self.manager.settings.state_dir / "contexts" / "ctx-rename-test.md"
+        launcher_path = self.manager.settings.state_dir / "launchers" / "ctx-rename-test.sh"
+        old_ctx_abs = str(self.manager.settings.state_dir / "contexts" / "ctx-rename-test.md")
+        new_ctx_abs = str(self.manager.settings.state_dir / "contexts" / "ctx-renamed.md")
+        self.assertTrue(ctx_path.is_file())
+        self.assertTrue(launcher_path.is_file())
+        original_ctx = ctx_path.read_text(encoding="utf-8")
+        self.assertIn("Session name: ctx-rename-test", original_ctx)
+        self.assertIn("ctx-rename-test", original_ctx)
+        launcher_text = launcher_path.read_text(encoding="utf-8")
+        self.assertIn("AGENT_CONSOLE_SESSION_NAME=ctx-rename-test", launcher_text)
+
+        self.manager.rename("ctx-rename-test", "ctx-renamed")
+
+        new_ctx_path = self.manager.settings.state_dir / "contexts" / "ctx-renamed.md"
+        new_launcher_path = self.manager.settings.state_dir / "launchers" / "ctx-renamed.sh"
+        self.assertFalse(ctx_path.exists(), "old context file should be removed on rename")
+        self.assertFalse(launcher_path.exists(), "old launcher should be removed on rename")
+        self.assertTrue(new_ctx_path.is_file(), "new context file should exist")
+        self.assertTrue(new_launcher_path.is_file(), "new launcher should exist")
+        updated_ctx = new_ctx_path.read_text(encoding="utf-8")
+        self.assertNotIn("ctx-rename-test", updated_ctx,
+                         "stale session name must not appear in renamed context")
+        self.assertIn("Session name: ctx-renamed", updated_ctx)
+        updated_launcher = new_launcher_path.read_text(encoding="utf-8")
+        self.assertIn("AGENT_CONSOLE_SESSION_NAME=ctx-renamed", updated_launcher)
+        self.assertNotIn("AGENT_CONSOLE_SESSION_NAME=ctx-rename-test", updated_launcher,
+                         "stale env var must not appear in renamed launcher")
+        self.assertNotIn(old_ctx_abs, updated_launcher,
+                         "stale context-file path must not appear in renamed launcher")
+        self.manager.kill("ctx-renamed")
+
+    def test_rename_launcher_context_path_is_wired_for_restart(self) -> None:
+        session = self.manager.create(
+            tool="shell",
+            profile="general",
+            name="restart-ctx-test",
+            repository=str(self.workspace),
+        )
+        launcher_path = self.manager.settings.state_dir / "launchers" / "restart-ctx-test.sh"
+        old_ctx_abs = str(self.manager.settings.state_dir / "contexts" / "restart-ctx-test.md")
+        new_ctx_abs = str(self.manager.settings.state_dir / "contexts" / "restart-ctx-renamed.md")
+        launcher_text = launcher_path.read_text(encoding="utf-8")
+        self.assertIn("AGENT_CONSOLE_SESSION_NAME=restart-ctx-test", launcher_text)
+
+        # Inject a context-path reference into the launcher (simulating what OpenCode/Hermes
+        # providers embed in launcher env vars) so we can verify rename rewrites it.
+        injected = f"export TEST_CTX_FILE={shlex.quote(old_ctx_abs)}\n"
+        launcher_path.write_text(launcher_text + injected, encoding="utf-8")
+        self.assertIn(old_ctx_abs, launcher_path.read_text(encoding="utf-8"))
+
+        self.manager.rename("restart-ctx-test", "restart-ctx-renamed")
+
+        new_launcher_path = self.manager.settings.state_dir / "launchers" / "restart-ctx-renamed.sh"
+        self.assertTrue(new_launcher_path.is_file())
+        new_text = new_launcher_path.read_text(encoding="utf-8")
+        self.assertIn("AGENT_CONSOLE_SESSION_NAME=restart-ctx-renamed", new_text)
+        self.assertNotIn(old_ctx_abs, new_text,
+                         "old context-file path must be purged from launcher on rename")
+        self.assertIn(new_ctx_abs, new_text,
+                      "renamed launcher must reference renamed context-file path")
+        new_ctx_path = self.manager.settings.state_dir / "contexts" / "restart-ctx-renamed.md"
+        self.assertTrue(new_ctx_path.is_file())
+        ctx_text = new_ctx_path.read_text(encoding="utf-8")
+        self.assertIn("Session name: restart-ctx-renamed", ctx_text)
+        self.assertNotIn("restart-ctx-test", ctx_text)
+
+        # Restart re-executes the launcher; verify the launcher is internally consistent.
+        self.manager.restart("restart-ctx-renamed")
+        self.assertTrue(self.manager.tmux.exists("restart-ctx-renamed"))
+        self.assertEqual(self.manager.inspect("restart-ctx-renamed")["launcher_path"],
+                         str(new_launcher_path))
+        self.manager.kill("restart-ctx-renamed")
+
+    def test_delegated_session_names_in_context_and_launcher(self) -> None:
+        parent = self.manager.create(
+            tool="shell",
+            profile="general",
+            name="deleg-ctx-parent",
+            repository=str(self.workspace),
+        )
+        child = self.manager.delegate(
+            profile="planner",
+            parent=parent["id"],
+            task="verify delegate session name",
+            tool="shell",
+        )["session"]
+        child_name = child["tmux_name"]
+        child_ctx_path = self.manager.settings.state_dir / "contexts" / f"{child_name}.md"
+        child_launcher_path = self.manager.settings.state_dir / "launchers" / f"{child_name}.sh"
+        self.assertTrue(child_ctx_path.is_file(), "delegated child context file must exist")
+        self.assertTrue(child_launcher_path.is_file(), "delegated child launcher must exist")
+        child_ctx = child_ctx_path.read_text(encoding="utf-8")
+        self.assertIn(f"Session name: {child_name}", child_ctx)
+        self.assertIn(f"Session ID: {child['id']}", child_ctx)
+        self.assertNotIn("deleg-ctx-parent", child_ctx,
+                         "child context must not leak parent session name")
+        child_launcher = child_launcher_path.read_text(encoding="utf-8")
+        self.assertIn(f"AGENT_CONSOLE_SESSION_NAME={child_name}", child_launcher)
+        self.assertIn(f"AGENT_CONSOLE_SESSION_ID={child['id']}", child_launcher)
+        self.assertNotIn("deleg-ctx-parent", child_launcher,
+                         "child launcher must not leak parent session name")
+        self.manager.kill(child_name)
+        self.manager.kill("deleg-ctx-parent")
 
     def test_reconcile_does_not_overwrite_exit_reason(self) -> None:
         session = self.manager.create(

@@ -333,6 +333,20 @@ test('projects view shows project cards', async ({ page }, testInfo) => {
   await expect(page.locator('.profile-card').first()).toContainText('test-project');
 });
 
+test('terminal displays session name in header, page title, and aria-label', async ({ page }) => {
+  await installFakeWebSocket(page);
+  await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await expect(page).toHaveTitle(/Agent Terminal - codex-root/);
+  await expect(page.locator('#session-name')).toHaveText('codex-root');
+  await expect(page.locator('.terminal-frame')).toHaveAttribute('aria-label', 'Terminal session codex-root');
+  // Dashboard terminal dock uses encoded name in iframe src
+  await page.goto('/desktop');
+  const dockFrame = page.locator('.terminal-embed').first();
+  await expect(dockFrame).toHaveAttribute('src', /session=codex-root/);
+  await expect(dockFrame).toHaveAttribute('title', 'Terminal codex-root');
+});
+
 test('new-output button appears when not at bottom and contextual label works', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Scroll-to-bottom coverage on desktop.');
   await installFakeWebSocket(page);

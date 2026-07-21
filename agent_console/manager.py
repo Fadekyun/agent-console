@@ -1177,10 +1177,21 @@ class SessionManager:
                 f"export AGENT_CONSOLE_SESSION_NAME={shlex.quote(new_name)}\n",
                 1,
             )
+            old_context_path = str(self.settings.state_dir / "contexts" / f"{name}.md")
+            new_context_path = str(self.settings.state_dir / "contexts" / f"{new_name}.md")
+            launcher_text = launcher_text.replace(old_context_path, new_context_path)
             old_launcher.rename(new_launcher)
             new_launcher.write_text(launcher_text, encoding="utf-8")
             new_launcher.chmod(0o700)
             launcher_path = str(new_launcher)
+        old_context = self.settings.state_dir / "contexts" / f"{name}.md"
+        if old_context.is_file():
+            new_context = old_context.with_name(f"{new_name}.md")
+            context_text = old_context.read_text(encoding="utf-8")
+            context_text = context_text.replace(name, new_name)
+            old_context.rename(new_context)
+            new_context.write_text(context_text, encoding="utf-8")
+            new_context.chmod(0o600)
         with self.database.connect() as conn:
             conn.execute(
                 "UPDATE sessions SET tmux_name=?, launcher_path=? WHERE tmux_name=?",
