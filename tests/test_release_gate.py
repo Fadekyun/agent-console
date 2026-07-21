@@ -94,10 +94,11 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
         os.environ.pop("AGENT_CONSOLE_EVIDENCE_CAPABILITY", None)
         self.temp.cleanup()
 
-    def _create_session(self, profile: str, name: str) -> dict:
+    def _create_session(self, profile: str, name: str, linked_plan_id: str | None = None) -> dict:
         session = self.manager.create(
             tool="shell", profile=profile, name=name,
             repository=str(self.workspace),
+            linked_plan_id=linked_plan_id,
         )
         self.manager.set_attention(session["tmux_name"], state="ready_for_review", actor="test")
         return self.manager.inspect(name)
@@ -113,9 +114,9 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
         )
 
     def _record_full_evidence(self) -> None:
-        rev = self._create_session("reviewer", f"rev-{int(time.time())}")
-        sc = self._create_session("scout", f"sc-{int(time.time())}")
-        ver = self._create_session("verifier", f"ver-{int(time.time())}")
+        rev = self._create_session("reviewer", f"rev-{time.time_ns()}", linked_plan_id=self.plan_id)
+        sc = self._create_session("scout", f"sc-{time.time_ns()}", linked_plan_id=self.plan_id)
+        ver = self._create_session("verifier", f"ver-{time.time_ns()}", linked_plan_id=self.plan_id)
         self._record_evidence(self.plan_id, self._capability(rev["tmux_name"]), "review", "pass")
         self._record_evidence(self.plan_id, self._capability(sc["tmux_name"]), "scout", "pass")
         self._record_evidence(self.plan_id, self._capability(ver["tmux_name"]), "verification", "pass")
@@ -138,7 +139,7 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
         self.assertIn("invalid evidence capability", str(ctx.exception))
 
     def test_capability_wrong_profile_raises(self) -> None:
-        sess = self._create_session("coder", "coder-cap-ev")
+        sess = self._create_session("coder", "coder-cap-ev", linked_plan_id=self.plan_id)
         cap = self._capability(sess["tmux_name"])
         with self.assertRaises(ValueError) as ctx:
             self.manager.record_evidence(
@@ -148,7 +149,7 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
         self.assertIn("requires profile 'reviewer'", str(ctx.exception))
 
     def test_capability_blocked_session_raises(self) -> None:
-        sess = self._create_session("verifier", "ver-cap-blocked")
+        sess = self._create_session("verifier", "ver-cap-blocked", linked_plan_id=self.plan_id)
         self.manager.set_attention(sess["tmux_name"], state="blocked", actor="test")
         cap = self._capability(sess["tmux_name"])
         with self.assertRaises(ValueError) as ctx:
@@ -164,7 +165,7 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
         self.assertTrue(gate["allowed"])
 
     def test_capability_not_in_list_inspect_or_api(self) -> None:
-        rev = self._create_session("reviewer", "rev-secret-out")
+        rev = self._create_session("reviewer", "rev-secret-out", linked_plan_id=self.plan_id)
         cap = self._capability(rev["tmux_name"])
         self._record_evidence(self.plan_id, cap, "review", "pass")
         for session in self.manager.list_sessions():
@@ -175,7 +176,7 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
         self.assertNotIn("evidence_capability_hash", inspected)
 
     def test_capability_not_in_api_log_or_db(self) -> None:
-        rev = self._create_session("reviewer", "rev-cap-secret")
+        rev = self._create_session("reviewer", "rev-cap-secret", linked_plan_id=self.plan_id)
         cap = self._capability(rev["tmux_name"])
         result = self._record_evidence(self.plan_id, cap, "review", "pass")
         self.assertNotIn(cap, str(result))
@@ -187,7 +188,7 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
                 self.assertNotIn(cap, row["details_json"])
 
     def test_capability_not_in_evidence_list(self) -> None:
-        rev = self._create_session("reviewer", "rev-ev-list")
+        rev = self._create_session("reviewer", "rev-ev-list", linked_plan_id=self.plan_id)
         cap = self._capability(rev["tmux_name"])
         self._record_evidence(self.plan_id, cap, "review", "pass")
         records = self.manager.list_evidence(self.plan_id)
@@ -204,10 +205,10 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
         self.assertEqual(context.stat().st_mode & 0o777, 0o600)
 
     def test_capability_forged_name_not_accepted(self) -> None:
-        rev = self._create_session("reviewer", "rev-forge-test")
+        rev = self._create_session("reviewer", "rev-forge-test", linked_plan_id=self.plan_id)
         real_cap = self._capability(rev["tmux_name"])
         os.environ["AGENT_CONSOLE_EVIDENCE_CAPABILITY"] = real_cap
-        coder = self._create_session("coder", "coder-forge-test")
+        coder = self._create_session("coder", "coder-forge-test", linked_plan_id=self.plan_id)
         os.environ["AGENT_CONSOLE_SESSION_NAME"] = coder["tmux_name"]
         try:
             result = self.manager.record_evidence(
@@ -220,10 +221,84 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
             os.environ.pop("AGENT_CONSOLE_EVIDENCE_CAPABILITY", None)
             os.environ.pop("AGENT_CONSOLE_SESSION_NAME", None)
 
+    def test_capability_cross_plan_rejected_leaves_gate_unchanged(self) -> None:
+        plan2 = _setup_plan(self.manager, "prov-plan2")
+        plan2_id = plan2["plan_id"]
+        rev2 = self.manager.create(
+            tool="shell", profile="reviewer", name="rev-cross-plan",
+            repository=str(self.workspace),
+            linked_plan_id=plan2_id,
+        )
+        self.manager.set_attention(rev2["tmux_name"], state="ready_for_review", actor="test")
+        cap2 = self._capability(rev2["tmux_name"])
+        sc2 = self.manager.create(
+            tool="shell", profile="scout", name="sc-cross-plan",
+            repository=str(self.workspace),
+            linked_plan_id=plan2_id,
+        )
+        self.manager.set_attention(sc2["tmux_name"], state="ready_for_review", actor="test")
+        ver2 = self.manager.create(
+            tool="shell", profile="verifier", name="ver-cross-plan",
+            repository=str(self.workspace),
+            linked_plan_id=plan2_id,
+        )
+        self.manager.set_attention(ver2["tmux_name"], state="ready_for_review", actor="test")
+        self._record_evidence(plan2_id, cap2, "review", "pass")
+        self._record_evidence(plan2_id, self._capability(sc2["tmux_name"]), "scout", "pass")
+        self._record_evidence(plan2_id, self._capability(ver2["tmux_name"]), "verification", "pass")
+        gate2_before = self.manager.check_release_gate(plan2_id)
+        self.assertTrue(gate2_before["allowed"])
+        gate1_before = self.manager.check_release_gate(self.plan_id)
+        self.assertFalse(gate1_before["allowed"])
+
+        with self.assertRaises(ValueError) as ctx:
+            self.manager.record_evidence(
+                self.plan_id, evidence_type="review", result="pass",
+                candidate_sha=self.sha, capability=cap2,
+            )
+        self.assertIn("linked to plan", str(ctx.exception))
+
+        gate1_after = self.manager.check_release_gate(self.plan_id)
+        self.assertEqual(gate1_after["allowed"], gate1_before["allowed"])
+        self.assertEqual(gate1_after["blocked_by"], gate1_before["blocked_by"])
+        self.assertEqual(len(self.manager.list_evidence(self.plan_id)), 0)
+        gate2_after = self.manager.check_release_gate(plan2_id)
+        self.assertTrue(gate2_after["allowed"])
+
+    def test_capability_wrong_linked_plan_id_raises(self) -> None:
+        sess = self.manager.create(
+            tool="shell", profile="reviewer", name="rev-wrong-plan",
+            repository=str(self.workspace),
+            linked_plan_id="other-plan",
+        )
+        self.manager.set_attention(sess["tmux_name"], state="ready_for_review", actor="test")
+        cap = self._capability(sess["tmux_name"])
+        with self.assertRaises(ValueError) as ctx:
+            self.manager.record_evidence(
+                self.plan_id, evidence_type="review", result="pass",
+                candidate_sha=self.sha, capability=cap,
+            )
+        self.assertIn("linked to plan", str(ctx.exception))
+
+    def test_capability_missing_linked_plan_id_raises(self) -> None:
+        sess = self.manager.create(
+            tool="shell", profile="verifier", name="ver-no-linked-plan",
+            repository=str(self.workspace),
+        )
+        self.manager.set_attention(sess["tmux_name"], state="ready_for_review", actor="test")
+        cap = self._capability(sess["tmux_name"])
+        with self.assertRaises(ValueError) as ctx:
+            self.manager.record_evidence(
+                self.plan_id, evidence_type="verification", result="pass",
+                candidate_sha=self.sha, capability=cap,
+            )
+        self.assertIn("does not have a linked_plan_id", str(ctx.exception))
+
     def test_capability_unmanaged_session_raises(self) -> None:
         sess = self.manager.create(
             tool="shell", profile="reviewer", name="rev-unmanaged-cap",
             repository=str(self.workspace),
+            linked_plan_id=self.plan_id,
         )
         self.manager.set_attention(sess["tmux_name"], state="ready_for_review", actor="test")
         cap = self._capability(sess["tmux_name"])
@@ -268,9 +343,9 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
     # --- Deterministic ordering (Fix 3) ---
 
     def test_evidence_ordering_is_deterministic(self) -> None:
-        rev = self._create_session("reviewer", "rev-ordering")
-        sc = self._create_session("scout", "sc-ordering")
-        ver = self._create_session("verifier", "ver-ordering")
+        rev = self._create_session("reviewer", "rev-ordering", linked_plan_id=self.plan_id)
+        sc = self._create_session("scout", "sc-ordering", linked_plan_id=self.plan_id)
+        ver = self._create_session("verifier", "ver-ordering", linked_plan_id=self.plan_id)
         self._record_evidence(self.plan_id, self._capability(rev["tmux_name"]),
                               "review", "pass", detail="review pass")
         self._record_evidence(self.plan_id, self._capability(sc["tmux_name"]),
@@ -352,8 +427,9 @@ class ReleaseGateUnitTests(unittest.TestCase):
                                 detail: str | None = None) -> dict:
         session = self.manager.create(
             tool="shell", profile=self._profile_for_evidence(etype),
-            name=f"direct-{etype}-{int(time.time())}",
+            name=f"direct-{etype}-{time.time_ns()}",
             repository=str(self.workspace),
+            linked_plan_id=self.plan_id,
         )
         self.manager.set_attention(session["tmux_name"], state="ready_for_review", actor="test")
         cap = _read_capability(self.manager, session["tmux_name"])
@@ -369,8 +445,9 @@ class ReleaseGateUnitTests(unittest.TestCase):
                 return
             sess = self.manager.create(
                 tool="shell", profile=profile,
-                name=f"thr-{profile}-{int(time.time())}",
+                name=f"thr-{profile}-{time.time_ns()}",
                 repository=str(self.workspace),
+                linked_plan_id=self.plan_id,
             )
             self.manager.set_attention(sess["tmux_name"], state="ready_for_review", actor="test")
             cap = _read_capability(self.manager, sess["tmux_name"])
@@ -398,6 +475,48 @@ class ReleaseGateUnitTests(unittest.TestCase):
         gate = self.manager.check_release_gate(self.plan_id)
         self.assertFalse(gate["allowed"])
         self.assertEqual(gate["blocked_by"], "review_fail")
+
+    def test_release_gate_fail_remains_blocked_after_later_pass(self) -> None:
+        self._record_evidence_direct("review", "fail", detail="first review fails")
+        self._record_evidence_direct("scout", "pass")
+        self._record_evidence_direct("verification", "pass")
+        self._record_evidence_direct("review", "pass", detail="later review passes")
+        gate = self.manager.check_release_gate(self.plan_id)
+        self.assertFalse(gate["allowed"])
+        self.assertEqual(gate["blocked_by"], "review_fail")
+        self.assertIn("first review fails", gate["reason"])
+
+    def test_release_gate_blocked_remains_blocked_after_later_pass(self) -> None:
+        self._record_evidence_direct("scout", "blocked", detail="scout blocked")
+        self._record_evidence_direct("review", "pass")
+        self._record_evidence_direct("verification", "pass")
+        self._record_evidence_direct("scout", "pass", detail="later scout passes")
+        gate = self.manager.check_release_gate(self.plan_id)
+        self.assertFalse(gate["allowed"])
+        self.assertEqual(gate["blocked_by"], "scout_blocked")
+        self.assertIn("scout blocked", gate["reason"])
+
+    def test_release_gate_pass_fail_pass_ordering_irrelevant(self) -> None:
+        self._record_three_required()
+        gate = self.manager.check_release_gate(self.plan_id)
+        self.assertTrue(gate["allowed"])
+        self._record_evidence_direct("review", "fail", detail="fail after pass")
+        self._record_evidence_direct("review", "pass", detail="pass after fail")
+        gate = self.manager.check_release_gate(self.plan_id)
+        self.assertFalse(gate["allowed"])
+        self.assertEqual(gate["blocked_by"], "review_fail")
+        self.assertIn("fail after pass", gate["reason"])
+
+    def test_release_gate_pass_blocked_pass_ordering_irrelevant(self) -> None:
+        self._record_three_required()
+        gate = self.manager.check_release_gate(self.plan_id)
+        self.assertTrue(gate["allowed"])
+        self._record_evidence_direct("scout", "blocked", detail="blocked after pass")
+        self._record_evidence_direct("scout", "pass", detail="pass after blocked")
+        gate = self.manager.check_release_gate(self.plan_id)
+        self.assertFalse(gate["allowed"])
+        self.assertEqual(gate["blocked_by"], "scout_blocked")
+        self.assertIn("blocked after pass", gate["reason"])
 
     def test_release_gate_blocked_verification_is_blocked(self) -> None:
         self._record_three_required(ver_result="blocked")
@@ -586,16 +705,13 @@ class ReleaseGateWebTests(unittest.TestCase):
         self.temp.cleanup()
 
     def _make_evidence_session(self, profile: str, name: str) -> str:
-        resp = self.client.post("/api/sessions", headers=self.headers, json={
-            "tool": "shell", "profile": profile, "name": name,
-            "repository": str(self.workspace),
-        })
-        self.assertEqual(resp.status_code, 200,
-                         f"session create failed: {resp.text[:200]}")
-        sess_name = resp.json()["tmux_name"]
-        self.client.patch(f"/api/sessions/{sess_name}/attention", headers=self.headers,
-                          json={"state": "ready_for_review"})
-        return sess_name
+        sess = self.manager.create(
+            tool="shell", profile=profile, name=name,
+            repository=str(self.workspace),
+            linked_plan_id=self.plan_id,
+        )
+        self.manager.set_attention(sess["tmux_name"], state="ready_for_review", actor="test")
+        return sess["tmux_name"]
 
     def _capability(self, session_name: str) -> str:
         return _read_capability(self.manager, session_name)
@@ -681,6 +797,25 @@ class ReleaseGateWebTests(unittest.TestCase):
         data = response.json()
         self.assertIn("deployer_note", data)
         self.assertIn("Issue #14", data["deployer_note"])
+
+    def test_evidence_api_wrong_linked_plan_id_raises(self) -> None:
+        rev = self._make_evidence_session("reviewer", "web-wrong-plan")
+        cap = self._capability(rev)
+        gate_before = self.client.get(f"/api/plans/{self.plan_id}/gate",
+                                       headers=self.headers).json()
+        other_plan = "some-other-plan"
+        response = self.client.post(f"/api/plans/{other_plan}/evidence",
+                                     headers=self.headers, json={
+            "evidence_type": "review", "result": "pass",
+            "candidate_sha": self.sha, "capability": cap,
+        })
+        self.assertEqual(response.status_code, 400,
+                         f"expected 400, got {response.status_code}: {response.text[:200]}")
+        self.assertIn("linked to plan", response.json()["detail"])
+        gate_after = self.client.get(f"/api/plans/{self.plan_id}/gate",
+                                      headers=self.headers).json()
+        self.assertEqual(gate_after["allowed"], gate_before["allowed"])
+        self.assertEqual(gate_after["blocked_by"], gate_before["blocked_by"])
 
     def test_evidence_api_missing_capability_raises(self) -> None:
         response = self.client.post(f"/api/plans/{self.plan_id}/evidence", headers=self.headers,

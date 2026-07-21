@@ -1433,12 +1433,12 @@ class SessionManager:
                 self._record_gate_block(plan_id, result["release_gate"]["reason"])
         return result
 
-    def resolve_evidence_session(self, capability: str) -> dict[str, Any]:
+    def resolve_evidence_session(self, capability: str, plan_id: str | None = None) -> dict[str, Any]:
         capability_hash = hashlib.sha256(capability.encode()).hexdigest()
         self.reconcile()
         with self.database.connect() as conn:
             row = conn.execute(
-                "SELECT id, tmux_name, profile, managed, attention_state FROM sessions WHERE evidence_capability_hash=?",
+                "SELECT id, tmux_name, profile, managed, attention_state, linked_plan_id FROM sessions WHERE evidence_capability_hash=?",
                 (capability_hash,),
             ).fetchone()
         if row is None:
@@ -1451,6 +1451,18 @@ class SessionManager:
                 f"session {result['tmux_name']!r} attention_state is "
                 f"{result['attention_state']!r}; evidence requires 'ready_for_review'"
             )
+        if plan_id is not None:
+            session_linked = result.get("linked_plan_id")
+            if session_linked is None:
+                raise ValueError(
+                    f"session {result['tmux_name']!r} does not have a linked_plan_id; "
+                    "evidence requires a session linked to the target plan"
+                )
+            if session_linked != plan_id:
+                raise ValueError(
+                    f"session {result['tmux_name']!r} is linked to plan {session_linked!r}, "
+                    f"but evidence was requested for plan {plan_id!r}"
+                )
         return result
 
     def record_evidence(
@@ -1474,7 +1486,7 @@ class SessionManager:
         cap = capability or os.getenv("AGENT_CONSOLE_EVIDENCE_CAPABILITY")
         if not cap:
             raise ValueError("evidence capability is required")
-        session_info = self.resolve_evidence_session(cap)
+        session_info = self.resolve_evidence_session(cap, plan_id)
 
         required_profile = EVIDENCE_TYPE_TO_PROFILE.get(evidence_type)
         actual_profile = session_info.get("profile") or "general"
@@ -1584,7 +1596,12 @@ class SessionManager:
                     "reason": f"missing required {req_type} evidence for SHA {candidate_sha[:12]}",
                     "blocked_by": f"missing_{req_type}",
                 }
-            latest = items[0]
+            non_pass = None
+            for ev in items:
+                if ev["result"] != "pass":
+                    non_pass = ev
+                    break
+            latest = non_pass if non_pass else items[0]
             if latest["result"] != "pass":
                 reason_detail = f" ({latest['detail']})" if latest.get("detail") else ""
                 return {
