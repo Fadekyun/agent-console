@@ -768,6 +768,197 @@ class WebTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    # --- Project API tests ---
+
+    def test_project_create_and_list_api(self) -> None:
+        repo = str(self.workspace / "web-repo")
+        (self.workspace / "web-repo").mkdir(exist_ok=True)
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-proj", "repository": repo, "description": "Web test"},
+        ).json()
+        self.assertEqual(proj["name"], "web-proj")
+        self.assertEqual(proj["repository"], repo)
+        projects = self.client.get("/api/projects", headers=self.headers).json()
+        self.assertGreaterEqual(len(projects), 1)
+        found = next(p for p in projects if p["name"] == "web-proj")
+        self.assertEqual(found["repository"], repo)
+
+    def test_project_get_api(self) -> None:
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-get-proj"},
+        ).json()
+        got = self.client.get(f"/api/projects/{proj['id']}", headers=self.headers).json()
+        self.assertEqual(got["name"], "web-get-proj")
+        self.assertIn("sessions", got)
+
+    def test_project_update_api(self) -> None:
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-upd-proj"},
+        ).json()
+        updated = self.client.put(
+            f"/api/projects/{proj['id']}", headers=self.headers,
+            json={"status": "paused"},
+        ).json()
+        self.assertEqual(updated["status"], "paused")
+
+    def test_project_delete_api(self) -> None:
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-del-proj"},
+        ).json()
+        resp = self.client.delete(
+            f"/api/projects/{proj['id']}", headers=self.headers,
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["status"], "deleted")
+        get_resp = self.client.get(f"/api/projects/{proj['id']}", headers=self.headers)
+        self.assertEqual(get_resp.status_code, 400)
+
+    def test_project_bad_id_returns_400(self) -> None:
+        resp = self.client.get("/api/projects/proj-bad", headers=self.headers)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_project_create_no_auth_returns_403(self) -> None:
+        resp = self.client.post("/api/projects", json={"name": "no-auth-proj"})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_project_update_no_auth_returns_403(self) -> None:
+        resp = self.client.put("/api/projects/proj-x", json={"status": "paused"})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_project_delete_no_auth_returns_403(self) -> None:
+        resp = self.client.delete("/api/projects/proj-x")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_project_assign_no_auth_returns_403(self) -> None:
+        resp = self.client.post(
+            "/api/projects/proj-x/assign",
+            json={"session_name": "sess"},
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_project_unassign_no_auth_returns_403(self) -> None:
+        resp = self.client.post(
+            "/api/projects/proj-x/unassign",
+            json={"session_name": "sess"},
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_project_create_audit_shows_web_actor(self) -> None:
+        self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "audit-web-proj"},
+        )
+        with self.manager.database.connect() as conn:
+            audit = conn.execute(
+                "SELECT actor, surface FROM audit_events WHERE action='project.created' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit["actor"], "test@example.com")
+        self.assertEqual(audit["surface"], "web")
+
+    def test_project_assign_and_unassign_api(self) -> None:
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-assign-proj", "repository": str(self.workspace)},
+        ).json()
+        self.manager.create(
+            tool="shell", profile="general", name="web-api-assign-sess",
+            repository=str(self.workspace),
+        )
+        assign = self.client.post(
+            f"/api/projects/{proj['id']}/assign",
+            headers=self.headers,
+            json={"session_name": "web-api-assign-sess"},
+        ).json()
+        sess_names = [s["tmux_name"] for s in assign.get("sessions", [])]
+        self.assertIn("web-api-assign-sess", sess_names)
+        unassign = self.client.post(
+            f"/api/projects/{proj['id']}/unassign",
+            headers=self.headers,
+            json={"session_name": "web-api-assign-sess"},
+        ).json()
+        unassign_names = [s["tmux_name"] for s in unassign.get("sessions", [])]
+        self.assertNotIn("web-api-assign-sess", unassign_names)
+
+    def test_project_assign_duplicate_returns_400(self) -> None:
+        repo = str(self.workspace)
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-dup-assign", "repository": repo},
+        ).json()
+        self.manager.create(
+            tool="shell", profile="general", name="web-dup-assign-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        dup = self.client.post(
+            f"/api/projects/{proj['id']}/assign",
+            headers=self.headers,
+            json={"session_name": "web-dup-assign-sess"},
+        )
+        self.assertEqual(dup.status_code, 400)
+
+    def test_create_session_with_project_id_api(self) -> None:
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-create-proj", "repository": str(self.workspace)},
+        ).json()
+        sess = self.client.post(
+            "/api/sessions", headers=self.headers,
+            json={
+                "tool": "shell", "profile": "general",
+                "name": "web-create-proj-sess",
+                "repository": str(self.workspace),
+                "project_id": proj["id"],
+            },
+        ).json()
+        self.assertEqual(sess.get("project_id"), proj["id"])
+
+    def test_project_unassign_wrong_project_id_returns_400(self) -> None:
+        repo = str(self.workspace)
+        proj_a = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-unassign-wrong-a", "repository": repo},
+        ).json()
+        proj_b = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-unassign-wrong-b", "repository": repo},
+        ).json()
+        self.manager.create(
+            tool="shell", profile="general", name="web-unassign-wrong-sess",
+            repository=repo, project_id=proj_a["id"],
+        )
+        resp = self.client.post(
+            f"/api/projects/{proj_b['id']}/unassign",
+            headers=self.headers,
+            json={"session_name": "web-unassign-wrong-sess"},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_create_session_with_incompatible_repo_api_returns_400(self) -> None:
+        repo_a = str(self.workspace / "repo-a")
+        repo_b = str(self.workspace / "repo-b")
+        (self.workspace / "repo-a").mkdir(exist_ok=True)
+        (self.workspace / "repo-b").mkdir(exist_ok=True)
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-repo-mismatch", "repository": repo_a},
+        ).json()
+        resp = self.client.post(
+            "/api/sessions", headers=self.headers,
+            json={
+                "tool": "shell", "profile": "general",
+                "name": "web-repo-mismatch-sess",
+                "repository": repo_b,
+                "project_id": proj["id"],
+            },
+        )
+        self.assertEqual(resp.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

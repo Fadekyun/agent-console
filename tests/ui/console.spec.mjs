@@ -411,6 +411,47 @@ test('projects view shows project cards', async ({ page }, testInfo) => {
   await expect(page.locator('.profile-card').first()).toContainText('test-project');
 });
 
+test('project detail dialog shows sessions with unassign', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop project detail coverage.');
+  await page.route('**/api/projects/proj-1', async (route) => {
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'proj-1', name: 'detail-project', repository: '/workspace/repo',
+        description: '', status: 'active',
+        sessions: [{ tmux_name: 'sess-1', tool: 'shell', profile: 'general', attention_state: 'normal', status: 'detached' }],
+      }),
+    });
+  });
+  await page.route('**/api/projects', async (route) => {
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([{ id: 'proj-1', name: 'detail-project', repository: '/workspace/repo', status: 'active', session_count: 1 }]),
+    });
+  });
+  await mockApi(page);
+  await page.goto('/desktop#projects');
+  await page.locator('button:has-text("View sessions")').click();
+  await expect(page.locator('#project-detail-dialog')).toBeVisible();
+  await expect(page.locator('#project-detail-dialog')).toContainText('sess-1');
+  await expect(page.locator('#project-detail-dialog')).toContainText('Unassign');
+});
+
+test('new session form includes project selector', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop new session coverage.');
+  await page.route('**/api/projects', async (route) => {
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([{ id: 'proj-1', name: 'selector-project', repository: '/repo', status: 'active', session_count: 0 }]),
+    });
+  });
+  await mockApi(page);
+  await page.goto('/desktop#new');
+  const select = page.locator('select[name="project_id"]');
+  await expect(select).toBeVisible();
+  await expect(select).toContainText('selector-project');
+});
+
 test('new-output button appears when not at bottom and contextual label works', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Scroll-to-bottom coverage on desktop.');
   await installFakeWebSocket(page);

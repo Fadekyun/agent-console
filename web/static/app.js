@@ -721,14 +721,29 @@ async function openProjectDetail(id, name) {
   try {
     const project = await api(`/api/projects/${encodeURIComponent(id)}`);
     $('#project-detail-title').textContent = name;
-    $('#project-detail-repo').textContent = project.repository || 'No repository';
+    $('#project-detail-repo').textContent = project.repository ? `Repository: ${project.repository}` : 'No repository';
+    $('#project-detail-status').textContent = `Status: ${project.status} · ${(project.sessions || []).length} session(s)`;
     const sessions = project.sessions || [];
-    $('#project-detail-sessions').replaceChildren(...sessions.map((s) => {
+    const list = $('#project-detail-sessions'); list.innerHTML = '';
+    sessions.forEach((s) => {
       const el = document.createElement('article'); el.className = 'tree-node';
       el.innerHTML = `<div class="session-title"><span>${escapeHtml(s.tmux_name || 'unknown')}</span><span class="badge ${s.status === 'detached' ? 'live' : 'stopped'}">${escapeHtml(s.profile || '')}</span></div><p class="meta">${escapeHtml(s.tool || '')} · ${escapeHtml(s.attention_state || 'normal')}${s.initial_task ? ` · ${escapeHtml(s.initial_task)}` : ''}</p>`;
-      return el;
-    }));
-    if (!sessions.length) $('#project-detail-sessions').innerHTML = '<p class="empty">No sessions assigned to this project.</p>';
+      const unassignBtn = document.createElement('button'); unassignBtn.textContent = 'Unassign'; unassignBtn.className = 'danger';
+      unassignBtn.onclick = async () => {
+        try {
+          await api(`/api/projects/${encodeURIComponent(id)}/unassign`, { method: 'POST', body: JSON.stringify({ session_name: s.tmux_name }) });
+          openProjectDetail(id, name);
+        } catch (e) { showNotice(e.message, 'error'); }
+      };
+      el.append(unassignBtn);
+      list.append(el);
+    });
+    if (!sessions.length) list.innerHTML = '<p class="empty">No sessions assigned to this project.</p>';
+    const assignSelect = $('#project-assign-select');
+    const availSessions = (state.sessions || []).filter((s) => s.running && !sessions.find((ps) => ps.tmux_name === s.tmux_name));
+    assignSelect.replaceChildren(...availSessions.map((s) => new Option(s.tmux_name, s.tmux_name)));
+    assignSelect.prepend(new Option('Select session…', ''));
+    assignSelect.dataset.projectId = id;
     $('#project-detail-dialog').showModal();
   } catch (e) { showNotice(e.message, 'error'); }
 }
@@ -743,6 +758,16 @@ $('#new-project-form').onsubmit = async (event) => {
   } catch (e) { status.textContent = e.message; } finally { submit.disabled = false; }
 };
 $('#new-project-btn').onclick = () => { $('#new-project-form').reset(); $('#new-project-status').textContent = ''; $('#new-project-dialog').showModal(); };
+$('#project-assign-btn').onclick = async () => {
+  const select = $('#project-assign-select');
+  const sessionName = select.value;
+  const projectId = select.dataset.projectId;
+  if (!sessionName || !projectId) return;
+  try {
+    await api(`/api/projects/${encodeURIComponent(projectId)}/assign`, { method: 'POST', body: JSON.stringify({ session_name: sessionName }) });
+    openProjectDetail(projectId, $('#project-detail-title').textContent);
+  } catch (e) { showNotice(e.message, 'error'); }
+};
 
 function updateAgentModeField() {
   const tool = newForm.elements.tool.value;
@@ -869,6 +894,14 @@ async function start() {
   newForm.elements.profile.onchange = () => { const p = state.identity.profiles.find(x => x.name === newForm.elements.profile.value); newForm.elements.worktree.checked = p ? p.worktree_requirement !== 'none' : false; updateAgentModeField(); };
   delegateForm.elements.tool.onchange = () => { updateContextSelect(delegateForm.elements.tool, delegateForm.elements.auth_context); $('#delegate-mode-field').hidden = delegateForm.elements.tool.value !== 'opencode'; };
   updateNewToolFields(); selectView(location.hash.slice(1) || 'sessions', false); await refresh();
+  (async () => {
+    try {
+      const projects = await api('/api/projects');
+      const projSelect = newForm.elements.project_id;
+      projSelect.replaceChildren(...projects.map((p) => new Option(`${p.name}${p.repository ? ' · ' + p.repository : ''}`, p.id)));
+      projSelect.prepend(new Option('None', ''));
+    } catch {}
+  })();
   setInterval(() => { if (!document.hidden && !$$('dialog').some((dialog) => dialog.open)) refresh().catch((error) => showNotice(error.message, 'error')); }, 10000);
 }
 
@@ -937,7 +970,7 @@ window.addEventListener('keydown', (event) => {
 newForm.onsubmit = async (event) => {
   event.preventDefault(); formStatus.textContent = 'Creating…'; const submit = $('button[type="submit"]', newForm); submit.disabled = true;
   const data = Object.fromEntries(new FormData(newForm)); data.worktree = newForm.elements.worktree.checked;
-  for (const key of ['name', 'task', 'agent_mode', 'provider', 'model']) if (!data[key]) data[key] = null;
+  for (const key of ['name', 'task', 'agent_mode', 'provider', 'model', 'project_id']) if (!data[key]) data[key] = null;
   try { const session = await api('/api/sessions', { method: 'POST', body: JSON.stringify(data) }); await refresh(); selectView('sessions'); renderInspector(session); openTerminal(session.tmux_name); submit.disabled = false; }
   catch (error) { formStatus.textContent = error.message; submit.disabled = false; }
 };

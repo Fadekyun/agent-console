@@ -640,21 +640,37 @@ class SessionManager:
                 projects.append(p)
             return projects
 
+    def _canonical_project_repo(self, repository: str | None) -> str | None:
+        if repository is None:
+            return None
+        candidate = Path(repository)
+        if not candidate.is_absolute():
+            candidate = self.settings.workspace_root / candidate
+        return str(contained_path(
+            candidate, self.settings.workspace_root,
+        ))
+
     def create_project(
-        self, name: str, repository: str | None = None, description: str | None = None
+        self, name: str, repository: str | None = None, description: str | None = None,
+        *, actor: str = "system", surface: str = "CLI",
     ) -> dict[str, Any]:
+        canonical_repo = self._canonical_project_repo(repository)
         project_id = f"proj-{uuid.uuid4().hex}"
         now = utc_now()
         with self.database.connect() as conn:
             conn.execute(
                 "INSERT INTO projects(id, name, repository, description, status, created_at, updated_at) "
                 "VALUES(?, ?, ?, ?, 'active', ?, ?)",
-                (project_id, name, repository, description, now, now),
+                (project_id, name, canonical_repo, description, now, now),
             )
+        self.database.audit(
+            "project.created", project_id, "success", actor=actor, surface=surface,
+            details={"name": name},
+        )
         return {
             "id": project_id,
             "name": name,
-            "repository": repository,
+            "repository": canonical_repo,
             "description": description,
             "status": "active",
             "session_count": 0,
@@ -679,6 +695,7 @@ class SessionManager:
         self, project_id: str, *, name: str | None = None,
         repository: str | None = None, description: str | None = None,
         status: str | None = None,
+        actor: str = "system", surface: str = "CLI",
     ) -> dict[str, Any]:
         with self.database.connect() as conn:
             row = conn.execute(
@@ -690,7 +707,17 @@ class SessionManager:
             if name is not None:
                 updates["name"] = name
             if repository is not None:
-                updates["repository"] = repository
+                canonical_repo = self._canonical_project_repo(repository)
+                if canonical_repo != row["repository"]:
+                    assigned = conn.execute(
+                        "SELECT COUNT(*) FROM sessions WHERE project_id=?", (project_id,)
+                    ).fetchone()[0]
+                    if assigned > 0:
+                        raise ValueError(
+                            f"project {project_id!r} has {assigned} assigned session(s); "
+                            f"unassign them before changing the repository"
+                        )
+                updates["repository"] = canonical_repo
             if description is not None:
                 updates["description"] = description
             if status is not None:
@@ -703,41 +730,111 @@ class SessionManager:
                 (updates["name"], updates["repository"], updates["description"],
                  updates["status"], updates["updated_at"], project_id),
             )
+        self.database.audit(
+            "project.updated", project_id, "success", actor=actor, surface=surface,
+            details={k: v for k, v in {"name": name, "repository": repository, "description": description, "status": status}.items() if v is not None},
+        )
         return self.get_project(project_id)
 
-    def delete_project(self, project_id: str) -> None:
+    def delete_project(
+        self, project_id: str, *, actor: str = "system", surface: str = "CLI",
+    ) -> None:
         with self.database.connect() as conn:
             row = conn.execute(
-                "SELECT id FROM projects WHERE id=?", (project_id,)
+                "SELECT * FROM projects WHERE id=?", (project_id,)
             ).fetchone()
             if row is None:
                 raise KeyError(f"project not found: {project_id}")
-            conn.execute(
-                "UPDATE sessions SET project_id=NULL WHERE project_id=?", (project_id,)
-            )
+            assigned = conn.execute(
+                "SELECT COUNT(*) FROM sessions WHERE project_id=?", (project_id,)
+            ).fetchone()[0]
+            if assigned > 0:
+                raise ValueError(
+                    f"project {project_id!r} has {assigned} assigned session(s); "
+                    f"unassign them before deletion"
+                )
             conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
+        self.database.audit(
+            "project.deleted", project_id, "success", actor=actor, surface=surface,
+            details={"name": row["name"]},
+        )
 
-    def assign_session_to_project(self, session_name: str, project_id: str) -> dict[str, Any]:
+    def assign_session_to_project(
+        self, session_name: str, project_id: str,
+        *, actor: str = "system", surface: str = "CLI",
+    ) -> dict[str, Any]:
         with self.database.connect() as conn:
             proj = conn.execute(
                 "SELECT * FROM projects WHERE id=?", (project_id,)
             ).fetchone()
             if proj is None:
                 raise KeyError(f"project not found: {project_id}")
+            if proj["status"] != "active":
+                raise ValueError(f"project is {proj['status']!r}, only active projects accept assignments")
             session = conn.execute(
-                "SELECT tmux_name, repository FROM sessions WHERE tmux_name=?", (session_name,)
+                "SELECT tmux_name, repository, project_id FROM sessions WHERE tmux_name=?", (session_name,)
             ).fetchone()
             if session is None:
                 raise KeyError(f"session not found: {session_name}")
+            if session["project_id"] == project_id:
+                raise ValueError(
+                    f"session {session_name!r} is already assigned to project {project_id!r}"
+                )
+            if session["project_id"] is not None:
+                raise ValueError(
+                    f"session {session_name!r} is already assigned to project {session['project_id']!r}; "
+                    f"unassign it first"
+                )
             proj_repo = proj["repository"]
             sess_repo = session["repository"]
             if proj_repo and sess_repo and proj_repo != sess_repo:
                 raise ValueError(
                     f"session repository {sess_repo!r} does not match project repository {proj_repo!r}"
                 )
+            if proj_repo and not sess_repo:
+                raise ValueError(
+                    f"session {session_name!r} has no repository; "
+                    f"project {project_id!r} requires repository {proj_repo!r}. "
+                    f"Launch the session with the matching repository before assigning."
+                )
             conn.execute(
                 "UPDATE sessions SET project_id=? WHERE tmux_name=?", (project_id, session_name)
             )
+        self.database.audit(
+            "project.session.assigned", f"{project_id}:{session_name}", "success",
+            actor=actor, surface=surface,
+        )
+        return self.get_project(project_id)
+
+    def unassign_session_from_project(
+        self, session_name: str, project_id: str,
+        *, actor: str = "system", surface: str = "CLI",
+    ) -> dict[str, Any]:
+        with self.database.connect() as conn:
+            proj = conn.execute(
+                "SELECT id FROM projects WHERE id=?", (project_id,)
+            ).fetchone()
+            if proj is None:
+                raise KeyError(f"project not found: {project_id}")
+            session = conn.execute(
+                "SELECT tmux_name, project_id FROM sessions WHERE tmux_name=?", (session_name,)
+            ).fetchone()
+            if session is None:
+                raise KeyError(f"session not found: {session_name}")
+            if session["project_id"] is None:
+                raise ValueError(f"session {session_name!r} is not assigned to any project")
+            if session["project_id"] != project_id:
+                raise ValueError(
+                    f"session {session_name!r} is assigned to project {session['project_id']!r}, "
+                    f"not {project_id!r}"
+                )
+            conn.execute(
+                "UPDATE sessions SET project_id=NULL WHERE tmux_name=?", (session_name,)
+            )
+        self.database.audit(
+            "project.session.unassigned", f"{project_id}:{session_name}", "success",
+            actor=actor, surface=surface,
+        )
         return self.get_project(project_id)
 
     def review_session(
@@ -910,6 +1007,9 @@ class SessionManager:
         linked_plan_id: str | None = None,
         enforcement_note: str | None = None,
         effective_skills: list[dict[str, Any]] | None = None,
+        project_id: str | None = None,
+        project_name: str | None = None,
+        project_repository: str | None = None,
     ) -> LaunchSpec:
         role = profile_text(self.settings.profile_dir, profile).strip()
         session_identity = (
@@ -940,6 +1040,9 @@ class SessionManager:
                 f"- Session ID: {session_id or 'not-yet-assigned'}",
                 f"- Parent session ID: {parent_session_id or 'none'}",
                 f"- Linked plan ID: {linked_plan_id or 'none'}",
+                f"- Project ID: {project_id or 'none'}",
+                f"- Project name: {project_name or 'none'}",
+                f"- Project repository: {project_repository or 'none'}",
                 "- Run `agentctl session tree` to find peer sessions.",
                 "- Run `agentctl session review NAME` for bounded, read-only peer output.",
                 session_identity,
@@ -1022,6 +1125,9 @@ class SessionManager:
         parent_session_id: str | None = None,
         linked_plan_id: str | None = None,
         overlay_env: dict[str, str] | None = None,
+        project_id: str | None = None,
+        project_name: str | None = None,
+        project_repository: str | None = None,
     ) -> Path:
         path = self.settings.state_dir / "launchers" / f"{session_name}.sh"
         lines = [
@@ -1033,6 +1139,9 @@ class SessionManager:
             "AGENT_CONSOLE_SESSION_ID": session_id,
             "AGENT_CONSOLE_PARENT_SESSION_ID": parent_session_id or "",
             "AGENT_CONSOLE_LINKED_PLAN_ID": linked_plan_id or "",
+            "AGENT_CONSOLE_PROJECT_ID": project_id or "",
+            "AGENT_CONSOLE_PROJECT_NAME": project_name or "",
+            "AGENT_CONSOLE_PROJECT_REPOSITORY": project_repository or "",
         }
         merged: dict[str, str] = dict(spec.environment)
         merged.update(console_environment)
@@ -1197,6 +1306,24 @@ class SessionManager:
             raise RuntimeError(
                 f"managed-session limit reached ({self.settings.max_managed_sessions})"
             )
+        project_info: dict[str, Any] | None = None
+        if project_id is not None:
+            with self.database.connect() as conn:
+                proj = conn.execute(
+                    "SELECT id, name, repository, status FROM projects WHERE id=?", (project_id,)
+                ).fetchone()
+            if proj is None:
+                raise KeyError(f"project not found: {project_id}")
+            if proj["status"] != "active":
+                raise ValueError(f"project is {proj['status']!r}, only active projects can host sessions")
+            proj_repo = proj["repository"]
+            if proj_repo and repository and proj_repo != repository:
+                raise ValueError(
+                    f"requested repository {repository!r} does not match project repository {proj_repo!r}"
+                )
+            if proj_repo and not repository:
+                repository = proj_repo
+            project_info = {"id": proj["id"], "name": proj["name"], "repository": proj["repository"]}
         name = validate_session_name(name or self.generated_name(tool, profile))
         if self.tmux.exists(name):
             raise FileExistsError(f"tmux session already exists: {name}")
@@ -1241,6 +1368,9 @@ class SessionManager:
                 linked_plan_id=linked_plan_id,
                 enforcement_note=capability["reason"],
                 effective_skills=skill_validation["effective"],
+                project_id=project_info["id"] if project_info else None,
+                project_name=project_info["name"] if project_info else None,
+                project_repository=project_info["repository"] if project_info else None,
             )
 
             canonical_root = _resolve_canonical_root()
@@ -1259,6 +1389,9 @@ class SessionManager:
                 parent_session_id=parent_session_id,
                 linked_plan_id=linked_plan_id,
                 overlay_env=overlay_env,
+                project_id=project_info["id"] if project_info else None,
+                project_name=project_info["name"] if project_info else None,
+                project_repository=project_info["repository"] if project_info else None,
             )
 
             created_at = utc_now()
@@ -1383,6 +1516,27 @@ class SessionManager:
         session = self.inspect(name)
         if not session["managed"] or not session["launcher_path"]:
             raise ValueError("restart-agent is available only for managed sessions")
+        project_id = session.get("project_id")
+        if project_id is not None:
+            with self.database.connect() as conn:
+                proj = conn.execute(
+                    "SELECT id, name, repository, status FROM projects WHERE id=?", (project_id,)
+                ).fetchone()
+            if proj is None:
+                raise KeyError(
+                    f"project {project_id!r} no longer exists; session {name!r} cannot be restarted"
+                )
+            if proj["status"] != "active":
+                raise ValueError(
+                    f"project {project_id!r} is {proj['status']!r}; session {name!r} cannot be restarted"
+                )
+            proj_repo = proj["repository"]
+            sess_repo = session.get("repository")
+            if proj_repo and sess_repo and proj_repo != sess_repo:
+                raise ValueError(
+                    f"session repository {sess_repo!r} no longer matches project repository {proj_repo!r}; "
+                    f"session {name!r} cannot be restarted"
+                )
         profile = session.get("profile") or "general"
         skill_validation = validate_profile_skills(self.database, profile)
         if not skill_validation["valid"]:
