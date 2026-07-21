@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,8 +27,9 @@ def _safe_parse_int(value: str | None, default: int) -> int:
         return default
 
 SECRET_RULES: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"(?i)sk-[a-z0-9]{20,}"), "****"),
-    (re.compile(r"(?i)(gh[ps])_[a-zA-Z0-9]{36,}"), r"\1_****"),
+    (re.compile(r"(?i)(sk-(?:[a-z0-9]+-)*)[a-z0-9]{16,}"), r"\1****"),
+    (re.compile(r"(?i)(gh[opsur])_[a-zA-Z0-9]{36,}"), r"\1_****"),
+    (re.compile(r"(?i)github_pat_[a-zA-Z0-9]{36,}"), "github_pat_****"),
     (re.compile(r"(?i)(xox[barps])-[a-zA-Z0-9]{10,}"), r"\1-****"),
     (re.compile(r"(?i)(bearer\s+)[a-z0-9._-]{16,}"), r"\1****"),
     (re.compile(r"(?i)(api[_-]?key|secret|password|credential|auth[_-]?header)\s*[:=]\s*[^\s*]+\S*"), r"\1=****"),
@@ -40,15 +42,33 @@ def redact_secrets(message: str) -> str:
     return message
 
 
+def _redact_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        return {_redact_value(k): _redact_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_redact_value(v) for v in value)
+    return value
+
+
 class SecretRedactionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.msg, str):
             record.msg = redact_secrets(record.msg)
+        else:
+            record.msg = _redact_value(record.msg)
         if record.args:
-            record.args = tuple(
-                redact_secrets(str(a)) if isinstance(a, str) else a
-                for a in record.args
+            if isinstance(record.args, dict):
+                record.args = _redact_value(record.args)
+            else:
+                record.args = tuple(_redact_value(a) for a in record.args)
+        if record.exc_info and not record.exc_text:
+            record.exc_text = redact_secrets(
+                "".join(traceback.format_exception(*record.exc_info))
             )
+        elif record.exc_text:
+            record.exc_text = redact_secrets(record.exc_text)
         return True
 
 
@@ -59,10 +79,10 @@ class JsonFormatter(logging.Formatter):
             "timestamp": created.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage() if record.args else record.msg,
+            "message": redact_secrets(record.getMessage()),
         }
         if record.exc_info and isinstance(record.exc_info, tuple) and record.exc_info[1]:
-            obj["exception"] = str(record.exc_info[1])
+            obj["exception"] = redact_secrets(str(record.exc_info[1]))
         return json.dumps(obj, ensure_ascii=False, default=str)
 
 

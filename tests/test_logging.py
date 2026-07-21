@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from agent_console.config import Settings
@@ -29,6 +30,7 @@ from agent_console.logging_config import (
     reset_logging,
     assert_logging_config_parity,
     read_logging_config_json,
+    _redact_value,
 )
 
 
@@ -139,6 +141,29 @@ class JsonFormatterTests(unittest.TestCase):
         output = fmt.format(record)
         parsed = json.loads(output)
         self.assertIn("exception", parsed)
+        self.assertNotIn("sk-or-v1", parsed["exception"])
+
+    def test_json_format_redacts_exception(self) -> None:
+        fmt = JsonFormatter()
+        secret_key = "sk-or-v1-" + "a" * 40
+        try:
+            raise ValueError(f"secret leaked: {secret_key}")
+        except ValueError:
+            exc_info = sys.exc_info()
+        record = logging.LogRecord(
+            name="test",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="something broke",
+            args=(),
+            exc_info=exc_info,
+        )
+        output = fmt.format(record)
+        parsed = json.loads(output)
+        self.assertIn("exception", parsed)
+        self.assertNotIn(secret_key, parsed["exception"])
+        self.assertIn("****", parsed["exception"])
 
 
 class SecretRedactionTests(unittest.TestCase):
@@ -182,7 +207,41 @@ class SecretRedactionTests(unittest.TestCase):
         msg = "secret sk-AAAAaaaabbbbccccddddeeeeffff0000"
         result = redact_secrets(msg)
         self.assertNotIn("sk-AAAAaaaabbbbccccddddeeeeffff0000", result)
-        self.assertIn("****", result)
+
+    def test_redact_openrouter_sk_or_v1(self) -> None:
+        key = "sk-or-v1-" + "a" * 40
+        msg = f"key={key}"
+        result = redact_secrets(msg)
+        self.assertNotIn(key, result)
+        self.assertIn("sk-or-v1-****", result)
+
+    def test_redact_github_gho_token(self) -> None:
+        token = "gho_AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDDEEEEEEEE"
+        msg = f"token={token}"
+        result = redact_secrets(msg)
+        self.assertNotIn(token, result)
+        self.assertIn("gho_****", result)
+
+    def test_redact_github_ghu_token(self) -> None:
+        token = "ghu_AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDDEEEEEEEE"
+        msg = f"token={token}"
+        result = redact_secrets(msg)
+        self.assertNotIn(token, result)
+        self.assertIn("ghu_****", result)
+
+    def test_redact_github_ghr_token(self) -> None:
+        token = "ghr_AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDDEEEEEEEE"
+        msg = f"token={token}"
+        result = redact_secrets(msg)
+        self.assertNotIn(token, result)
+        self.assertIn("ghr_****", result)
+
+    def test_redact_github_pat_token(self) -> None:
+        token = "github_pat_" + "a" * 36
+        msg = f"token={token}"
+        result = redact_secrets(msg)
+        self.assertNotIn(token, result)
+        self.assertIn("github_pat_****", result)
 
     def test_filter_applied_to_record(self) -> None:
         filter_ = SecretRedactionFilter()
@@ -213,6 +272,197 @@ class SecretRedactionTests(unittest.TestCase):
         self.assertTrue(filter_.filter(record))
         self.assertNotIn("sk-AAAAaaaabbbbccccddddeeeeffff0000", str(record.args[1]))
         self.assertIn("****", str(record.args[1]))
+
+    def test_filter_redacts_exc_text(self) -> None:
+        filter_ = SecretRedactionFilter()
+        key = "sk-or-v1-" + "a" * 40
+        record = logging.LogRecord(
+            name="test",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="error occurred",
+            args=(),
+            exc_info=None,
+        )
+        record.exc_text = f"Traceback (most recent call last): ...\nValueError: secret leaked: {key}"
+        self.assertTrue(filter_.filter(record))
+        self.assertNotIn(key, record.exc_text)
+        self.assertIn("****", record.exc_text)
+
+    def test_filter_redacts_mapping_args_with_openrouter(self) -> None:
+        filter_ = SecretRedactionFilter()
+        key = "sk-or-v1-" + "a" * 40
+        record = logging.LogRecord(
+            name="test",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="provider=openrouter key=%(api_key)s",
+            args=({"api_key": key},),
+            exc_info=None,
+        )
+        self.assertTrue(filter_.filter(record))
+        self.assertIsInstance(record.args, dict)
+        self.assertNotIn(key, str(record.args["api_key"]))
+        self.assertIn("sk-or-v1-****", str(record.args["api_key"]))
+
+    def test_json_format_redacts_mapping_message_defense_in_depth(self) -> None:
+        key = "sk-or-v1-" + "a" * 40
+        fmt = JsonFormatter()
+        record = logging.LogRecord(
+            name="test",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="provider=openrouter key=%(api_key)s",
+            args=({"api_key": key},),
+            exc_info=None,
+        )
+        output = fmt.format(record)
+        parsed = json.loads(output)
+        self.assertNotIn(key, parsed["message"])
+        self.assertIn("****", parsed["message"])
+
+    def test_json_format_redacts_nested_args_defense_in_depth(self) -> None:
+        key = "sk-or-v1-" + "a" * 40
+        fmt = JsonFormatter()
+        record = logging.LogRecord(
+            name="test",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="nested=%s",
+            args=([{"api_key": key, "inner": {"token": key}}],),
+            exc_info=None,
+        )
+        output = fmt.format(record)
+        parsed = json.loads(output)
+        self.assertNotIn(key, parsed["message"])
+        self.assertIn("****", parsed["message"])
+
+    def test_capture_handler_redacts_mapping_message(self) -> None:
+        capture = io.StringIO()
+        handler = logging.StreamHandler(capture)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        handler.addFilter(SecretRedactionFilter())
+        logger = logging.getLogger("test.capture_mapping")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+        logger.propagate = False
+        key = "sk-or-v1-" + "a" * 40
+        logger.info("provider=openrouter key=%(api_key)s", {"api_key": key})
+        output = capture.getvalue()
+        self.assertNotIn(key, output)
+        self.assertIn("****", output)
+
+    def test_capture_handler_redacts_nested_structured_args(self) -> None:
+        capture = io.StringIO()
+        handler = logging.StreamHandler(capture)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        handler.addFilter(SecretRedactionFilter())
+        logger = logging.getLogger("test.capture_nested")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+        logger.propagate = False
+        key = "sk-or-v1-" + "a" * 40
+        ght = "gho_AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDDEEEEEEEE"
+        logger.info(
+            "multi: key=%(api_key)s ghtoken=%(gh)s",
+            {"api_key": key, "gh": ght},
+        )
+        output = capture.getvalue()
+        self.assertNotIn(key, output)
+        self.assertNotIn(ght, output)
+        self.assertIn("sk-or-v1-****", output)
+        self.assertIn("gho_****", output)
+
+    def test_json_format_redacts_structured_msg_no_args(self) -> None:
+        key = "sk-or-v1-" + "a" * 40
+        fmt = JsonFormatter()
+        record = logging.LogRecord(
+            name="test",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg={"api_key": key, "nested": [{"token": key}]},
+            args=(),
+            exc_info=None,
+        )
+        output = fmt.format(record)
+        parsed = json.loads(output)
+        self.assertNotIn(key, parsed["message"])
+        self.assertIn("****", parsed["message"])
+
+    def test_capture_handler_redacts_structured_msg_no_args(self) -> None:
+        capture = io.StringIO()
+        handler = logging.StreamHandler(capture)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        handler.addFilter(SecretRedactionFilter())
+        logger = logging.getLogger("test.capture_struct_msg")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+        logger.propagate = False
+        key = "sk-or-v1-" + "a" * 40
+        logger.info({"api_key": key, "nested": [{"token": key}]})
+        output = capture.getvalue()
+        self.assertNotIn(key, output)
+        self.assertIn("****", output)
+
+    def test_filter_populates_redacted_exc_text_from_exc_info(self) -> None:
+        filter_ = SecretRedactionFilter()
+        key = "sk-or-v1-" + "a" * 40
+        try:
+            raise ValueError(f"secret leaked: {key}")
+        except ValueError:
+            exc_info = sys.exc_info()
+        record = logging.LogRecord(
+            name="test",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="error occurred",
+            args=(),
+            exc_info=exc_info,
+        )
+        self.assertIsNone(record.exc_text)
+        self.assertTrue(filter_.filter(record))
+        self.assertIsNotNone(record.exc_text)
+        self.assertNotIn(key, record.exc_text)
+        fmt = logging.Formatter("%(message)s")
+        output = fmt.format(record)
+        self.assertNotIn(key, output)
+        self.assertIn("****", output)
+
+    def test_redact_value_recursive_dict(self) -> None:
+        key = "sk-or-v1-" + "a" * 40
+        data = {"outer": {"inner": key}}
+        result = _redact_value(data)
+        self.assertIsInstance(result, dict)
+        self.assertNotIn(key, str(result))
+        self.assertIn("****", str(result["outer"]["inner"]))
+
+    def test_redact_value_recursive_list(self) -> None:
+        key = "sk-or-v1-" + "a" * 40
+        data = [{"items": [{"token": key}]}]
+        result = _redact_value(data)
+        self.assertIsInstance(result, list)
+        self.assertNotIn(key, str(result))
+        self.assertIn("****", str(result[0]["items"][0]["token"]))
+
+    def test_redact_value_preserves_non_string(self) -> None:
+        data = {"count": 42, "active": True, "rate": 3.14}
+        result = _redact_value(data)
+        self.assertEqual(result, data)
+
+    def test_redact_value_preserves_tuple_shape(self) -> None:
+        key = "sk-or-v1-" + "a" * 40
+        data = ({"api_key": key},)
+        result = _redact_value(data)
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 1)
+        self.assertNotIn(key, str(result[0]["api_key"]))
+        self.assertIn("****", str(result[0]["api_key"]))
 
     def test_does_not_redact_innocent_strings(self) -> None:
         msg = "session=test-session action=create tool=codex"
@@ -420,7 +670,7 @@ class AuditPruneTests(unittest.TestCase):
         self.db = Database(self.db_path)
         self.db.migrate()
         self.old_cutoff = "2000-01-01T00:00:00+00:00"
-        self.recent = "2026-07-20T00:00:00+00:00"
+        self.recent = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
