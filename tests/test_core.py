@@ -429,6 +429,129 @@ class SessionIntegrationTests(unittest.TestCase):
         self.manager.kill(child_name)
         self.manager.kill("deleg-ctx-parent")
 
+    def test_opencode_rename_updates_config_content_env(self) -> None:
+        """OpenCode provider embeds context path in OPENCODE_CONFIG_CONTENT; rename must
+        update the env-var value to point at the renamed context file."""
+        from agent_console.providers import TOOL_BINARIES
+        original_bin = TOOL_BINARIES.get("opencode")
+        TOOL_BINARIES["opencode"] = Path("/usr/bin/zsh")
+        try:
+            models = [{
+                "id": "test-model",
+                "model": "opencode-go/test-model",
+                "provider": "opencode-go",
+                "name": "Test Model",
+                "status": "active",
+                "selectable": True,
+                "cost": {"input": 0.1, "output": 0.2, "cache_read": None, "reasoning": None},
+                "limits": {"context": 1000, "output": 100},
+                "capabilities": {"reasoning": False, "attachment": False, "toolcall": True},
+            }]
+            with patch.object(self.manager.models, "list", return_value={"models": models}):
+                session = self.manager.create(
+                    tool="opencode",
+                    profile="general",
+                    name="oc-rename-ctx",
+                    repository=str(self.workspace),
+                )
+            old_ctx_abs = str(self.manager.settings.state_dir / "contexts" / "oc-rename-ctx.md")
+            new_ctx_abs = str(self.manager.settings.state_dir / "contexts" / "oc-renamed-ctx.md")
+
+            launcher_path = self.manager.settings.state_dir / "launchers" / "oc-rename-ctx.sh"
+            launcher_text = launcher_path.read_text(encoding="utf-8")
+            self.assertIn("OPENCODE_CONFIG_CONTENT", launcher_text,
+                          "OpenCode launcher must contain OPENCODE_CONFIG_CONTENT")
+            self.assertIn(old_ctx_abs, launcher_text,
+                          "OPENCODE_CONFIG_CONTENT must reference current context file")
+
+            self.manager.rename("oc-rename-ctx", "oc-renamed-ctx")
+
+            new_launcher_path = self.manager.settings.state_dir / "launchers" / "oc-renamed-ctx.sh"
+            self.assertTrue(new_launcher_path.is_file())
+            new_launcher = new_launcher_path.read_text(encoding="utf-8")
+            self.assertIn("OPENCODE_CONFIG_CONTENT", new_launcher,
+                          "renamed launcher must retain OPENCODE_CONFIG_CONTENT")
+            self.assertNotIn(old_ctx_abs, new_launcher,
+                             "OPENCODE_CONFIG_CONTENT must not reference old context path after rename")
+            self.assertIn(new_ctx_abs, new_launcher,
+                          "OPENCODE_CONFIG_CONTENT must reference renamed context file path")
+
+            new_ctx = self.manager.settings.state_dir / "contexts" / "oc-renamed-ctx.md"
+            self.assertTrue(new_ctx.is_file())
+            ctx_text = new_ctx.read_text(encoding="utf-8")
+            self.assertIn("Session name: oc-renamed-ctx", ctx_text)
+            self.assertNotIn("oc-rename-ctx", ctx_text)
+
+            self.manager.kill("oc-renamed-ctx")
+        finally:
+            if original_bin is not None:
+                TOOL_BINARIES["opencode"] = original_bin
+            else:
+                TOOL_BINARIES.pop("opencode", None)
+
+    def test_hermes_delegate_rename_updates_context_file_env(self) -> None:
+        """Hermes provider embeds context path in AGENT_CONSOLE_CONTEXT_FILE; rename of a
+        delegated Hermes child must update the env-var value."""
+        from agent_console.providers import TOOL_BINARIES
+        original_bin = TOOL_BINARIES.get("hermes")
+        TOOL_BINARIES["hermes"] = Path("/usr/bin/zsh")
+        try:
+            secret_path = self.manager.auth.secrets_dir / "openrouter-main.env"
+            secret_path.parent.mkdir(parents=True, exist_ok=True)
+            secret_path.write_text("export OPENROUTER_API_KEY=test-key\n", encoding="utf-8")
+            secret_path.chmod(0o600)
+
+            parent = self.manager.create(
+                tool="shell",
+                profile="general",
+                name="hermes-ctx-parent",
+                repository=str(self.workspace),
+            )
+            child = self.manager.delegate(
+                profile="planner",
+                parent=parent["id"],
+                task="verify hermes context file env on rename",
+                tool="hermes",
+            )["session"]
+            child_name = child["tmux_name"]
+
+            old_ctx_abs = str(self.manager.settings.state_dir / "contexts" / f"{child_name}.md")
+            new_name = "hermes-child-renamed"
+            new_ctx_abs = str(self.manager.settings.state_dir / "contexts" / f"{new_name}.md")
+
+            child_launcher_path = self.manager.settings.state_dir / "launchers" / f"{child_name}.sh"
+            child_launcher = child_launcher_path.read_text(encoding="utf-8")
+            self.assertIn("AGENT_CONSOLE_CONTEXT_FILE", child_launcher,
+                          "Hermes launcher must contain AGENT_CONSOLE_CONTEXT_FILE")
+            self.assertIn(old_ctx_abs, child_launcher,
+                          "AGENT_CONSOLE_CONTEXT_FILE must reference child context file")
+
+            self.manager.rename(child_name, new_name)
+
+            new_launcher = self.manager.settings.state_dir / "launchers" / f"{new_name}.sh"
+            self.assertTrue(new_launcher.is_file())
+            new_text = new_launcher.read_text(encoding="utf-8")
+            self.assertIn("AGENT_CONSOLE_CONTEXT_FILE", new_text,
+                          "renamed launcher must retain AGENT_CONSOLE_CONTEXT_FILE")
+            self.assertNotIn(old_ctx_abs, new_text,
+                             "AGENT_CONSOLE_CONTEXT_FILE must not reference old path after rename")
+            self.assertIn(new_ctx_abs, new_text,
+                          "AGENT_CONSOLE_CONTEXT_FILE must reference renamed context file path")
+
+            new_ctx = self.manager.settings.state_dir / "contexts" / f"{new_name}.md"
+            self.assertTrue(new_ctx.is_file())
+            ctx_text = new_ctx.read_text(encoding="utf-8")
+            self.assertIn(f"Session name: {new_name}", ctx_text)
+            self.assertNotIn(child_name, ctx_text)
+
+            self.manager.kill(new_name)
+            self.manager.kill("hermes-ctx-parent")
+        finally:
+            if original_bin is not None:
+                TOOL_BINARIES["hermes"] = original_bin
+            else:
+                TOOL_BINARIES.pop("hermes", None)
+
     def test_reconcile_does_not_overwrite_exit_reason(self) -> None:
         session = self.manager.create(
             tool="shell", profile="general", name="exit-reason-idempotent",
