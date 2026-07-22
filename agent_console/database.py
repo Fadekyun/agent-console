@@ -10,6 +10,7 @@ from typing import Any, Iterator
 
 SCHEMA_VERSION = 10
 
+
 EVIDENCE_TYPES = frozenset({"review", "verification", "scout"})
 EVIDENCE_RESULTS = frozenset({"pass", "fail", "blocked"})
 REQUIRED_EVIDENCE_TYPES = frozenset({"review", "verification", "scout"})
@@ -165,6 +166,15 @@ class Database:
                     assigned_surface TEXT NOT NULL DEFAULT 'CLI',
                     assigned_at TEXT NOT NULL,
                     PRIMARY KEY (profile, skill_name)
+                );
+
+                CREATE TABLE IF NOT EXISTS group_members (
+                    id TEXT PRIMARY KEY,
+                    group_id TEXT NOT NULL REFERENCES session_groups(id) ON DELETE CASCADE,
+                    session_id TEXT NOT NULL REFERENCES sessions(id),
+                    added_at TEXT NOT NULL,
+                    added_by TEXT NOT NULL DEFAULT 'system',
+                    UNIQUE(group_id, session_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS session_waits (

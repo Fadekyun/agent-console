@@ -104,6 +104,24 @@ def parser() -> argparse.ArgumentParser:
     rename = session_commands.add_parser("rename")
     rename.add_argument("name")
     rename.add_argument("new_name")
+    group = session_commands.add_parser("group")
+    group_commands = group.add_subparsers(dest="group_command", required=True)
+    group_create = group_commands.add_parser("create")
+    group_create.add_argument("name")
+    group_create.add_argument("--purpose")
+    group_create.add_argument("--parent-session")
+    group_commands.add_parser("list")
+    group_show = group_commands.add_parser("show")
+    group_show.add_argument("group_id")
+    group_add = group_commands.add_parser("add")
+    group_add.add_argument("group_id")
+    group_add.add_argument("session_name")
+    group_remove = group_commands.add_parser("remove")
+    group_remove.add_argument("group_id")
+    group_remove.add_argument("session_name")
+    group_open = group_commands.add_parser("open")
+    group_open.add_argument("group_id")
+
     kill = session_commands.add_parser("kill")
     kill.add_argument("name")
     kill.add_argument("--yes", action="store_true")
@@ -475,6 +493,19 @@ def main(argv: list[str] | None = None) -> int:
                         allow_unmanaged=args.allow_unmanaged,
                     )
                 )
+            elif args.session_command == "group":
+                if args.group_command == "list":
+                    emit(manager.list_groups())
+                elif args.group_command == "create":
+                    emit(manager.create_group(args.name, args.purpose, args.parent_session))
+                elif args.group_command == "show":
+                    emit(manager.get_group(args.group_id))
+                elif args.group_command == "add":
+                    emit(manager.add_group_session(args.group_id, args.session_name))
+                elif args.group_command == "remove":
+                    emit(manager.remove_group_session(args.group_id, args.session_name))
+                elif args.group_command == "open":
+                    emit(manager.open_group(args.group_id))
         elif args.command == "profile":
             emit(
                 manager.list_profiles()

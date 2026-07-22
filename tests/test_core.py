@@ -1260,6 +1260,115 @@ class SessionGroupTests(unittest.TestCase):
         self.assertEqual(group["name"], "standalone")
         self.assertIsNone(group["parent_session_id"])
 
+    def test_add_session_to_group(self) -> None:
+        session = self.manager.create(
+            tool="shell", profile="general", name="add-to-group",
+            repository=str(self.workspace),
+        )
+        group = self.manager.create_group("member-test")
+        updated = self.manager.add_group_session(group["id"], "add-to-group")
+        self.assertEqual(updated["member_count"], 1)
+        self.assertEqual(updated["sessions"][0]["tmux_name"], "add-to-group")
+
+    def test_add_duplicate_session_to_group_raises(self) -> None:
+        session = self.manager.create(
+            tool="shell", profile="general", name="dup-group-test",
+            repository=str(self.workspace),
+        )
+        group = self.manager.create_group("dup-test")
+        self.manager.add_group_session(group["id"], "dup-group-test")
+        with self.assertRaises(ValueError):
+            self.manager.add_group_session(group["id"], "dup-group-test")
+
+    def test_remove_session_from_group(self) -> None:
+        session = self.manager.create(
+            tool="shell", profile="general", name="remove-from-group",
+            repository=str(self.workspace),
+        )
+        group = self.manager.create_group("remove-test")
+        self.manager.add_group_session(group["id"], "remove-from-group")
+        self.assertEqual(self.manager.get_group(group["id"])["member_count"], 1)
+        updated = self.manager.remove_group_session(group["id"], "remove-from-group")
+        self.assertEqual(updated["member_count"], 0)
+
+    def test_remove_nonexistent_member_raises(self) -> None:
+        session = self.manager.create(
+            tool="shell", profile="general", name="no-remove-test",
+            repository=str(self.workspace),
+        )
+        group = self.manager.create_group("no-remove")
+        with self.assertRaises(ValueError):
+            self.manager.remove_group_session(group["id"], "no-remove-test")
+
+    def test_create_group_with_unknown_parent_session_raises(self) -> None:
+        with self.assertRaises(KeyError):
+            self.manager.create_group("bad-parent", parent_session="nonexistent-session")
+
+    def test_create_group_with_valid_parent_session(self) -> None:
+        session = self.manager.create(
+            tool="shell", profile="general", name="valid-parent-session",
+            repository=str(self.workspace),
+        )
+        group = self.manager.create_group("good-parent", purpose="with parent", parent_session="valid-parent-session")
+        self.assertIsNotNone(group["parent_session_id"])
+
+    def test_create_group_audit_uses_provided_actor(self) -> None:
+        group = self.manager.create_group("audit-actor-test", actor="test-actor", surface="test-surface")
+        with self.manager.database.connect() as conn:
+            audit = conn.execute(
+                "SELECT actor, surface, details_json FROM audit_events WHERE action='group.created' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit["actor"], "test-actor")
+        self.assertEqual(audit["surface"], "test-surface")
+
+    def test_add_session_to_nonexistent_group_raises(self) -> None:
+        with self.assertRaises(KeyError):
+            self.manager.add_group_session("grp-nonexistent", "any-session")
+
+    def test_get_group_returns_members(self) -> None:
+        s1 = self.manager.create(
+            tool="shell", profile="general", name="get-group-s1",
+            repository=str(self.workspace),
+        )
+        group = self.manager.create_group("get-group")
+        self.manager.add_group_session(group["id"], "get-group-s1")
+        fetched = self.manager.get_group(group["id"])
+        self.assertEqual(fetched["name"], "get-group")
+        self.assertEqual(fetched["member_count"], 1)
+
+    def test_list_groups_includes_members(self) -> None:
+        s1 = self.manager.create(
+            tool="shell", profile="general", name="list-groups-s1",
+            repository=str(self.workspace),
+        )
+        group = self.manager.create_group("list-group-test")
+        self.manager.add_group_session(group["id"], "list-groups-s1")
+        groups = self.manager.list_groups()
+        match = next(g for g in groups if g["id"] == group["id"])
+        self.assertEqual(match["member_count"], 1)
+
+    def test_open_group_returns_running_and_stopped(self) -> None:
+        s1 = self.manager.create(
+            tool="shell", profile="general", name="open-group-s1",
+            repository=str(self.workspace),
+        )
+        s2 = self.manager.create(
+            tool="shell", profile="general", name="open-group-s2",
+            repository=str(self.workspace),
+        )
+        self.manager.kill("open-group-s2")
+        group = self.manager.create_group("open-group")
+        self.manager.add_group_session(group["id"], "open-group-s1")
+        self.manager.add_group_session(group["id"], "open-group-s2")
+        result = self.manager.open_group(group["id"])
+        self.assertEqual(result["member_count"], 2)
+        available_names = {s["tmux_name"] for s in result["available"]}
+        unavailable_names = {s["tmux_name"] for s in result["unavailable"]}
+        self.assertIn("open-group-s1", available_names)
+        self.assertIn("open-group-s2", unavailable_names)
+
     def test_delegation_guard_uses_schema(self) -> None:
         parent = self.manager.create(
             tool="shell", profile="general", name="deleg-guard-parent",

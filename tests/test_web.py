@@ -382,6 +382,99 @@ class WebTests(unittest.TestCase):
         self.assertFalse(killed.json()["running"])
         self.assertFalse(self.manager.tmux.exists("unmanaged-web-test"))
 
+    def test_group_create_and_list_api(self) -> None:
+        group = self.client.post("/api/session-groups", headers=self.headers, json={"name": "web-group-test", "purpose": "API test"}).json()
+        self.assertEqual(group["name"], "web-group-test")
+        self.assertEqual(group["purpose"], "API test")
+        groups = self.client.get("/api/session-groups", headers=self.headers).json()
+        self.assertGreaterEqual(len(groups), 1)
+
+    def test_group_membership_api(self) -> None:
+        group = self.client.post("/api/session-groups", headers=self.headers, json={"name": "web-member-test"}).json()
+        self.manager.create(
+            tool="shell", profile="general", name="web-member-session",
+            repository=str(self.workspace),
+        )
+        added = self.client.post(
+            f"/api/session-groups/{group['id']}/members",
+            headers=self.headers,
+            json={"session_name": "web-member-session"},
+        ).json()
+        self.assertEqual(added["member_count"], 1)
+        fetched = self.client.get(f"/api/session-groups/{group['id']}", headers=self.headers).json()
+        self.assertEqual(fetched["member_count"], 1)
+        removed = self.client.delete(
+            f"/api/session-groups/{group['id']}/members/web-member-session",
+            headers=self.headers,
+        ).json()
+        self.assertEqual(removed["member_count"], 0)
+
+    def test_group_create_with_unknown_parent_returns_400(self) -> None:
+        resp = self.client.post(
+            "/api/session-groups",
+            headers=self.headers,
+            json={"name": "bad-parent-web", "parent_session": "no-such-session"},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("not found", resp.json()["detail"])
+
+    def test_group_create_audit_shows_web_actor(self) -> None:
+        self.client.post(
+            "/api/session-groups",
+            headers=self.headers,
+            json={"name": "audit-web-test"},
+        )
+        with self.manager.database.connect() as conn:
+            audit = conn.execute(
+                "SELECT actor, surface FROM audit_events WHERE action='group.created' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit["actor"], "test@example.com")
+        self.assertEqual(audit["surface"], "web")
+
+    def test_group_add_duplicate_api_returns_400(self) -> None:
+        group = self.client.post("/api/session-groups", headers=self.headers, json={"name": "web-dup-test"}).json()
+        self.manager.create(
+            tool="shell", profile="general", name="web-dup-session",
+            repository=str(self.workspace),
+        )
+        self.client.post(
+            f"/api/session-groups/{group['id']}/members",
+            headers=self.headers,
+            json={"session_name": "web-dup-session"},
+        )
+        dup = self.client.post(
+            f"/api/session-groups/{group['id']}/members",
+            headers=self.headers,
+            json={"session_name": "web-dup-session"},
+        )
+        self.assertEqual(dup.status_code, 400)
+
+    def test_group_open_api(self) -> None:
+        group = self.client.post("/api/session-groups", headers=self.headers, json={"name": "web-open-test"}).json()
+        self.manager.create(
+            tool="shell", profile="general", name="web-open-s1",
+            repository=str(self.workspace),
+        )
+        self.manager.create(
+            tool="shell", profile="general", name="web-open-s2",
+            repository=str(self.workspace),
+        )
+        self.client.post(
+            f"/api/session-groups/{group['id']}/members",
+            headers=self.headers,
+            json={"session_name": "web-open-s1"},
+        )
+        self.client.post(
+            f"/api/session-groups/{group['id']}/members",
+            headers=self.headers,
+            json={"session_name": "web-open-s2"},
+        )
+        result = self.client.post(f"/api/session-groups/{group['id']}/open", headers=self.headers).json()
+        self.assertEqual(result["member_count"], 2)
+        self.assertGreaterEqual(len(result["available"]), 2)
+
     def test_websocket_detach_preserves_tmux(self) -> None:
         self.manager.create(
             tool="shell",

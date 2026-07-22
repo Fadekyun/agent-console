@@ -137,6 +137,9 @@ class GroupCreateRequest(BaseModel):
     purpose: str | None = Field(default=None, max_length=2000)
     parent_session: str | None = Field(default=None, max_length=80)
 
+class GroupMemberRequest(BaseModel):
+    session_name: str = Field(min_length=1, max_length=80)
+
 class PlanExecuteRequest(BaseModel):
     confirmed: bool = False
     profile: str = Field(default="coder", pattern="^(coder|bugfix)$")
@@ -317,9 +320,46 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     @app.post("/api/session-groups")
     async def create_session_group(
         payload: GroupCreateRequest,
-        _: AuthContext = Depends(require_identity),
+        auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
-        return session_manager.create_group(payload.name, payload.purpose, payload.parent_session)
+        return session_manager.create_group(
+            payload.name, payload.purpose, payload.parent_session,
+            actor=auth.actor, surface="web",
+        )
+
+    @app.get("/api/session-groups/{group_id}")
+    async def get_session_group(
+        group_id: str, _: AuthContext = Depends(require_identity)
+    ) -> dict[str, Any]:
+        return session_manager.get_group(group_id)
+
+    @app.post("/api/session-groups/{group_id}/members")
+    async def add_group_member(
+        group_id: str,
+        payload: GroupMemberRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.add_group_session(
+            group_id, payload.session_name,
+            actor=auth.actor, surface="web",
+        )
+
+    @app.delete("/api/session-groups/{group_id}/members/{session_name}")
+    async def remove_group_member(
+        group_id: str,
+        session_name: str,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.remove_group_session(
+            group_id, validate_session_name(session_name),
+            actor=auth.actor, surface="web",
+        )
+
+    @app.post("/api/session-groups/{group_id}/open")
+    async def open_session_group(
+        group_id: str, _: AuthContext = Depends(require_identity)
+    ) -> dict[str, Any]:
+        return session_manager.open_group(group_id)
 
     @app.get("/api/projects")
     async def projects_list(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
