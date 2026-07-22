@@ -1456,7 +1456,6 @@ class SessionManager:
             overlay_env = self._create_session_tool_overlay(
                 name, tool, context, isolated_root,
             )
-            )
 
             launcher_created = True
             launcher = self._write_launcher(
