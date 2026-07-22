@@ -96,6 +96,7 @@ class CreateSessionRequest(BaseModel):
     agent_mode: str | None = Field(default=None, pattern="^(plan|build|auto)$")
     provider: str | None = Field(default=None, pattern="^(openrouter|opencode-go)$")
     model: str | None = Field(default=None, max_length=240)
+    project_id: str | None = Field(default=None, max_length=80)
 
 
 class ModelEstimateRequest(BaseModel):
@@ -368,9 +369,12 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     @app.post("/api/projects")
     async def projects_create(
         payload: ProjectCreateRequest,
-        _: AuthContext = Depends(require_identity),
+        auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
-        return session_manager.create_project(payload.name, payload.repository, payload.description)
+        return session_manager.create_project(
+            payload.name, payload.repository, payload.description,
+            actor=auth.actor, surface="web",
+        )
 
     @app.get("/api/projects/{project_id}")
     async def projects_get(
@@ -382,7 +386,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     async def projects_update(
         project_id: str,
         payload: ProjectUpdateRequest,
-        _: AuthContext = Depends(require_identity),
+        auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
         return session_manager.update_project(
             project_id,
@@ -390,22 +394,40 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             repository=payload.repository,
             description=payload.description,
             status=payload.status,
+            actor=auth.actor, surface="web",
         )
 
     @app.delete("/api/projects/{project_id}")
     async def projects_delete(
-        project_id: str, _: AuthContext = Depends(require_identity)
+        project_id: str,
+        auth: AuthContext = Depends(require_identity),
     ) -> dict[str, str]:
-        session_manager.delete_project(project_id)
+        session_manager.delete_project(
+            project_id, actor=auth.actor, surface="web",
+        )
         return {"status": "deleted"}
 
     @app.post("/api/projects/{project_id}/assign")
     async def projects_assign(
         project_id: str,
         payload: AssignSessionRequest,
-        _: AuthContext = Depends(require_identity),
+        auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
-        return session_manager.assign_session_to_project(payload.session_name, project_id)
+        return session_manager.assign_session_to_project(
+            payload.session_name, project_id,
+            actor=auth.actor, surface="web",
+        )
+
+    @app.post("/api/projects/{project_id}/unassign")
+    async def projects_unassign(
+        project_id: str,
+        payload: AssignSessionRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.unassign_session_from_project(
+            payload.session_name, project_id,
+            actor=auth.actor, surface="web",
+        )
 
     @app.get("/api/sessions/{name}/wait-status")
     async def wait_status(
@@ -508,6 +530,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             provider=payload.provider,
             model=payload.model,
             creator_surface="web",
+            project_id=payload.project_id,
         )
 
     @app.post("/api/sessions/{parent}/delegations")

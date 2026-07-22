@@ -1420,15 +1420,41 @@ class ProjectTests(unittest.TestCase):
         subprocess.run(["tmux", "-L", self.socket, "kill-server"], capture_output=True)
         self.temp.cleanup()
 
+    def _audit_events(self) -> list[dict]:
+        with self.manager.database.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT * FROM audit_events ORDER BY id"
+            ).fetchall()]
+
     def test_create_project(self) -> None:
-        p = self.manager.create_project("test-proj", repository="/workspace/repo", description="A test")
+        (self.workspace / "repo").mkdir(exist_ok=True)
+        p = self.manager.create_project(
+            "test-proj", repository=str(self.workspace / "repo"), description="A test",
+            actor="test-user", surface="web",
+        )
         self.assertEqual(p["name"], "test-proj")
-        self.assertEqual(p["repository"], "/workspace/repo")
+        expected_repo = str((self.workspace / "repo").resolve())
+        self.assertEqual(p["repository"], expected_repo)
         self.assertEqual(p["status"], "active")
+        audits = self._audit_events()
+        create_audit = next(a for a in audits if a["action"] == "project.created")
+        self.assertEqual(create_audit["actor"], "test-user")
+        self.assertEqual(create_audit["surface"], "web")
+
+    def test_create_project_canonicalizes_relative_path(self) -> None:
+        (self.workspace / "sub").mkdir(exist_ok=True)
+        p = self.manager.create_project("rel-proj", repository="sub")
+        self.assertEqual(p["repository"], str((self.workspace / "sub").resolve()))
+
+    def test_create_project_rejects_outside_repo(self) -> None:
+        with self.assertRaises(ValueError):
+            self.manager.create_project("outside-proj", repository="/etc")
 
     def test_list_projects(self) -> None:
+        repo_b = str(self.workspace / "repo-b")
+        (self.workspace / "repo-b").mkdir(exist_ok=True)
         self.manager.create_project("proj-a")
-        self.manager.create_project("proj-b", repository="/workspace/repo")
+        self.manager.create_project("proj-b", repository=repo_b)
         projects = self.manager.list_projects()
         self.assertGreaterEqual(len(projects), 2)
 
@@ -1438,16 +1464,72 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(got["name"], "get-proj")
         self.assertIn("sessions", got)
 
-    def test_update_project(self) -> None:
+    def test_update_project_with_audit(self) -> None:
         p = self.manager.create_project("upd-proj")
-        updated = self.manager.update_project(p["id"], status="paused")
+        updated = self.manager.update_project(
+            p["id"], status="paused", actor="test-user", surface="web",
+        )
         self.assertEqual(updated["status"], "paused")
+        audits = self._audit_events()
+        update_audit = next(a for a in audits if a["action"] == "project.updated")
+        self.assertEqual(update_audit["actor"], "test-user")
+        self.assertEqual(update_audit["surface"], "web")
 
-    def test_delete_project(self) -> None:
+    def test_delete_project_with_audit(self) -> None:
         p = self.manager.create_project("del-proj")
-        self.manager.delete_project(p["id"])
+        self.manager.delete_project(p["id"], actor="test-user", surface="web")
         with self.assertRaises(KeyError):
             self.manager.get_project(p["id"])
+        audits = self._audit_events()
+        delete_audit = next(a for a in audits if a["action"] == "project.deleted")
+        self.assertEqual(delete_audit["actor"], "test-user")
+
+    def test_update_project_canonicalizes_repo(self) -> None:
+        (self.workspace / "new-repo").mkdir(exist_ok=True)
+        p = self.manager.create_project("upd-can-proj")
+        updated = self.manager.update_project(p["id"], repository="new-repo")
+        self.assertEqual(updated["repository"], str((self.workspace / "new-repo").resolve()))
+
+    def test_update_project_rejects_repo_change_with_assigned_sessions(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("upd-repo-block-proj", repository=repo)
+        self.manager.create(
+            tool="shell", profile="general", name="upd-repo-block-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        (self.workspace / "other-repo").mkdir(exist_ok=True)
+        with self.assertRaises(ValueError):
+            self.manager.update_project(proj["id"], repository=str(self.workspace / "other-repo"))
+
+    def test_update_project_allows_name_change_with_assigned_sessions(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("upd-name-ok-proj", repository=repo)
+        self.manager.create(
+            tool="shell", profile="general", name="upd-name-ok-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        updated = self.manager.update_project(proj["id"], name="renamed-proj")
+        self.assertEqual(updated["name"], "renamed-proj")
+        self.assertEqual(updated["repository"], repo)
+
+    def test_delete_project_rejects_assigned_sessions(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("del-assigned-proj", repository=repo)
+        self.manager.create(
+            tool="shell", profile="general", name="del-assigned-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        with self.assertRaises(ValueError):
+            self.manager.delete_project(proj["id"])
+
+    def test_delete_bad_id_returns_404(self) -> None:
+        with self.assertRaises(KeyError):
+            self.manager.delete_project("proj-nonexistent")
+
+    def test_create_project_duplicate_name_ok(self) -> None:
+        p1 = self.manager.create_project("dup-proj")
+        p2 = self.manager.create_project("dup-proj")
+        self.assertNotEqual(p1["id"], p2["id"])
 
     def test_assign_session_to_project(self) -> None:
         repo = str(self.workspace)
@@ -1457,6 +1539,7 @@ class ProjectTests(unittest.TestCase):
             repository=repo, project_id=proj["id"],
         )
         self.assertIsNotNone(session.get("id"))
+        self.assertEqual(session.get("project_id"), proj["id"])
 
     def test_assign_session_repo_mismatch(self) -> None:
         repo_a = str(self.workspace / "repo-a")
@@ -1469,7 +1552,218 @@ class ProjectTests(unittest.TestCase):
             repository=repo_b,
         )
         with self.assertRaises(ValueError):
-            self.manager.assign_session_to_project("mismatch-sess", proj["id"])
+            self.manager.assign_session_to_project(
+                "mismatch-sess", proj["id"], actor="test-user", surface="web",
+            )
+
+    def test_assign_session_without_project_repo_to_project_with_repo_rejected(self) -> None:
+        proj_repo = str(self.workspace / "proj-repo")
+        sess_repo = str(self.workspace)
+        (self.workspace / "proj-repo").mkdir(exist_ok=True)
+        proj = self.manager.create_project("sess-no-proj-repo-proj", repository=proj_repo)
+        self.manager.create(
+            tool="shell", profile="general", name="sess-no-proj-repo-sess",
+            repository=sess_repo,
+        )
+        with self.assertRaises(ValueError):
+            self.manager.assign_session_to_project("sess-no-proj-repo-sess", proj["id"])
+
+    def test_assign_session_not_found(self) -> None:
+        proj = self.manager.create_project("no-sess-proj")
+        with self.assertRaises(KeyError):
+            self.manager.assign_session_to_project("no-such-session", proj["id"])
+
+    def test_assign_to_bad_project_id(self) -> None:
+        with self.assertRaises(KeyError):
+            self.manager.assign_session_to_project("any-session", "proj-bad-id")
+
+    def test_unassign_session(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("unassign-proj", repository=repo)
+        self.manager.create(
+            tool="shell", profile="general", name="unassign-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        proj_after = self.manager.unassign_session_from_project(
+            "unassign-sess", proj["id"], actor="test-user", surface="web",
+        )
+        self.assertEqual(len(proj_after.get("sessions", [])), 0)
+        audits = self._audit_events()
+        unassign_audit = next(a for a in audits if a["action"] == "project.session.unassigned")
+        self.assertEqual(unassign_audit["actor"], "test-user")
+        self.assertIn("unassign-sess", unassign_audit["target"])
+
+    def test_unassign_not_assigned(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("unassign-not-proj", repository=repo)
+        self.manager.create(
+            tool="shell", profile="general", name="unassign-not",
+            repository=repo,
+        )
+        with self.assertRaises(ValueError):
+            self.manager.unassign_session_from_project("unassign-not", proj["id"])
+
+    def test_unassign_wrong_project_id(self) -> None:
+        repo = str(self.workspace)
+        proj_a = self.manager.create_project("unassign-wrong-a", repository=repo)
+        proj_b = self.manager.create_project("unassign-wrong-b", repository=repo)
+        self.manager.create(
+            tool="shell", profile="general", name="unassign-wrong-sess",
+            repository=repo, project_id=proj_a["id"],
+        )
+        with self.assertRaises(ValueError):
+            self.manager.unassign_session_from_project("unassign-wrong-sess", proj_b["id"])
+
+    def test_unassign_bad_session(self) -> None:
+        proj = self.manager.create_project("unassign-bad-sess-proj")
+        with self.assertRaises(KeyError):
+            self.manager.unassign_session_from_project("no-such-session", proj["id"])
+
+    def test_unassign_bad_project_id(self) -> None:
+        with self.assertRaises(KeyError):
+            self.manager.unassign_session_from_project("any-session", "proj-bad-id")
+
+    def test_create_session_with_project_repo_enforced(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("enforce-proj", repository=repo)
+        session = self.manager.create(
+            tool="shell", profile="general", name="enforce-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        self.assertEqual(session["project_id"], proj["id"])
+
+    def test_create_session_rejects_incompatible_repo(self) -> None:
+        repo_proj = str(self.workspace / "proj-repo")
+        repo_sess = str(self.workspace / "sess-repo")
+        (self.workspace / "proj-repo").mkdir(exist_ok=True)
+        (self.workspace / "sess-repo").mkdir(exist_ok=True)
+        proj = self.manager.create_project("repo-enforce-proj", repository=repo_proj)
+        with self.assertRaises(ValueError):
+            self.manager.create(
+                tool="shell", profile="general", name="bad-repo-sess",
+                repository=repo_sess, project_id=proj["id"],
+            )
+
+    def test_create_session_with_bad_project_id(self) -> None:
+        with self.assertRaises(KeyError):
+            self.manager.create(
+                tool="shell", profile="general", name="bad-proj-sess",
+                repository=str(self.workspace), project_id="proj-no-such",
+            )
+
+    def test_create_session_with_paused_project_rejected(self) -> None:
+        proj = self.manager.create_project("paused-proj")
+        self.manager.update_project(proj["id"], status="paused")
+        with self.assertRaises(ValueError):
+            self.manager.create(
+                tool="shell", profile="general", name="paused-sess",
+                repository=str(self.workspace), project_id=proj["id"],
+            )
+
+    def test_unassign_then_delete_ok(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("unassign-then-del-proj", repository=repo)
+        self.manager.create(
+            tool="shell", profile="general", name="unassign-then-del-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        self.manager.unassign_session_from_project("unassign-then-del-sess", proj["id"])
+        self.manager.delete_project(proj["id"])
+        with self.assertRaises(KeyError):
+            self.manager.get_project(proj["id"])
+
+    def test_restart_rejects_paused_project(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("restart-paused-proj", repository=repo)
+        self.manager.create(
+            tool="shell", profile="general", name="restart-paused-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        self.manager.update_project(proj["id"], status="paused")
+        with self.assertRaises(ValueError):
+            self.manager.restart("restart-paused-sess")
+
+    def test_launcher_includes_project_env_vars(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("launcher-proj", repository=repo)
+        session = self.manager.create(
+            tool="shell", profile="general", name="launcher-proj-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        launcher = Path(session["launcher_path"]).read_text(encoding="utf-8")
+        self.assertIn(f"AGENT_CONSOLE_PROJECT_ID={proj['id']}", launcher)
+        self.assertIn("AGENT_CONSOLE_PROJECT_NAME=launcher-proj", launcher)
+        self.assertIn(f"AGENT_CONSOLE_PROJECT_REPOSITORY={shlex.quote(repo)}", launcher)
+
+    def test_context_includes_project_identity(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("ctx-proj", repository=repo)
+        session = self.manager.create(
+            tool="shell", profile="general", name="ctx-proj-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        context = self.manager.session_context("ctx-proj-sess")
+        self.assertIn(f"Project ID: {proj['id']}", context["context"])
+        self.assertIn("Project name: ctx-proj", context["context"])
+        self.assertIn(f"Project repository: {repo}", context["context"])
+
+    def test_assign_audit_shows_actor_and_surface(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("audit-assign-proj", repository=repo)
+        self.manager.create(
+            tool="shell", profile="general", name="audit-assign-sess",
+            repository=repo,
+        )
+        self.manager.assign_session_to_project(
+            "audit-assign-sess", proj["id"], actor="cli-admin", surface="CLI",
+        )
+        audits = self._audit_events()
+        assign_audit = next(a for a in audits if a["action"] == "project.session.assigned")
+        self.assertEqual(assign_audit["actor"], "cli-admin")
+        self.assertEqual(assign_audit["surface"], "CLI")
+
+    def test_assign_to_paused_project_rejected(self) -> None:
+        proj = self.manager.create_project("paused-assign-proj")
+        self.manager.update_project(proj["id"], status="paused")
+        self.manager.create(
+            tool="shell", profile="general", name="paused-assign-sess",
+            repository=str(self.workspace),
+        )
+        with self.assertRaises(ValueError):
+            self.manager.assign_session_to_project("paused-assign-sess", proj["id"])
+
+    def test_assign_duplicate_to_same_project_rejected(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("dup-assign-proj", repository=repo)
+        self.manager.create(
+            tool="shell", profile="general", name="dup-assign-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        with self.assertRaises(ValueError):
+            self.manager.assign_session_to_project("dup-assign-sess", proj["id"])
+
+    def test_assign_to_different_project_rejected(self) -> None:
+        repo = str(self.workspace)
+        proj_a = self.manager.create_project("diff-assign-a", repository=repo)
+        proj_b = self.manager.create_project("diff-assign-b", repository=repo)
+        self.manager.create(
+            tool="shell", profile="general", name="diff-assign-sess",
+            repository=repo, project_id=proj_a["id"],
+        )
+        with self.assertRaises(ValueError):
+            self.manager.assign_session_to_project("diff-assign-sess", proj_b["id"])
+
+    def test_restart_with_active_project_ok(self) -> None:
+        repo = str(self.workspace)
+        proj = self.manager.create_project("restart-ok-proj", repository=repo)
+        session = self.manager.create(
+            tool="shell", profile="general", name="restart-ok-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        self.assertTrue(session["running"])
+        restarted = self.manager.restart("restart-ok-sess")
+        self.assertTrue(restarted["running"])
+        self.assertEqual(restarted.get("project_id"), proj["id"])
 
 
 if __name__ == "__main__":
