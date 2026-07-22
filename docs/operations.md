@@ -86,12 +86,15 @@ runtime paths (CLI, web UI, API, and model catalogue). The built-in auth context
 start — only the recognized built-in entry (`opencode-go-default` with source_ref
 `opencode/provider-native`) is updated; arbitrary custom contexts are untouched.
 
-**Historical launcher/model IDs:** Running sessions created before this rename are unaffected.
-Their launcher scripts and tmux panes continue with the provider value and model IDs they were
-started with. Old pinned launcher files that reference the `opencode-go` provider or model
-prefix (e.g. `opencode-go/...`) will still execute — the OpenCode CLI itself accepts either
-identifier. Users may optionally recreate pinned launchers after a CLI upgrade by using the
-current `opencode` identifier throughout.
+**Historical launcher/model IDs:** Currently running tmux sessions and agent processes
+created before this rename are unaffected — they continue with the provider value and model
+IDs they were started with. However, restarting or recreating from an old pinned launcher
+script that references the `opencode-go` provider or model prefix (e.g. `opencode-go/...`)
+may fail after an OpenCode CLI upgrade. The OpenCode CLI 1.18.3 accepts only `opencode` as
+the provider identifier. Users who restart a session from an old launcher must update the
+launcher or create a new session through the current Agent Console UI/CLI, which generates
+launcher scripts with the current `opencode` identifier. No automatic launcher rewrite is
+performed — existing files on disk are never modified by the rename.
 
 ## Responsive browser behavior
 

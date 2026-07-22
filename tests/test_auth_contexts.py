@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from agent_console.auth import AuthRegistry
@@ -105,7 +106,28 @@ class AuthContextTests(unittest.TestCase):
         self.assertEqual(entry["provider"], "opencode")
         self.assertEqual(entry["source_ref"], "opencode/provider-native")
 
-    def test_custom_context_not_migrated(self) -> None:
+    def test_builtin_key_with_custom_source_ref_not_migrated(self) -> None:
+        entry = {
+            "provider": "opencode-go",
+            "kind": "oauth-native",
+            "source_ref": "my-custom/source",
+            "enabled": True,
+            "verified": False,
+        }
+        data = {
+            "version": 1,
+            "defaults": {"opencode": "opencode-go-default"},
+            "contexts": {"opencode": {"opencode-go-default": entry}},
+        }
+        self.registry.registry_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        self.registry._ensure_builtin_contexts()
+        persisted = json.loads(self.registry.registry_path.read_text(encoding="utf-8"))
+        entry = persisted["contexts"]["opencode"]["opencode-go-default"]
+        self.assertEqual(entry["provider"], "opencode-go")
+        self.assertEqual(entry["source_ref"], "my-custom/source")
+        self.assertEqual(persisted["defaults"]["opencode"], "opencode-go-default")
+
+    def test_completely_custom_key_not_migrated(self) -> None:
         custom = {
             "provider": "opencode-go",
             "kind": "api-key",
@@ -124,6 +146,11 @@ class AuthContextTests(unittest.TestCase):
         entry = persisted["contexts"]["opencode"]["my-custom"]
         self.assertEqual(entry["provider"], "opencode-go")
         self.assertEqual(entry["secret_ref"], "my-custom-key")
+
+    def test_already_current_entry_does_not_write(self) -> None:
+        with patch.object(self.registry, "_write") as mock_write:
+            self.registry._ensure_builtin_contexts()
+            mock_write.assert_not_called()
 
     def test_all_provider_adapters_expose_the_lifecycle_contract(self) -> None:
         contract = {
