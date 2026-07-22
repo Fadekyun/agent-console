@@ -440,8 +440,8 @@ class SessionIntegrationTests(unittest.TestCase):
         try:
             models = [{
                 "id": "test-model",
-                "model": "opencode-go/test-model",
-                "provider": "opencode-go",
+                "model": "opencode/test-model",
+                "provider": "opencode",
                 "name": "Test Model",
                 "status": "active",
                 "selectable": True,
@@ -945,13 +945,13 @@ class SessionIntegrationTests(unittest.TestCase):
 
     def test_tool_without_isolation_passes_without_assignments(self) -> None:
         models = [{
-            "id": "cheap", "model": "opencode-go/cheap", "provider": "opencode-go",
+            "id": "cheap", "model": "opencode/cheap", "provider": "opencode",
             "name": "Cheap", "status": "active", "selectable": True,
             "cost": {"input": 0.1, "output": 0.2, "cache_read": None, "reasoning": None},
             "limits": {"context": 1000, "output": 100},
             "capabilities": {"reasoning": False, "attachment": False, "toolcall": True},
         }]
-        with patch.object(self.manager.models, "list", return_value={"provider": "opencode-go", "models": models}):
+        with patch.object(self.manager.models, "list", return_value={"provider": "opencode", "models": models}):
             with patch.object(
                 self.manager,
                 "_launch_spec",
