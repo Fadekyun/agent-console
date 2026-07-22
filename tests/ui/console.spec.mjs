@@ -1,5 +1,13 @@
 import { expect, test } from '@playwright/test';
 
+const SKILLS_RESPONSE = {
+  entries: [
+    { name: 'test-skill', description: 'A test skill', kind: 'standard', tools: ['codex', 'claude'], allowed_profiles: null, requires_approval: false, source_present: true, synced: [{ tool: 'codex', linked: true }, { tool: 'claude', linked: false }], assigned_to: [{ profile: 'coder', assigned_at: '2026-07-20T00:00:00', assigned_by: 'test' }] },
+    { name: 'super-skill', description: 'A superpower', kind: 'superpower', tools: ['codex'], allowed_profiles: ['general', 'coder'], requires_approval: true, source_present: true, synced: [{ tool: 'codex', linked: true }], assigned_to: [] },
+  ],
+  errors: [],
+};
+
 function session(overrides = {}) {
   return {
     id: 'sess-root', tmux_name: 'codex-root', tool: 'codex', profile: 'general',
@@ -291,19 +299,61 @@ test('profiles view shows profile cards with metadata', async ({ page }, testInf
   await expect(page.locator('.profile-card').first()).toContainText('General');
 });
 
-test('skills view renders skill cards from catalog', async ({ page }, testInfo) => {
+test('skills view renders skill cards from catalog with assignments and approval info', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop skills coverage.');
   await page.route('**/api/skills', async (route) => {
-    await route.fulfill({
-      status: 200, contentType: 'application/json',
-      body: JSON.stringify({ entries: [{ name: 'test-skill', description: 'A test skill', kind: 'standard', tools: ['codex', 'claude'], synced: [{ tool: 'codex', linked: true }, { tool: 'claude', linked: false }], source_present: true }], errors: [] }),
-    });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(SKILLS_RESPONSE) });
   });
   await mockApi(page);
   await page.goto('/desktop#skills');
   await expect(page.locator('#skills-list')).toBeVisible();
   await expect(page.locator('.skill-card')).not.toHaveCount(0);
-  await expect(page.locator('.skill-card').first()).toContainText('test-skill');
+  const firstCard = page.locator('.skill-card').first();
+  await expect(firstCard).toContainText('test-skill');
+  await expect(firstCard).toContainText('standard');
+  await expect(firstCard).toContainText('Standard skill · no approval gate');
+  await expect(firstCard).toContainText('Assigned to:');
+  await expect(firstCard).toContainText('coder');
+  await expect(firstCard.locator('button')).toContainText('Assign to profile');
+  await expect(firstCard.locator('button')).toContainText('Remove from coder');
+  const superCard = page.locator('.skill-card').nth(1);
+  await expect(superCard).toContainText('super-skill');
+  await expect(superCard).toContainText('superpower');
+  await expect(superCard).toContainText('Superpower · approval required');
+});
+
+test('skill assign dialog opens and dispatches assign API call', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop skills coverage.');
+  await page.route('**/api/skills', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(SKILLS_RESPONSE) });
+  });
+  const assignRequest = page.waitForRequest((r) => r.url().includes('/api/skills/assign') && r.method() === 'POST');
+  await page.route('**/api/skills/assign', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ profile: 'planner', skill_name: 'super-skill' }) });
+  });
+  await mockApi(page);
+  await page.goto('/desktop#skills');
+  await page.locator('.skill-card').nth(1).getByRole('button', { name: 'Assign to profile' }).click();
+  await expect(page.locator('#assign-skill-dialog')).toBeVisible();
+  await expect(page.locator('#assign-skill-title')).toContainText('Assign: super-skill');
+  await page.locator('#assign-skill-form select[name="profile"]').selectOption('planner');
+  await page.locator('#assign-skill-form button[type="submit"]').click();
+  await assignRequest;
+});
+
+test('skill unassign button dispatches unassign API call', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop skills coverage.');
+  await page.route('**/api/skills', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(SKILLS_RESPONSE) });
+  });
+  const unassignRequest = page.waitForRequest((r) => r.url().includes('/api/skills/unassign') && r.method() === 'POST');
+  await page.route('**/api/skills/unassign', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ profile: 'coder', skill_name: 'test-skill' }) });
+  });
+  await mockApi(page);
+  await page.goto('/desktop#skills');
+  await page.locator('.skill-card').first().getByRole('button', { name: 'Remove from coder' }).click();
+  await unassignRequest;
 });
 
 test('orchestration view shows session groups', async ({ page }, testInfo) => {

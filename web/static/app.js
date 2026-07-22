@@ -508,8 +508,80 @@ function skillCard(entry) {
   const sourceBadge = document.createElement('span'); sourceBadge.className = `skill-tool-badge ${entry.source_present ? 'linked' : 'missing'}`;
   sourceBadge.textContent = entry.source_present ? 'source present' : 'source missing';
   tools.append(sourceBadge);
+
+  const approvalInfo = document.createElement('div'); approvalInfo.className = 'skill-approval-info';
+  if (entry.kind === 'superpower') {
+    const allowed = entry.allowed_profiles && entry.allowed_profiles.length ? entry.allowed_profiles.join(', ') : 'all profiles';
+    approvalInfo.textContent = entry.requires_approval ? `Superpower · approval required · profiles: ${allowed}` : `Superpower · profiles: ${allowed}`;
+  } else {
+    approvalInfo.textContent = 'Standard skill · no approval gate';
+  }
+  card.append(approvalInfo);
+
+  const assignedList = document.createElement('div'); assignedList.className = 'skill-assigned-list';
+  if (entry.assigned_to && entry.assigned_to.length) {
+    const label = document.createElement('span'); label.className = 'skill-assigned-label'; label.textContent = 'Assigned to:';
+    assignedList.append(label);
+    entry.assigned_to.forEach((a) => {
+      const tag = document.createElement('span'); tag.className = 'skill-assigned-tag';
+      tag.textContent = a.profile;
+      tag.title = `Assigned at ${a.assigned_at} by ${a.assigned_by}`;
+      assignedList.append(tag);
+    });
+  }
+  card.append(assignedList);
+
+  const actions = document.createElement('div'); actions.className = 'dialog-actions';
+  const assignBtn = document.createElement('button'); assignBtn.textContent = 'Assign to profile'; assignBtn.className = 'compact';
+  assignBtn.onclick = () => openAssignSkillDialog(entry.name);
+  actions.append(assignBtn);
+  if (entry.assigned_to && entry.assigned_to.length) {
+    entry.assigned_to.forEach((a) => {
+      const unassignBtn = document.createElement('button'); unassignBtn.textContent = `Remove from ${a.profile}`; unassignBtn.className = 'compact danger';
+      unassignBtn.onclick = () => unassignSkill(entry.name, a.profile);
+      actions.append(unassignBtn);
+    });
+  }
+  card.append(actions);
+
   card.append(header, desc, tools);
   return card;
+}
+
+async function openAssignSkillDialog(skillName) {
+  const form = $('#assign-skill-form'); form.reset();
+  form.elements.skill_name.value = skillName;
+  $('#assign-skill-title').textContent = `Assign: ${skillName}`;
+  const profiles = await api('/api/profiles');
+  form.elements.profile.replaceChildren(...profiles.map((p) => new Option(p.display_name || p.name, p.name)));
+  $('#assign-skill-status').textContent = '';
+  $('#assign-skill-dialog').showModal();
+}
+
+$('#assign-skill-form').onsubmit = async (event) => {
+  event.preventDefault(); const submit = event.target.querySelector('button[type="submit"]'); submit.disabled = true;
+  const status = $('#assign-skill-status'); status.textContent = 'Assigning…';
+  try {
+    await api('/api/skills/assign', {
+      method: 'POST',
+      body: JSON.stringify({ profile: event.target.elements.profile.value, skill_name: event.target.elements.skill_name.value }),
+    });
+    status.textContent = 'Assigned.';
+    setTimeout(() => { $('#assign-skill-dialog').close(); }, 800);
+    renderSkills();
+  } catch (e) { status.textContent = e.message; } finally { submit.disabled = false; }
+};
+
+async function unassignSkill(skillName, profile) {
+  const status = $('#skills-status'); status.textContent = `Removing ${skillName} from ${profile}…`;
+  try {
+    await api('/api/skills/unassign', {
+      method: 'POST',
+      body: JSON.stringify({ profile, skill_name: skillName }),
+    });
+    status.textContent = `Removed ${skillName} from ${profile}.`;
+    renderSkills();
+  } catch (e) { status.textContent = e.message; }
 }
 
 async function runSkillsSync() {

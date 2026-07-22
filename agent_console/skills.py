@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .database import Database, utc_now
 from .validation import PROFILES
 
 SUPPORTED_TOOLS = frozenset({"codex", "claude", "hermes"})
@@ -284,3 +285,131 @@ def check_superpower_approval(
             "enforcement": "pending_approval",
         }
     return {"allowed": True, "reason": None, "enforcement": "enforced"}
+
+
+def assign_skill(
+    db: Database,
+    profile: str,
+    skill_name: str,
+    *,
+    actor: str = "system",
+    surface: str = "CLI",
+    canonical_root: Path | None = None,
+) -> dict[str, Any]:
+    if profile not in PROFILES:
+        raise ValueError(f"unknown profile: {profile!r}")
+    root = canonical_root or _resolve_canonical_root()
+    entries = _live_entries(root)
+    entry = next((e for e in entries if e["name"] == skill_name), None)
+    if entry is None:
+        raise ValueError(f"unknown skill in catalog: {skill_name!r}")
+    allowed = entry.get("allowed_profiles")
+    if allowed is not None and profile not in allowed:
+        raise ValueError(
+            f"profile {profile!r} is not in skill {skill_name!r} allowed_profiles: {sorted(allowed)}"
+        )
+    with db.connect() as conn:
+        existing = conn.execute(
+            "SELECT assigned_at FROM skill_assignments WHERE profile=? AND skill_name=?",
+            (profile, skill_name),
+        ).fetchone()
+        if existing is not None:
+            raise ValueError(
+                f"skill {skill_name!r} is already assigned to profile {profile!r} "
+                f"(assigned at {existing['assigned_at']})"
+            )
+        conn.execute(
+            "INSERT INTO skill_assignments(profile, skill_name, assigned_by, assigned_surface, assigned_at) "
+            "VALUES(?, ?, ?, ?, ?)",
+                (profile, skill_name, actor, surface, utc_now()),
+        )
+    db.audit(
+        "skill.assigned",
+        f"{profile}/{skill_name}",
+        "success",
+        actor=actor,
+        surface=surface,
+        details={"profile": profile, "skill_name": skill_name, "kind": entry["kind"]},
+    )
+    return {
+        "profile": profile,
+        "skill_name": skill_name,
+        "kind": entry["kind"],
+        "requires_approval": entry.get("requires_approval", False),
+    }
+
+
+def unassign_skill(
+    db: Database,
+    profile: str,
+    skill_name: str,
+    *,
+    actor: str = "system",
+    surface: str = "CLI",
+) -> dict[str, Any]:
+    if profile not in PROFILES:
+        raise ValueError(f"unknown profile: {profile!r}")
+    with db.connect() as conn:
+        existing = conn.execute(
+            "SELECT assigned_at FROM skill_assignments WHERE profile=? AND skill_name=?",
+            (profile, skill_name),
+        ).fetchone()
+        if existing is None:
+            raise ValueError(
+                f"skill {skill_name!r} is not assigned to profile {profile!r}"
+            )
+        conn.execute(
+            "DELETE FROM skill_assignments WHERE profile=? AND skill_name=?",
+            (profile, skill_name),
+        )
+    db.audit(
+        "skill.unassigned",
+        f"{profile}/{skill_name}",
+        "success",
+        actor=actor,
+        surface=surface,
+        details={"profile": profile, "skill_name": skill_name},
+    )
+    return {"profile": profile, "skill_name": skill_name}
+
+
+def list_assignments(db: Database) -> list[dict[str, Any]]:
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT profile, skill_name, assigned_by, assigned_surface, assigned_at "
+            "FROM skill_assignments ORDER BY assigned_at"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_profile_assignments(db: Database, profile: str) -> list[dict[str, Any]]:
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT skill_name, assigned_by, assigned_surface, assigned_at "
+            "FROM skill_assignments WHERE profile=? ORDER BY skill_name",
+            (profile,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def enrich_catalog_with_assignments(
+    catalog: dict[str, Any],
+    assignments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    assigned_map: dict[str, list[dict[str, Any]]] = {}
+    for a in assignments:
+        skill = a["skill_name"]
+        assigned_map.setdefault(skill, []).append({
+            "profile": a["profile"],
+            "assigned_at": a["assigned_at"],
+            "assigned_by": a["assigned_by"],
+        })
+    enriched_entries = []
+    for entry in catalog.get("entries", []):
+        entry = dict(entry)
+        name = entry["name"]
+        entry["assigned_to"] = assigned_map.get(name, [])
+        enriched_entries.append(entry)
+    result = dict(catalog)
+    result["entries"] = enriched_entries
+    return result

@@ -28,7 +28,15 @@ from .config import Settings
 from .logging_config import configure_logging, configure_uvicorn_logging
 from .manager import SessionManager
 from .profiles import profile_summaries
-from .skills import doctor_skills, skill_catalog, sync_skills
+from .skills import (
+    assign_skill,
+    doctor_skills,
+    enrich_catalog_with_assignments,
+    list_assignments,
+    skill_catalog,
+    sync_skills,
+    unassign_skill,
+)
 from .validation import TOOLS, validate_session_name
 
 
@@ -144,6 +152,10 @@ class PromoteRequest(BaseModel):
 
 class AssignSessionRequest(BaseModel):
     session_name: str = Field(min_length=1, max_length=80)
+
+class SkillAssignRequest(BaseModel):
+    profile: str = Field(min_length=1, pattern="^[a-z_]+$")
+    skill_name: str = Field(min_length=1, max_length=200)
 
 class ProjectCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
@@ -528,7 +540,9 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
 
     @app.get("/api/skills")
     async def skills_api(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
-        return skill_catalog()
+        catalog = skill_catalog()
+        assignments = list_assignments(session_manager.database)
+        return enrich_catalog_with_assignments(catalog, assignments)
 
     class SkillsSyncRequest(BaseModel):
         pass
@@ -552,6 +566,36 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     @app.get("/api/deploy/canary")
     async def deploy_canary(_: AuthContext = Depends(require_identity)) -> dict[str, Any] | None:
         return session_manager.canary_release()
+
+    @app.get("/api/skills/assignments")
+    async def skills_assignments(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
+        return list_assignments(session_manager.database)
+
+    @app.post("/api/skills/assign")
+    async def skills_assign(
+        payload: SkillAssignRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return assign_skill(
+            session_manager.database,
+            payload.profile,
+            payload.skill_name,
+            actor=auth.actor,
+            surface=auth.access_surface,
+        )
+
+    @app.post("/api/skills/unassign")
+    async def skills_unassign(
+        payload: SkillAssignRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return unassign_skill(
+            session_manager.database,
+            payload.profile,
+            payload.skill_name,
+            actor=auth.actor,
+            surface=auth.access_surface,
+        )
 
     @app.post("/api/sessions/{name}/kill")
     async def kill(

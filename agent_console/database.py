@@ -148,6 +148,15 @@ class Database:
                     FOREIGN KEY(plan_id) REFERENCES plans(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS skill_assignments (
+                    profile TEXT NOT NULL,
+                    skill_name TEXT NOT NULL,
+                    assigned_by TEXT NOT NULL DEFAULT 'system',
+                    assigned_surface TEXT NOT NULL DEFAULT 'CLI',
+                    assigned_at TEXT NOT NULL,
+                    PRIMARY KEY (profile, skill_name)
+                );
+
                 CREATE TABLE IF NOT EXISTS session_waits (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     parent_session_id TEXT NOT NULL,

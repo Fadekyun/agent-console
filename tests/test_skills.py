@@ -1,18 +1,24 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
+from agent_console.database import Database
 from agent_console.skills import (
     SKILL_CATALOG,
     SUPPORTED_TOOLS,
+    assign_skill,
     check_superpower_approval,
     doctor_skills,
+    enrich_catalog_with_assignments,
+    list_assignments,
     skill_catalog,
     sync_skills,
+    unassign_skill,
     validate_catalog,
 )
 from agent_console.validation import PROFILES
@@ -119,6 +125,151 @@ class SyncDoctorTests(unittest.TestCase):
         result = doctor_skills(canonical_root=self.root, home=self.root)
         self.assertIsInstance(result["problems"], list)
         self.assertIn("ok", result)
+
+
+class SkillAssignmentTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp.name) / "test.sqlite3"
+        self.db = Database(self.db_path)
+        self.db.migrate()
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_assign_skill_to_profile(self) -> None:
+        if not SKILL_CATALOG:
+            self.skipTest("no skills in catalog")
+        skill = SKILL_CATALOG[0]
+        result = assign_skill(self.db, "general", skill["name"], actor="test", surface="test")
+        self.assertEqual(result["profile"], "general")
+        self.assertEqual(result["skill_name"], skill["name"])
+        self.assertEqual(result["kind"], skill["kind"])
+
+    def test_assign_raises_on_duplicate(self) -> None:
+        if not SKILL_CATALOG:
+            self.skipTest("no skills in catalog")
+        skill = SKILL_CATALOG[0]
+        assign_skill(self.db, "coder", skill["name"])
+        with self.assertRaises(ValueError):
+            assign_skill(self.db, "coder", skill["name"])
+
+    def test_assign_raises_on_unknown_profile(self) -> None:
+        if not SKILL_CATALOG:
+            self.skipTest("no skills in catalog")
+        skill = SKILL_CATALOG[0]
+        with self.assertRaises(ValueError):
+            assign_skill(self.db, "nonexistent", skill["name"])
+
+    def test_assign_raises_on_unknown_skill(self) -> None:
+        with self.assertRaises(ValueError):
+            assign_skill(self.db, "general", "nonexistent-skill")
+
+    def test_assign_raises_when_profile_not_in_allowed_profiles(self) -> None:
+        skill_dir = Path(self.temp.name) / "restricted-skill"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nkind: superpower\ndescription: Restricted\nallowed_profiles: coder, planner\n---\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(ValueError) as ctx:
+            assign_skill(
+                self.db, "general", "restricted-skill",
+                canonical_root=Path(self.temp.name),
+            )
+        self.assertIn("general", str(ctx.exception))
+        self.assertIn("restricted-skill", str(ctx.exception))
+        self.assertIn("coder", str(ctx.exception))
+        self.assertIn("planner", str(ctx.exception))
+
+    def test_unassign_skill(self) -> None:
+        if not SKILL_CATALOG:
+            self.skipTest("no skills in catalog")
+        skill = SKILL_CATALOG[0]
+        assign_skill(self.db, "planner", skill["name"])
+        result = unassign_skill(self.db, "planner", skill["name"])
+        self.assertEqual(result["profile"], "planner")
+        self.assertEqual(result["skill_name"], skill["name"])
+
+    def test_unassign_raises_if_not_assigned(self) -> None:
+        if not SKILL_CATALOG:
+            self.skipTest("no skills in catalog")
+        skill = SKILL_CATALOG[0]
+        with self.assertRaises(ValueError):
+            unassign_skill(self.db, "general", skill["name"])
+
+    def test_unassign_raises_on_unknown_profile(self) -> None:
+        if not SKILL_CATALOG:
+            self.skipTest("no skills in catalog")
+        skill = SKILL_CATALOG[0]
+        with self.assertRaises(ValueError):
+            unassign_skill(self.db, "nonexistent", skill["name"])
+
+    def test_list_assignments(self) -> None:
+        if len(SKILL_CATALOG) < 2:
+            self.skipTest("need at least 2 skills in catalog")
+        assign_skill(self.db, "coder", SKILL_CATALOG[0]["name"])
+        assign_skill(self.db, "planner", SKILL_CATALOG[1]["name"])
+        assignments = list_assignments(self.db)
+        self.assertEqual(len(assignments), 2)
+        profiles = {a["profile"] for a in assignments}
+        self.assertIn("coder", profiles)
+        self.assertIn("planner", profiles)
+
+    def test_enrich_catalog_with_assignments(self) -> None:
+        catalog = {"entries": [{"name": "alpha", "kind": "standard"}, {"name": "beta", "kind": "superpower"}], "errors": []}
+        assignments = [{"skill_name": "alpha", "profile": "coder", "assigned_at": "2026-01-01", "assigned_by": "test"}]
+        enriched = enrich_catalog_with_assignments(catalog, assignments)
+        alpha = next(e for e in enriched["entries"] if e["name"] == "alpha")
+        beta = next(e for e in enriched["entries"] if e["name"] == "beta")
+        self.assertEqual(len(alpha["assigned_to"]), 1)
+        self.assertEqual(alpha["assigned_to"][0]["profile"], "coder")
+        self.assertEqual(beta["assigned_to"], [])
+
+    def test_enrich_catalog_preserves_errors(self) -> None:
+        catalog = {"entries": [{"name": "test"}], "errors": ["some error"]}
+        enriched = enrich_catalog_with_assignments(catalog, [])
+        self.assertEqual(enriched["errors"], ["some error"])
+
+    def test_multiple_profiles_assigned_same_skill(self) -> None:
+        if not SKILL_CATALOG:
+            self.skipTest("no skills in catalog")
+        skill = SKILL_CATALOG[0]
+        assign_skill(self.db, "general", skill["name"])
+        assign_skill(self.db, "coder", skill["name"])
+        assign_skill(self.db, "planner", skill["name"])
+        assignments = [a for a in list_assignments(self.db) if a["skill_name"] == skill["name"]]
+        self.assertEqual(len(assignments), 3)
+
+    def test_assign_audit_event(self) -> None:
+        if not SKILL_CATALOG:
+            self.skipTest("no skills in catalog")
+        skill = SKILL_CATALOG[0]
+        assign_skill(self.db, "reviewer", skill["name"], actor="admin", surface="web")
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT action, actor, surface, details_json FROM audit_events WHERE action='skill.assigned' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["actor"], "admin")
+        self.assertEqual(row["surface"], "web")
+        details = json.loads(row["details_json"])
+        self.assertEqual(details["profile"], "reviewer")
+        self.assertEqual(details["skill_name"], skill["name"])
+
+    def test_unassign_audit_event(self) -> None:
+        if not SKILL_CATALOG:
+            self.skipTest("no skills in catalog")
+        skill = SKILL_CATALOG[0]
+        assign_skill(self.db, "bugfix", skill["name"])
+        unassign_skill(self.db, "bugfix", skill["name"], actor="test", surface="CLI")
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT action, details_json FROM audit_events WHERE action='skill.unassigned' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(row)
+        details = json.loads(row["details_json"])
+        self.assertEqual(details["profile"], "bugfix")
 
 
 if __name__ == "__main__":
