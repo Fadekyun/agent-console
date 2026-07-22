@@ -48,7 +48,7 @@ async function mockApi(page) {
     auth_contexts: [
       { tool: 'codex', name: 'default', status: 'ready', enabled: true, default: true },
       { tool: 'opencode', name: 'openrouter-main', provider: 'openrouter', status: 'ready', enabled: true, default: false },
-      { tool: 'opencode', name: 'opencode-go-default', provider: 'opencode-go', status: 'ready', enabled: true, default: true },
+      { tool: 'opencode', name: 'opencode-go-default', provider: 'opencode', status: 'ready', enabled: true, default: true },
       { tool: 'shell', name: 'default', status: 'ready', enabled: true, default: true },
     ],
   };
@@ -223,7 +223,7 @@ test('OpenCode model picker estimates the cheapest model on desktop and mobile',
     await page.locator('#model-cost-details').evaluate((details) => { details.open = true; });
     await page.locator('#estimate-output').fill('1500');
     await page.locator('#estimate-models').click();
-    await expect(page.locator('#new-session select[name="provider"]')).toHaveValue('opencode-go');
+    await expect(page.locator('#new-session select[name="provider"]')).toHaveValue('opencode');
     await expect(page.locator('.estimate-field')).toHaveCount(4);
     await expect(page.locator('#model-status')).toContainText('Selected cheapest for this token mix');
   } else {
@@ -233,7 +233,7 @@ test('OpenCode model picker estimates the cheapest model on desktop and mobile',
     await page.getByText('Estimate cheapest model').click();
     await page.locator('#mobile-output').fill('1500');
     await page.locator('#mobile-estimate').click();
-    await expect(page.locator('#mobile-new select[name="provider"]')).toHaveValue('opencode-go');
+    await expect(page.locator('#mobile-new select[name="provider"]')).toHaveValue('opencode');
     await expect(page.locator('#mobile-model-status')).toContainText('Selected cheapest:');
   }
 });

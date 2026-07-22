@@ -77,6 +77,25 @@ repository, or applicable agent instructions.
 The web terminal's Peers overlay inserts a session name or review command into the composer.
 It never sends automatically and grants no cross-session lifecycle control.
 
+## Provider rename: opencode-go → opencode
+
+The OpenCode provider identifier was renamed from `opencode-go` to `opencode` across all
+runtime paths (CLI, web UI, API, and model catalogue). The built-in auth context key
+`opencode-go-default` is preserved for backward compatibility; its `provider` field is now
+`opencode`. Persisted registries from previous versions are migrated automatically on next
+start — only the recognized built-in entry (`opencode-go-default` with source_ref
+`opencode/provider-native`) is updated; arbitrary custom contexts are untouched.
+
+**Historical launcher/model IDs:** Currently running tmux sessions and agent processes
+created before this rename are unaffected — they continue with the provider value and model
+IDs they were started with. However, restarting or recreating from an old pinned launcher
+script that references the `opencode-go` provider or model prefix (e.g. `opencode-go/...`)
+may fail after an OpenCode CLI upgrade. The OpenCode CLI 1.18.3 accepts only `opencode` as
+the provider identifier. Users who restart a session from an old launcher must update the
+launcher or create a new session through the current Agent Console UI/CLI, which generates
+launcher scripts with the current `opencode` identifier. No automatic launcher rewrite is
+performed — existing files on disk are never modified by the rename.
+
 ## Responsive browser behavior
 
 The dashboard uses a desktop navigation rail and mobile bottom tabs. The terminal is a

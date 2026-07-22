@@ -852,7 +852,7 @@ function updateNewToolFields() {
 }
 
 async function loadModels() {
-  const provider = newForm.elements.provider.value || 'opencode-go';
+  const provider = newForm.elements.provider.value || 'opencode';
   $('#model-status').textContent = 'Loading current catalogue…';
   try {
     const catalogue = await api(`/api/models?provider=${encodeURIComponent(provider)}`);

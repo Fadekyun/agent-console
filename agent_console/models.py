@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-PROVIDERS = {"openrouter", "opencode-go"}
+PROVIDERS = {"openrouter", "opencode"}
 
 
 def lowest_cost_model(models: list[dict[str, Any]]) -> dict[str, Any]:
@@ -22,7 +22,7 @@ def lowest_cost_model(models: list[dict[str, Any]]) -> dict[str, Any]:
 
 def parse_verbose_models(output: str, provider: str) -> list[dict[str, Any]]:
     if provider not in PROVIDERS:
-        raise ValueError("provider must be openrouter or opencode-go")
+        raise ValueError("provider must be openrouter or opencode")
     decoder = json.JSONDecoder()
     models: list[dict[str, Any]] = []
     offset = 0
@@ -142,7 +142,7 @@ class ModelCatalogue:
 
     def _cache_path(self, provider: str) -> Path:
         if provider not in PROVIDERS:
-            raise ValueError("provider must be openrouter or opencode-go")
+            raise ValueError("provider must be openrouter or opencode")
         return self.cache_dir / f"{provider}.json"
 
     def list(self, provider: str, *, refresh: bool = False) -> dict[str, Any]:

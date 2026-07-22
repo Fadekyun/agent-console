@@ -1149,7 +1149,7 @@ class SessionManager:
         context_path.chmod(0o600)
         context = self.auth.get_context(tool, auth_context)
         if tool == "opencode" and not model:
-            provider = context.get("provider") or "opencode-go"
+            provider = context.get("provider") or "opencode"
             model = lowest_cost_model(self.models.list(provider)["models"])["model"]
         adapter = provider_adapter(tool, self.auth)
         if not adapter.binary.is_file():
@@ -1339,9 +1339,9 @@ class SessionManager:
             agent_mode = agent_mode or "plan"
             if agent_mode not in {"plan", "build"}:
                 raise ValueError("OpenCode agent mode must be plan or build")
-            provider = provider or context.get("provider") or "opencode-go"
-            if provider not in {"openrouter", "opencode-go"}:
-                raise ValueError("OpenCode provider must be openrouter or opencode-go")
+            provider = provider or context.get("provider") or "opencode"
+            if provider not in {"openrouter", "opencode"}:
+                raise ValueError("OpenCode provider must be openrouter or opencode")
             if context.get("provider") not in {provider, "opencode"}:
                 raise ValueError("selected authentication context does not match provider")
             catalogue = self.models.list(provider)

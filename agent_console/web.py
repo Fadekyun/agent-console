@@ -94,13 +94,13 @@ class CreateSessionRequest(BaseModel):
     worktree: bool = False
     auth_context: str | None = Field(default=None, max_length=64)
     agent_mode: str | None = Field(default=None, pattern="^(plan|build|auto)$")
-    provider: str | None = Field(default=None, pattern="^(openrouter|opencode-go)$")
+    provider: str | None = Field(default=None, pattern="^(openrouter|opencode)$")
     model: str | None = Field(default=None, max_length=240)
     project_id: str | None = Field(default=None, max_length=80)
 
 
 class ModelEstimateRequest(BaseModel):
-    provider: str = Field(pattern="^(openrouter|opencode-go)$")
+    provider: str = Field(pattern="^(openrouter|opencode)$")
     uncached_input_tokens: int = Field(default=0, ge=0)
     cached_input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
@@ -480,14 +480,14 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
 
     @app.get("/api/models")
     async def models(
-        provider: str = Query(pattern="^(openrouter|opencode-go)$"),
+        provider: str = Query(pattern="^(openrouter|opencode)$"),
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
         return session_manager.model_catalogue(provider)
 
     @app.post("/api/models/refresh")
     async def refresh_models(
-        provider: str = Query(pattern="^(openrouter|opencode-go)$"),
+        provider: str = Query(pattern="^(openrouter|opencode)$"),
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
         return session_manager.model_catalogue(provider, refresh=True)
