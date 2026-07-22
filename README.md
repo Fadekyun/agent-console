@@ -48,7 +48,7 @@ All settings are controlled via environment variables. The installer uses sensib
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AGENT_CONSOLE_WORKSPACE_ROOT` | checkout root | Root directory for repos and handoffs |
-| `AGENT_CONSOLE_STATE_DIR` | `~/.local/share/agent-console` | SQLite DB, launchers, transcripts |
+| `AGENT_CONSOLE_STATE_DIR` | `~/.local/share/agent-console` | SQLite DB, launchers, transcripts (note: does not relocate the installer venv, which stays under the original default path) |
 | `AGENT_CONSOLE_DB` | `<state_dir>/agent-console.sqlite3` | Database path |
 | `AGENT_CONSOLE_PROFILE_DIR` | `<checkout>/agent-profiles` | Agent profile directory (always relative to checkout, not workspace) |
 | `AGENT_CONSOLE_PORT` | `3210` | Web service listen port |
@@ -125,25 +125,23 @@ Without AI CLIs installed, the web UI shows tools as "launcher missing" in the p
 
 ## Multi-Instance Setup
 
-Running a second Agent Console instance on the same host requires changing ports and state paths to avoid conflicts:
+Agent Console uses fixed systemd user unit names, `~/bin` symlink targets, and a uid-based tmux socket path, so two instances **under the same Unix user** are not isolated even with different ports and state directories. The supported multi-instance approach uses **separate Unix users**:
 
 ```bash
-git clone https://github.com/Fadekyun/agent-console.git /opt/agent-console-secondary
+# Create a dedicated system user for the secondary instance
+sudo useradd --system --create-home --home-dir /opt/agent-console-secondary agent-console-2
+sudo -u agent-console-2 bash
 cd /opt/agent-console-secondary
+git clone https://github.com/Fadekyun/agent-console.git .
 export AGENT_CONSOLE_PORT=3211
 export AGENT_CONSOLE_TUNNEL_PORT=13211
-export AGENT_CONSOLE_STATE_DIR=$HOME/.local/share/agent-console-secondary
-export AGENT_CONSOLE_CONFIG_DIR=$HOME/.config/agent-console-secondary
-export AGENT_CONSOLE_WORKSPACE_ROOT=$HOME/agent-workspace-secondary
-# profile_dir defaults to the checkout's agent-profiles — independent of workspace
-export AGENT_CONSOLE_PROFILE_DIR=$PWD/agent-profiles
 export AGENT_CONSOLE_TAILSCALE_LOGIN=your-email@example.com
 export AGENT_CONSOLE_LAN_CIDR=10.0.0.0/8
 export AGENT_CONSOLE_TRUSTED_HOSTS=localhost,127.0.0.1,your-lan-ip
 ./scripts/install.sh
 ```
 
-The installer generates isolated systemd user units with unique ports and state paths. Each instance manages its own tmux sockets, SQLite database, launchers, and transcripts.
+Each Unix user gets its own systemd user bus, `~/.config/systemd/user/` unit directory, tmux sockets, and `~/bin` namespace, providing full isolation.
 
 ## Skills Setup
 
@@ -164,28 +162,28 @@ export AGCONSOLE_RETAINED_SKILLS="skill-a,skill-b,skill-c"
 ./scripts/install.sh   # re-run to persist new value
 ```
 
-See [docs/skills.md](docs/skills.md) for skill authoring.
-
 ## Upgrade Compatibility
 
-The installer is designed for safe upgrades — it never deletes or replaces:
+The installer preserves the following existing state across reinstalls — it does not delete or replace them:
 
-- tmux sockets (canonical or legacy)
+- tmux sockets (canonical and legacy)
 - SQLite database
 - Launcher scripts under `$AGENT_CONSOLE_STATE_DIR/launchers`
-- Auth contexts or secrets
+- Auth contexts and secrets
 - Session transcripts
-- Worktrees or handoffs
+- Worktrees and handoffs
+
+The venv, npm dependencies, and state directories are prepared **before** profile validation occurs, so a validation failure will have already created those directories and installed dependencies. This is intentional: validation gates unit writes and systemctl calls, not earlier preparation steps.
 
 Existing systemd units are **replaced** on reinstall. Running sessions survive because `KillMode=process` (preserved in generated units) kills only the agent process on stop, leaving tmux sessions intact.
 
 When upgrading an existing installation:
 
-1. The installer stops and restarts the web service (`systemctl --user restart`).
+1. The installer runs `systemctl daemon-reload`, `enable`, then `restart` — this picks up changed code and unit settings even when the service is already active.
 2. Existing canonical and legacy tmux sessions are reconciled on next `SessionManager` startup.
-3. Agent CLIs that have been removed or whose provider IDs have changed remain attachable while running but may not restart after a CLI upgrade. Remove stale launchers manually from `$AGENT_CONSOLE_STATE_DIR/launchers` if needed.
+3. Agent CLIs that have been removed or whose provider IDs have changed remain attachable while running but may not restart after a CLI upgrade. To replace a launcher for a still-running legacy session: first stop the agent gracefully (or let it complete), back up the launcher script, then recreate after the session has exited. Do not delete a launcher while its session is still running — preserve and recreate after stopping.
 4. The `runtime.env` file is rewritten — any customizations added after the last install are lost. Keep a backup or re-apply overrides on reinstall.
-5. Profile directory is validated at install time. If `AGENT_CONSOLE_PROFILE_DIR` points to a nonexistent or empty directory, the installer fails **before** modifying any units or state, preventing silent zero-profile deployments.
+5. Profile directory is validated **early** in the install flow (before unit writes and systemctl calls) but after directory/venv/dependency preparation. If `AGENT_CONSOLE_PROFILE_DIR` points to a nonexistent or empty directory, the installer fails before modifying units or calling systemctl, preventing silent zero-profile deployments.
 
 ## CLI Usage
 

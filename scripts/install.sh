@@ -8,12 +8,19 @@ _resolve_bin() {
   local var="$1" name="$2"
   local val="${!var:-}"
   if [ -n "$val" ]; then
-    if [ -x "$val" ]; then
-      printf '%s' "$val"
-      return 0
+    case "$val" in
+      /*) ;;
+      *)
+        printf 'FATAL: %s=%s must be an absolute path.\n' "$var" "$val" >&2
+        exit 1
+        ;;
+    esac
+    if [ ! -x "$val" ]; then
+      printf 'FATAL: %s=%s is not an executable file.\n' "$var" "$val" >&2
+      exit 1
     fi
-    printf 'FATAL: %s=%s is not an executable file.\n' "$var" "$val" >&2
-    exit 1
+    printf '%s' "$val"
+    return 0
   fi
   command -v "$name" || true
 }
@@ -149,7 +156,8 @@ WantedBy=default.target
 EOF
 
 systemctl --user daemon-reload
-systemctl --user enable --now agent-console-web.service
+systemctl --user enable agent-console-web.service
+systemctl --user restart agent-console-web.service
 
 "$HOME/bin/agentctl" doctor
 

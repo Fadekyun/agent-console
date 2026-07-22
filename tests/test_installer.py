@@ -65,7 +65,7 @@ fi
 exit 0
 """)
         self._stub("npm", "#!/bin/bash\nexit 0")
-        self._stub("systemctl", "#!/bin/bash\nexit 0")
+        self._stub("systemctl", "#!/bin/bash\necho \"SYSTEMCTL: $@\" >&2\nexit 0")
         self._stub("tmux", "#!/bin/bash\necho 'tmux 3.4'")
 
     def _create_tool(self, name: str) -> Path:
@@ -269,6 +269,28 @@ exit 0
         result = self._run()
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
         self.assertIn("agentctl skills doctor", result.stdout)
+
+    def test_systemctl_sequence_invoked(self):
+        self._create_tool("codex")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        calls = [line for line in result.stderr.splitlines() if line.startswith("SYSTEMCTL:")]
+        self.assertGreaterEqual(len(calls), 3, f"expected >=3 systemctl calls, got {calls}")
+        self.assertIn("daemon-reload", calls[0])
+        self.assertIn("enable", calls[1])
+        self.assertIn("restart", calls[2])
+
+    def test_validation_failure_invokes_no_systemctl(self):
+        result = self._run({"AGENT_CONSOLE_PROFILE_DIR": str(self.temp_home / "nonexistent")})
+        self.assertNotEqual(result.returncode, 0)
+        calls = [line for line in result.stderr.splitlines() if line.startswith("SYSTEMCTL:")]
+        self.assertEqual(len(calls), 0, f"expected no systemctl calls on failure, got {calls}")
+
+    def test_user_provided_bin_override_relative_rejected(self):
+        self._create_tool("codex")
+        result = self._run({"AGCONSOLE_CODEX_BIN": "relative/path/codex"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("absolute path", result.stderr)
 
     def test_env_file_is_mode_600(self):
         self._create_tool("codex")
