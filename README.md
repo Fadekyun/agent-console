@@ -26,15 +26,19 @@ A unified tmux session manager for AI coding agent orchestration. Manage multipl
 ```bash
 git clone https://github.com/Fadekyun/agent-console.git
 cd agent-console
+# Set required variables before install
+export AGENT_CONSOLE_TAILSCALE_LOGIN=your-email@example.com
+export AGENT_CONSOLE_LAN_CIDR=10.0.0.0/8
+export AGENT_CONSOLE_TRUSTED_HOSTS=localhost,127.0.0.1,your-lan-ip
 ./scripts/install.sh
 ```
 
-The installer creates a Python venv, installs dependencies, symlinks CLI wrappers, and starts systemd user services.
+The installer creates a Python venv, installs dependencies, symlinks CLI wrappers, resolves AI CLI tool paths to absolute paths (so systemd --user can find them), validates configuration, generates systemd user units, and starts the web service.
 
 Verify the installation:
 
 ```bash
-./scripts/agentctl doctor
+agentctl doctor
 ```
 
 ## Configuration
@@ -43,24 +47,28 @@ All settings are controlled via environment variables. The installer uses sensib
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AGENT_CONSOLE_WORKSPACE_ROOT` | `.` | Root directory for repos, profiles, and handoffs |
+| `AGENT_CONSOLE_WORKSPACE_ROOT` | checkout root | Root directory for repos and handoffs |
 | `AGENT_CONSOLE_STATE_DIR` | `~/.local/share/agent-console` | SQLite DB, launchers, transcripts |
 | `AGENT_CONSOLE_DB` | `<state_dir>/agent-console.sqlite3` | Database path |
-| `AGENT_CONSOLE_PROFILE_DIR` | `<workspace>/agent-profiles` | Agent profile directory |
+| `AGENT_CONSOLE_PROFILE_DIR` | `<checkout>/agent-profiles` | Agent profile directory (always relative to checkout, not workspace) |
+| `AGENT_CONSOLE_PORT` | `3210` | Web service listen port |
+| `AGENT_CONSOLE_BIND_HOST` | `127.0.0.1` | Web service bind address |
+| `AGENT_CONSOLE_TUNNEL_PORT` | `13210` | Reverse tunnel remote port |
+| `AGENT_CONSOLE_TUNNEL_HOST` | `localhost` | SSH tunnel jump host |
 | `AGENT_CONSOLE_TMUX_SOCKET` | (system default) | tmux socket name |
-| `AGENT_CONSOLE_TMUX_SOCKET_PATH` | `/run/user/<uid>/agent-console/tmux.sock` | tmux socket path |
+| `AGENT_CONSOLE_TMUX_SOCKET_PATH` | `/run/user/<uid>/agent-console/tmux.sock` | Canonical tmux socket path |
 | `AGENT_CONSOLE_TAILSCALE_LOGIN` | (empty) | Expected Tailscale identity email |
 | `AGENT_CONSOLE_LAN_CIDR` | `127.0.0.1/32` | Trusted LAN network (set to your LAN CIDR) |
 | `AGENT_CONSOLE_TRUSTED_HOSTS` | `localhost,127.0.0.1` | TrustedHostMiddleware allowlist |
 | `AGENT_CONSOLE_MAX_PTY_CLIENTS` | `2` | Max WebSocket PTY clients per session |
 | `AGENT_CONSOLE_MAX_SESSIONS` | `12` | Max managed sessions |
 | `AGENT_CONSOLE_MAX_CHILDREN` | `3` | Max children per parent session |
-| `AGCONSOLE_CODEX_BIN` | `codex` | Path to Codex CLI binary |
-| `AGCONSOLE_CLAUDE_BIN` | `claude` | Path to Claude CLI binary |
-| `AGCONSOLE_OPENCODE_BIN` | `opencode` | Path to OpenCode CLI binary |
-| `AGCONSOLE_HERMES_BIN` | `hermes` | Path to Hermes CLI binary |
-| `AGCONSOLE_SKILLS_ROOT` | `~/codex/skills` | Canonical skills directory |
-| `AGCONSOLE_RETAINED_SKILLS` | (empty) | Comma-separated skill names to sync |
+| `AGCONSOLE_CODEX_BIN` | (auto-detected) | Absolute path to Codex CLI binary |
+| `AGCONSOLE_CLAUDE_BIN` | (auto-detected) | Absolute path to Claude CLI binary |
+| `AGCONSOLE_OPENCODE_BIN` | (auto-detected) | Absolute path to OpenCode CLI binary |
+| `AGCONSOLE_HERMES_BIN` | (auto-detected) | Absolute path to Hermes CLI binary |
+| `AGCONSOLE_SKILLS_ROOT` | `~/codex/skills` | Canonical skills root directory |
+| `AGCONSOLE_RETAINED_SKILLS` | (empty) | Comma-separated skill names to retain |
 
 ## Docker
 
@@ -114,6 +122,70 @@ To use AI tools inside the container, either:
 3. **Use the web UI for orchestration only** and run AI CLIs on the host, connecting via SSH aliases.
 
 Without AI CLIs installed, the web UI shows tools as "launcher missing" in the provider health panel. The Shell tool is always available.
+
+## Multi-Instance Setup
+
+Running a second Agent Console instance on the same host requires changing ports and state paths to avoid conflicts:
+
+```bash
+git clone https://github.com/Fadekyun/agent-console.git /opt/agent-console-secondary
+cd /opt/agent-console-secondary
+export AGENT_CONSOLE_PORT=3211
+export AGENT_CONSOLE_TUNNEL_PORT=13211
+export AGENT_CONSOLE_STATE_DIR=$HOME/.local/share/agent-console-secondary
+export AGENT_CONSOLE_CONFIG_DIR=$HOME/.config/agent-console-secondary
+export AGENT_CONSOLE_WORKSPACE_ROOT=$HOME/agent-workspace-secondary
+# profile_dir defaults to the checkout's agent-profiles — independent of workspace
+export AGENT_CONSOLE_PROFILE_DIR=$PWD/agent-profiles
+export AGENT_CONSOLE_TAILSCALE_LOGIN=your-email@example.com
+export AGENT_CONSOLE_LAN_CIDR=10.0.0.0/8
+export AGENT_CONSOLE_TRUSTED_HOSTS=localhost,127.0.0.1,your-lan-ip
+./scripts/install.sh
+```
+
+The installer generates isolated systemd user units with unique ports and state paths. Each instance manages its own tmux sockets, SQLite database, launchers, and transcripts.
+
+## Skills Setup
+
+Agent skills provide reusable instructions (SKILL.md files) under a canonical root directory. The installer persists `AGCONSOLE_SKILLS_ROOT` and `AGCONSOLE_RETAINED_SKILLS` into `runtime.env` but does not auto-sync — run these steps after install:
+
+```bash
+# Sync retained skills into tool-specific roots
+agentctl skills sync
+
+# Verify skill links
+agentctl skills doctor
+```
+
+Configure which skills to retain:
+
+```bash
+export AGCONSOLE_RETAINED_SKILLS="skill-a,skill-b,skill-c"
+./scripts/install.sh   # re-run to persist new value
+```
+
+See [docs/skills.md](docs/skills.md) for skill authoring.
+
+## Upgrade Compatibility
+
+The installer is designed for safe upgrades — it never deletes or replaces:
+
+- tmux sockets (canonical or legacy)
+- SQLite database
+- Launcher scripts under `$AGENT_CONSOLE_STATE_DIR/launchers`
+- Auth contexts or secrets
+- Session transcripts
+- Worktrees or handoffs
+
+Existing systemd units are **replaced** on reinstall. Running sessions survive because `KillMode=process` (preserved in generated units) kills only the agent process on stop, leaving tmux sessions intact.
+
+When upgrading an existing installation:
+
+1. The installer stops and restarts the web service (`systemctl --user restart`).
+2. Existing canonical and legacy tmux sessions are reconciled on next `SessionManager` startup.
+3. Agent CLIs that have been removed or whose provider IDs have changed remain attachable while running but may not restart after a CLI upgrade. Remove stale launchers manually from `$AGENT_CONSOLE_STATE_DIR/launchers` if needed.
+4. The `runtime.env` file is rewritten — any customizations added after the last install are lost. Keep a backup or re-apply overrides on reinstall.
+5. Profile directory is validated at install time. If `AGENT_CONSOLE_PROFILE_DIR` points to a nonexistent or empty directory, the installer fails **before** modifying any units or state, preventing silent zero-profile deployments.
 
 ## CLI Usage
 
