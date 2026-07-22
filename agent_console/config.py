@@ -17,8 +17,10 @@ class Settings:
     tmux_socket_path: Path | None = None
     legacy_tmux_socket_path: Path | None = None
     config_dir: Path | None = None
+    releases_root: Path | None = None
     max_children_per_parent: int = 3
     max_managed_sessions: int = 12
+    deployment_mode: str = "disabled"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -66,8 +68,15 @@ class Settings:
                     home / ".config" / "agent-console",
                 )
             ).expanduser(),
+            releases_root=Path(
+                os.getenv(
+                    "AGENT_CONSOLE_RELEASES_ROOT",
+                    state_dir / "releases",
+                )
+            ).expanduser(),
             max_children_per_parent=int(os.getenv("AGENT_CONSOLE_MAX_CHILDREN", "3")),
             max_managed_sessions=int(os.getenv("AGENT_CONSOLE_MAX_SESSIONS", "12")),
+            deployment_mode=os.getenv("AGENT_CONSOLE_DEPLOYMENT_MODE", "disabled").lower().strip(),
         )
 
     def ensure_state_dirs(self) -> None:
@@ -76,6 +85,8 @@ class Settings:
         (self.state_dir / "transcripts").mkdir(parents=True, exist_ok=True, mode=0o700)
         (self.state_dir / "contexts").mkdir(parents=True, exist_ok=True, mode=0o700)
         (self.state_dir / "model-cache").mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.releases_root:
+            self.releases_root.mkdir(parents=True, exist_ok=True, mode=0o755)
         config_dir = self.config_dir or self.state_dir / "config"
         config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         config_dir.chmod(0o700)

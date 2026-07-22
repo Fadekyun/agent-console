@@ -512,6 +512,18 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     async def skills_doctor(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         return doctor_skills()
 
+    @app.get("/api/deploy/releases")
+    async def deploy_releases(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
+        return session_manager.list_releases()
+
+    @app.get("/api/deploy/current")
+    async def deploy_current(_: AuthContext = Depends(require_identity)) -> dict[str, Any] | None:
+        return session_manager.current_release()
+
+    @app.get("/api/deploy/canary")
+    async def deploy_canary(_: AuthContext = Depends(require_identity)) -> dict[str, Any] | None:
+        return session_manager.canary_release()
+
     @app.post("/api/sessions/{name}/kill")
     async def kill(
         name: str,

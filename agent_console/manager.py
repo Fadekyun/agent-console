@@ -16,6 +16,7 @@ from typing import Any
 from .auth import AuthRegistry
 from .config import Settings
 from .database import Database, EVIDENCE_RESULTS, EVIDENCE_TYPES, REQUIRED_EVIDENCE_TYPES, utc_now
+from .deployer import DeploymentMode, Deployer, ProductionServiceRunner, ServiceConfig
 
 EVIDENCE_TYPE_TO_PROFILE: dict[str, str] = {
     "review": "reviewer",
@@ -61,6 +62,7 @@ class SessionManager:
         self.database.migrate()
         self.models = ModelCatalogue(self.settings.state_dir / "model-cache")
         validate_profile_schema()
+        self._deployer_override: Deployer | None = None
         self.tmux = Tmux(
             self.settings.tmux_socket,
             self.settings.tmux_socket_path if not self.settings.tmux_socket else None,
@@ -70,6 +72,27 @@ class SessionManager:
             Tmux(socket_path=self.settings.legacy_tmux_socket_path, scope="legacy")
             if self.settings.legacy_tmux_socket_path
             else None
+        )
+
+    @property
+    def deployer(self) -> Deployer:
+        if self._deployer_override is not None:
+            return self._deployer_override
+        mode_str = self.settings.deployment_mode
+        try:
+            mode = DeploymentMode(mode_str)
+        except ValueError:
+            mode = DeploymentMode.DISABLED
+        runner = ProductionServiceRunner(ServiceConfig(
+            user_service_name=getattr(self.settings, 'user_service_name', 'agent-console-web.service'),
+            canary_bind=getattr(self.settings, 'canary_bind', '127.0.0.1'),
+            user_service_port=getattr(self.settings, 'user_service_port', 3210),
+            deployment_mode=mode,
+        ))
+        return Deployer(
+            self.settings.releases_root or self.settings.state_dir / "releases",
+            runner=runner,
+            source_tracker="git",
         )
 
     def _live_sessions(self) -> dict[str, tuple[str, Any]]:
@@ -1706,7 +1729,14 @@ class SessionManager:
             "candidate_sha": selected_sha,
             "status": "promotion_selected",
             "reason": gate["reason"],
-            "deployer_note": "No deployer available. Issue #14 must provide the controlled promoter before deployment.",
+            "deployer_note": (
+                "Issue #14 deployer: release gate passed. "
+                "To deploy, run: `agentctl deploy apply <plan_id>` "
+                "which will validate the candidate SHA, create an immutable release, "
+                "select it as canary, and require a second confirmation for user-service promotion. "
+                "TCP WebSockets cannot survive a Uvicorn restart; "
+                "state preservation plus bounded terminal reconnect is provided."
+            ),
         }
 
     def execute_plan(
@@ -1848,6 +1878,158 @@ class SessionManager:
         log.info("session=%s action=delegate parent=%s profile=%s tool=%s",
                  session["tmux_name"], parent_row["tmux_name"], profile, tool)
         return {"delegation_id": delegation_id, "session": session}
+
+    # --- Deployer management (planning/validation only by default) ---
+
+    def deploy_apply(
+        self,
+        plan_id: str,
+        *,
+        confirmed: bool = False,
+        actor: str = "system",
+        surface: str = "CLI",
+    ) -> dict[str, Any]:
+        validate_plan_id(plan_id)
+        plan = self.inspect_plan(plan_id)
+        gate = plan.get("release_gate", {})
+        if not gate.get("allowed", False):
+            raise ValueError(
+                f"release gate is not passed for plan {plan_id!r}; "
+                "run `agentctl plan gate <plan_id>` and complete all required evidence first"
+            )
+        candidate_sha = gate.get("candidate_sha")
+        if not candidate_sha:
+            raise ValueError(f"plan {plan_id!r} has no candidate SHA for deployment")
+
+        plan_revision = plan.get("recorded_revision") or plan.get("current_revision")
+        if plan_revision and candidate_sha != plan_revision:
+            raise ValueError(
+                f"candidate SHA {candidate_sha[:12]} does not match plan revision "
+                f"{plan_revision[:12]}; re-run `agentctl plan promote {plan_id}`"
+            )
+
+        if not confirmed:
+            return {
+                "plan_id": plan_id,
+                "candidate_sha": candidate_sha,
+                "status": "deploy_planned",
+                "action": "Run with --yes and confirmation to create immutable release and select canary.",
+                "deployer_note": (
+                    "This will: create an immutable release directory, generate a manifest with "
+                    f"SHA256 inventory, validate and promote to canary (not user-service). "
+                    f"Candidate SHA: {candidate_sha[:12]}. "
+                    "Run `agentctl deploy promote-user-service <release>` separately for user-service."
+                ),
+            }
+
+        # Check for existing release matching the candidate SHA
+        short_sha = candidate_sha[:12]
+        existing = [r for r in self.deployer.list_releases() if r.get("source_sha") == short_sha]
+        if existing:
+            raise FileExistsError(
+                f"release for SHA {short_sha} already exists ({existing[0]['release_name']}); "
+                "run `agentctl deploy rollback` or select a different plan"
+            )
+
+        release = self.deployer.create_release(
+            self.settings.workspace_root,
+            candidate_sha=candidate_sha,
+        )
+        self.deployer.promote_canary(release["release_name"])
+        with self.database.connect() as conn:
+            conn.execute(
+                "INSERT INTO releases(release_name, created_at, source_sha, file_count, status, plan_id, canary_at) "
+                "VALUES(?, ?, ?, ?, 'canary', ?, ?) "
+                "ON CONFLICT(release_name) DO UPDATE SET status='canary', canary_at=excluded.canary_at",
+                (release["release_name"], release["created_at"], candidate_sha,
+                 release["file_count"], plan_id, release["created_at"]),
+            )
+        self.database.audit(
+            "deploy.apply",
+            release["release_name"],
+            "success",
+            actor=actor,
+            surface=surface,
+            details={
+                "plan_id": plan_id,
+                "candidate_sha": candidate_sha,
+                "file_count": release["file_count"],
+            },
+        )
+        log.info("deploy plan=%s release=%s sha=%s files=%d",
+                 plan_id, release["release_name"], candidate_sha, release["file_count"])
+        return {
+            "plan_id": plan_id,
+            "candidate_sha": candidate_sha,
+            "release_name": release["release_name"],
+            "release_path": release["release_path"],
+            "file_count": release["file_count"],
+            "status": "canary_selected",
+            "note": "current symlink unchanged; run `agentctl deploy promote-user-service <release>` for user-service",
+            "action": (
+                "Run `agentctl deploy promote-user-service <release>` to promote canary to user-service, "
+                "or `agentctl deploy rollback` to revert."
+            ),
+        }
+
+    def list_releases(self) -> list[dict[str, Any]]:
+        return self.deployer.list_releases()
+
+    def current_release(self) -> dict[str, Any] | None:
+        return self.deployer.current_release()
+
+    def canary_release(self) -> dict[str, Any] | None:
+        return self.deployer.canary_release()
+
+    def validate_release(self, release_name: str) -> dict[str, Any]:
+        return self.deployer.validate_release(release_name)
+
+    def select_release(self, release_name: str) -> dict[str, Any]:
+        return self.deployer.select_release(release_name)
+
+    def promote_canary(self, release_name: str) -> dict[str, Any]:
+        return self.deployer.promote_canary(release_name)
+
+    def promote_user_service(self, release_name: str) -> dict[str, Any]:
+        result = self.deployer.promote_user_service(release_name)
+        status = result.get("status", "unknown")
+        with self.database.connect() as conn:
+            if status == "user_service_active":
+                conn.execute(
+                    "UPDATE releases SET status='user_service', current_at=? WHERE release_name=?",
+                    (utc_now(), release_name),
+                )
+            elif "rolled_back" in status:
+                conn.execute(
+                    "UPDATE releases SET status='promote_failed', current_at=NULL WHERE release_name=?",
+                    (release_name,),
+                )
+        self.database.audit("release.user_service", release_name, status,
+                            details={"release_status": status})
+        return result
+
+    def rollback_release(self, target: str = "previous") -> dict[str, Any]:
+        result = self.deployer.rollback(target)
+        status = result.get("status", "unknown")
+        with self.database.connect() as conn:
+            if status == "rollback_applied":
+                conn.execute(
+                    "UPDATE releases SET rollback_at=? WHERE release_name=?",
+                    (utc_now(), result["release_name"]),
+                )
+            self.database.audit("release.rollback", result.get("release_name", target), status,
+                                details={"release_status": status})
+        return result
+
+    def deployer_doctor(self) -> dict[str, Any]:
+        current = self.deployer.current_release()
+        releases = self.deployer.list_releases()
+        return {
+            "releases_root": str(self.deployer.releases_root),
+            "release_count": len(releases),
+            "current": current,
+            "ok": current is not None and current.get("valid", False) if current else len(releases) == 0,
+        }
 
     def doctor(self) -> dict[str, Any]:
         checks: dict[str, Any] = {

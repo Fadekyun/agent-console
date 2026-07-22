@@ -27,6 +27,12 @@ let resizeFrame;
 let alternateScreen = false;
 let touchStartY = null;
 let briefLoaded = false;
+let reconnectTimer = null;
+let reconnectAttempt = 0;
+const MAX_RECONNECT_ATTEMPTS = 30;
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 30000;
+let autoReconnectEnabled = true;
 
 function setStatus(message) { connection.textContent = message; }
 
@@ -56,12 +62,34 @@ function syncVisualViewport() {
   resize();
 }
 
+function scheduleReconnect() {
+  if (!autoReconnectEnabled) return;
+  if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+    setStatus('Max reconnection attempts reached. Click Reconnect to retry.');
+    reconnect.disabled = false;
+    return;
+  }
+  reconnectAttempt++;
+  const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, reconnectAttempt - 1), RECONNECT_MAX_MS);
+  const jitter = delay * (0.5 + Math.random() * 0.5);
+  const seconds = Math.round(jitter / 100) / 10;
+  setStatus(`Reconnecting in ${seconds}s (attempt ${reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS})…`);
+  reconnect.disabled = true;
+  reconnectTimer = setTimeout(() => { connect(); }, jitter);
+}
+
+function cancelReconnect() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  reconnectAttempt = 0;
+}
+
 function connect() {
+  cancelReconnect();
   socket?.close();
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   socket = new WebSocket(`${protocol}//${location.host}/ws/sessions/${encodeURIComponent(name)}`);
   socket.binaryType = 'arraybuffer'; setStatus('Connecting…'); reconnect.disabled = true;
-  socket.onopen = () => { setStatus('Connected'); resize(); if (mode === 'type') terminal.focus(); };
+  socket.onopen = () => { cancelReconnect(); setStatus('Connected'); resize(); if (mode === 'type') terminal.focus(); };
   socket.onmessage = (event) => {
     const keepAtBottom = atBottom();
     const output = typeof event.data === 'string' ? event.data : decoder.decode(event.data, { stream: true });
@@ -71,10 +99,19 @@ function connect() {
     });
   };
   socket.onclose = (event) => {
-    setStatus(event.code === 4001 ? 'Session ended' : event.code === 4000 ? 'Detached by user; tmux is still running' : `Detached (${event.code}${event.reason ? `: ${event.reason}` : ''})`);
-    reconnect.disabled = event.code === 4001;
+    if (event.code === 4001) {
+      autoReconnectEnabled = false; setStatus('Session ended');
+      reconnect.disabled = true;
+    } else if (event.code === 4000) {
+      autoReconnectEnabled = false; setStatus('Detached by user; tmux is still running');
+      reconnect.disabled = false;
+    } else {
+      setStatus(`Detached (${event.code}${event.reason ? `: ${event.reason}` : ''})`);
+      reconnect.disabled = true;
+      scheduleReconnect();
+    }
   };
-  socket.onerror = () => { setStatus('Connection error'); reconnect.disabled = false; };
+  socket.onerror = () => { setStatus('Connection error'); reconnect.disabled = false; scheduleReconnect(); };
 }
 
 function setMode(selected) {
@@ -236,7 +273,7 @@ $$('[data-key]').forEach((button) => button.onclick = () => {
   try { send(JSON.parse(`"${button.dataset.key}"`)); } catch (error) { setStatus(error.message); }
 });
 $$('[data-close]').forEach((button) => button.onclick = () => document.getElementById(button.dataset.close).close());
-reconnect.onclick = connect;
+reconnect.onclick = () => { autoReconnectEnabled = true; cancelReconnect(); connect(); };
 $('#detach').onclick = () => {
   try {
     if (socket?.readyState !== WebSocket.OPEN) throw new Error('Terminal is disconnected');
@@ -263,7 +300,7 @@ composer.addEventListener('keydown', (event) => {
 });
 
 initTheme($('#terminal-theme'), () => { terminal.options.theme = xtermTheme(); resize(); });
-setMode(mode); syncVisualViewport(); autoSizeComposer(); connect(); loadBrief(true);
+setMode(mode); syncVisualViewport(); autoSizeComposer(); autoReconnectEnabled = true; cancelReconnect(); connect(); loadBrief(true);
 fetch(`/api/sessions/${encodeURIComponent(name)}/review?lines=1`, { cache: 'no-store' })
   .then((response) => response.ok ? response.json() : null)
   .then((body) => { alternateScreen = Boolean(body?.alternate_screen); })
