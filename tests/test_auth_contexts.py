@@ -77,6 +77,54 @@ class AuthContextTests(unittest.TestCase):
         )
         self.assertEqual(after["status"], "ready")
 
+    def test_fresh_registry_has_opencode_go_default_with_provider_opencode(self) -> None:
+        ctx = self.registry.get_context("opencode", "opencode-go-default")
+        self.assertEqual(ctx["provider"], "opencode")
+        self.assertEqual(ctx["kind"], "oauth-native")
+        self.assertEqual(ctx["source_ref"], "opencode/provider-native")
+        self.assertTrue(ctx["enabled"])
+        self.assertTrue(ctx["verified"])
+
+    def test_migration_recognized_builtin_persisted_context(self) -> None:
+        old = {
+            "provider": "opencode-go",
+            "kind": "oauth-native",
+            "source_ref": "opencode/provider-native",
+            "enabled": True,
+            "verified": True,
+        }
+        data = {
+            "version": 1,
+            "defaults": {"opencode": "opencode-go-default"},
+            "contexts": {"opencode": {"opencode-go-default": old}},
+        }
+        self.registry.registry_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        self.registry._ensure_builtin_contexts()
+        migrated = json.loads(self.registry.registry_path.read_text(encoding="utf-8"))
+        entry = migrated["contexts"]["opencode"]["opencode-go-default"]
+        self.assertEqual(entry["provider"], "opencode")
+        self.assertEqual(entry["source_ref"], "opencode/provider-native")
+
+    def test_custom_context_not_migrated(self) -> None:
+        custom = {
+            "provider": "opencode-go",
+            "kind": "api-key",
+            "secret_ref": "my-custom-key",
+            "enabled": True,
+            "verified": False,
+        }
+        data = {
+            "version": 1,
+            "defaults": {"opencode": "my-custom"},
+            "contexts": {"opencode": {"my-custom": custom}},
+        }
+        self.registry.registry_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        self.registry._ensure_builtin_contexts()
+        persisted = json.loads(self.registry.registry_path.read_text(encoding="utf-8"))
+        entry = persisted["contexts"]["opencode"]["my-custom"]
+        self.assertEqual(entry["provider"], "opencode-go")
+        self.assertEqual(entry["secret_ref"], "my-custom-key")
+
     def test_all_provider_adapters_expose_the_lifecycle_contract(self) -> None:
         contract = {
             "availability",

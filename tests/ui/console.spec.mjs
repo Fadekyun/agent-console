@@ -40,7 +40,7 @@ async function mockApi(page) {
     auth_contexts: [
       { tool: 'codex', name: 'default', status: 'ready', enabled: true, default: true },
       { tool: 'opencode', name: 'openrouter-main', provider: 'openrouter', status: 'ready', enabled: true, default: false },
-      { tool: 'opencode', name: 'opencode-default', provider: 'opencode', status: 'ready', enabled: true, default: true },
+      { tool: 'opencode', name: 'opencode-go-default', provider: 'opencode', status: 'ready', enabled: true, default: true },
       { tool: 'shell', name: 'default', status: 'ready', enabled: true, default: true },
     ],
   };

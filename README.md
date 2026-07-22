@@ -7,8 +7,8 @@ A unified tmux session manager for AI coding agent orchestration. Manage multipl
 - **Multi-tool orchestration** — Codex, Claude, OpenCode, Hermes, and Shell sessions
 - **Web terminal** — Browser-based xterm.js PTY attached to tmux sessions
 - **Session delegation** — Parent/child trees with read-only peer review
-- **Auth contexts** — Per-tool credential isolation with `secrets.d` storage
-- **Model catalogue** — OpenRouter and OpenCode-Go model browsing with cost estimation
+- **Auth contexts** — Per-tool credential isolation with `secrets.d` storage (legacy context key `opencode-go-default` is preserved for compatibility)
+- **Model catalogue** — OpenRouter and OpenCode model browsing with cost estimation
 - **Plan management** — Discord-integrated planning with execution handoff
 - **Audit logging** — SQLite-backed audit trail for all operations
 - **SSH client installer** — Cross-platform SSH config for remote access
