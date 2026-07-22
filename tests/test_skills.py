@@ -5,21 +5,29 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from agent_console.database import Database
 from agent_console.skills import (
     SKILL_CATALOG,
     SUPPORTED_TOOLS,
+    approve_superpower,
     assign_skill,
     check_superpower_approval,
+    cleanup_isolated_skills,
     doctor_skills,
     enrich_catalog_with_assignments,
+    get_effective_skills,
+    isolate_skills,
     list_assignments,
+    list_superpower_approvals,
+    revoke_superpower,
     skill_catalog,
     sync_skills,
     unassign_skill,
     validate_catalog,
+    validate_profile_skills,
 )
 from agent_console.validation import PROFILES
 
@@ -270,6 +278,357 @@ class SkillAssignmentTests(unittest.TestCase):
         self.assertIsNotNone(row)
         details = json.loads(row["details_json"])
         self.assertEqual(details["profile"], "bugfix")
+
+
+class EffectiveSkillTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.skills_root = Path(self.temp.name) / "skills"
+        self.skills_root.mkdir()
+        self.db_path = Path(self.temp.name) / "test.sqlite3"
+        self.db = Database(self.db_path)
+        self.db.migrate()
+
+        self.standard_skill = "skill-alpha"
+        self.superpower_skill = "skill-beta"
+        for name, kind, allowed, requires_approval in [
+            (self.standard_skill, "standard", None, False),
+            (self.superpower_skill, "superpower", None, True),
+        ]:
+            (self.skills_root / name).mkdir(exist_ok=True)
+            fm = f"---\nname: {name}\ndescription: Test {kind}\nkind: {kind}\n"
+            if allowed is not None:
+                fm += f"allowed_profiles: {', '.join(allowed)}\n"
+            if requires_approval:
+                fm += "requires_approval: true\n"
+            fm += "---\n"
+            (self.skills_root / name / "SKILL.md").write_text(fm, encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def _assign(self, profile: str, skill: str) -> None:
+        assign_skill(self.db, profile, skill, canonical_root=self.skills_root)
+
+    def _approve(self, profile: str, skill: str, **kw: str) -> None:
+        approve_superpower(self.db, profile, skill, canonical_root=self.skills_root, **kw)
+
+    def _revoke(self, profile: str, skill: str, **kw: str) -> None:
+        revoke_superpower(self.db, profile, skill, **kw)
+
+    # --- standard ---
+    def test_standard_assignment_effective(self) -> None:
+        self._assign("general", self.standard_skill)
+        result = get_effective_skills(self.db, "general", canonical_root=self.skills_root)
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(len(result["effective"]), 1)
+        self.assertEqual(result["effective"][0]["name"], self.standard_skill)
+        self.assertEqual(len(result["issues"]), 0)
+        v = validate_profile_skills(self.db, "general", canonical_root=self.skills_root)
+        self.assertTrue(v["valid"])
+
+    # --- no assignments ---
+    def test_no_assignments_is_valid(self) -> None:
+        result = get_effective_skills(self.db, "coder", canonical_root=self.skills_root)
+        self.assertEqual(result["total"], 0)
+        self.assertEqual(len(result["effective"]), 0)
+        self.assertEqual(len(result["issues"]), 0)
+        v = validate_profile_skills(self.db, "coder", canonical_root=self.skills_root)
+        self.assertTrue(v["valid"])
+
+    # --- missing from catalog (directory does not exist at all) ---
+    def test_missing_skill_reported_as_issue(self) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                "INSERT INTO skill_assignments(profile, skill_name, assigned_by, assigned_surface, assigned_at) "
+                "VALUES(?, ?, ?, ?, ?)",
+                ("planner", "ghost-skill", "test", "test", "2026-01-01T00:00:00"),
+            )
+        result = get_effective_skills(self.db, "planner", canonical_root=self.skills_root)
+        self.assertEqual(len(result["effective"]), 0)
+        self.assertEqual(len(result["issues"]), 1)
+        self.assertIn("missing from catalog", result["issues"][0])
+        v = validate_profile_skills(self.db, "planner", canonical_root=self.skills_root)
+        self.assertFalse(v["valid"])
+
+    # --- stale source (directory exists but SKILL.md deleted) ---
+    def test_stale_source_reported_as_issue(self) -> None:
+        self._assign("coder", self.standard_skill)
+        (self.skills_root / self.standard_skill / "SKILL.md").unlink()
+        result = get_effective_skills(self.db, "coder", canonical_root=self.skills_root)
+        self.assertEqual(len(result["effective"]), 0)
+        self.assertEqual(len(result["issues"]), 1)
+        self.assertIn("stale source", result["issues"][0])
+        self.assertIn("SKILL.md not found", result["issues"][0])
+        v = validate_profile_skills(self.db, "coder", canonical_root=self.skills_root)
+        self.assertFalse(v["valid"])
+
+    # --- disallowed (profile not in allowed_profiles) ---
+    def test_disallowed_profile_reported_as_issue(self) -> None:
+        restricted = "skill-gamma"
+        (self.skills_root / restricted).mkdir(exist_ok=True)
+        (self.skills_root / restricted / "SKILL.md").write_text(
+            "---\nname: skill-gamma\ndescription: Restricted\n"
+            "kind: superpower\nallowed_profiles: coder, planner\n---\n",
+            encoding="utf-8",
+        )
+        with self.db.connect() as conn:
+            conn.execute(
+                "INSERT INTO skill_assignments(profile, skill_name, assigned_by, assigned_surface, assigned_at) "
+                "VALUES(?, ?, ?, ?, ?)",
+                ("general", restricted, "test", "test", "2026-01-01T00:00:00"),
+            )
+        result = get_effective_skills(self.db, "general", canonical_root=self.skills_root)
+        self.assertEqual(len(result["effective"]), 0)
+        self.assertEqual(len(result["issues"]), 1)
+        self.assertIn("disallowed", result["issues"][0])
+        v = validate_profile_skills(self.db, "general", canonical_root=self.skills_root)
+        self.assertFalse(v["valid"])
+
+    # --- unapproved superpower (requires_approval=true, no approval) ---
+    def test_unapproved_superpower_reported_as_issue(self) -> None:
+        self._assign("general", self.superpower_skill)
+        result = get_effective_skills(self.db, "general", canonical_root=self.skills_root)
+        self.assertEqual(len(result["issues"]), 1)
+        self.assertIn("requires explicit human approval", result["issues"][0])
+        v = validate_profile_skills(self.db, "general", canonical_root=self.skills_root)
+        self.assertFalse(v["valid"])
+
+    # --- superpower with requires_approval is flagged when no explicit approval ---
+    def test_superpower_flagged_without_approval(self) -> None:
+        self._assign("general", self.superpower_skill)
+        result = get_effective_skills(self.db, "general", canonical_root=self.skills_root)
+        self.assertGreater(len(result["issues"]), 0)
+        self.assertIn("requires explicit human approval", result["issues"][0])
+        v = validate_profile_skills(self.db, "general", canonical_root=self.skills_root)
+        self.assertFalse(v["valid"])
+        ap = check_superpower_approval("general", self.superpower_skill,
+                                        approved=True, canonical_root=self.skills_root)
+        self.assertTrue(ap["allowed"])
+
+    # --- audit events on session create/restart ---
+    def test_session_create_audit_records_effective_skills(self) -> None:
+        self._assign("general", self.standard_skill)
+        v = validate_profile_skills(self.db, "general", canonical_root=self.skills_root)
+        self.assertTrue(v["valid"])
+        with self.db.connect() as conn:
+            conn.execute(
+                "INSERT INTO audit_events(created_at, actor, surface, action, target, outcome, details_json) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?)",
+                ("2026-01-01T00:00:00", "system", "CLI",
+                 "session.created", "test-session", "success",
+                 json.dumps({"effective_skills": [s["name"] for s in v["effective"]]})),
+            )
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT details_json FROM audit_events WHERE action='session.created' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        details = json.loads(row["details_json"])
+        self.assertIn("effective_skills", details)
+        self.assertIn(self.standard_skill, details["effective_skills"])
+
+    # --- restart validation rejects invalid ---
+    def test_restart_rejects_invalid_skills(self) -> None:
+        self._assign("coder", self.standard_skill)
+        (self.skills_root / self.standard_skill / "SKILL.md").unlink()
+        v = validate_profile_skills(self.db, "coder", canonical_root=self.skills_root)
+        self.assertFalse(v["valid"])
+        issues_text = "; ".join(v["issues"])
+        self.assertTrue("stale source" in issues_text or "missing from catalog" in issues_text)
+
+    def test_unknown_profile_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            get_effective_skills(self.db, "nonexistent")
+
+    # --- approved superpower becomes effective ---
+    def test_approved_superpower_becomes_effective(self) -> None:
+        self._assign("coder", self.superpower_skill)
+        self._approve("coder", self.superpower_skill, actor="admin", surface="web")
+        result = get_effective_skills(self.db, "coder", canonical_root=self.skills_root)
+        self.assertEqual(len(result["issues"]), 0)
+        self.assertEqual(len(result["effective"]), 1)
+        self.assertEqual(result["effective"][0]["name"], self.superpower_skill)
+        v = validate_profile_skills(self.db, "coder", canonical_root=self.skills_root)
+        self.assertTrue(v["valid"])
+
+    # --- revoke makes superpower block again ---
+    def test_revoked_superpower_blocks_again(self) -> None:
+        self._assign("coder", self.superpower_skill)
+        self._approve("coder", self.superpower_skill)
+        self._revoke("coder", self.superpower_skill, actor="admin", surface="web")
+        result = get_effective_skills(self.db, "coder", canonical_root=self.skills_root)
+        self.assertGreater(len(result["issues"]), 0)
+        self.assertIn("requires explicit human approval", result["issues"][0])
+        v = validate_profile_skills(self.db, "coder", canonical_root=self.skills_root)
+        self.assertFalse(v["valid"])
+
+    # --- approve_duplicate raises ---
+    def test_approve_duplicate_raises(self) -> None:
+        self._assign("coder", self.superpower_skill)
+        self._approve("coder", self.superpower_skill)
+        with self.assertRaises(ValueError):
+            self._approve("coder", self.superpower_skill)
+
+    # --- revoke_not_approved_raises ---
+    def test_revoke_not_approved_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            revoke_superpower(self.db, "coder", self.superpower_skill)
+
+    # --- list_superpower_approvals ---
+    def test_list_superpower_approvals(self) -> None:
+        self._assign("coder", self.superpower_skill)
+        self._approve("coder", self.superpower_skill, actor="admin", surface="web")
+        approvals = list_superpower_approvals(self.db)
+        self.assertEqual(len(approvals), 1)
+        self.assertEqual(approvals[0]["profile"], "coder")
+        self.assertEqual(approvals[0]["skill_name"], self.superpower_skill)
+        self.assertEqual(approvals[0]["approved_by"], "admin")
+        self.assertIsNone(approvals[0]["revoked_at"])
+        self._revoke("coder", self.superpower_skill)
+        approvals = list_superpower_approvals(self.db)
+        self.assertIsNotNone(approvals[0]["revoked_at"])
+
+    # --- approve_audit ---
+    def test_approve_audit_event(self) -> None:
+        self._assign("general", self.superpower_skill)
+        self._approve("general", self.superpower_skill, actor="admin", surface="web")
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT action, actor, surface, details_json FROM audit_events WHERE action='superpower.approved' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["actor"], "admin")
+        self.assertEqual(row["surface"], "web")
+        details = json.loads(row["details_json"])
+        self.assertEqual(details["profile"], "general")
+        self.assertEqual(details["skill_name"], self.superpower_skill)
+
+    # --- revoke_audit ---
+    def test_revoke_audit_event(self) -> None:
+        self._assign("general", self.superpower_skill)
+        self._approve("general", self.superpower_skill)
+        self._revoke("general", self.superpower_skill, actor="admin", surface="web")
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT action, actor, surface, details_json FROM audit_events WHERE action='superpower.revoked' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(row)
+        details = json.loads(row["details_json"])
+        self.assertEqual(details["profile"], "general")
+        self.assertEqual(details["skill_name"], self.superpower_skill)
+
+
+class SkillIsolationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.canonical = Path(self.temp.name) / "canonical"
+        self.canonical.mkdir()
+
+        self.assigned_skill = "assigned-one"
+        self.unassigned_skill = "unassigned-two"
+        for name in (self.assigned_skill, self.unassigned_skill):
+            (self.canonical / name).mkdir(exist_ok=True)
+            (self.canonical / name / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: Test\nkind: standard\n---\n",
+                encoding="utf-8",
+            )
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_isolate_creates_only_effective_skills(self) -> None:
+        isolated = Path(self.temp.name) / "isolated"
+        effective = [{"name": self.assigned_skill, "kind": "standard"}]
+        isolate_skills(isolated, self.canonical, effective)
+        self.assertTrue((isolated / self.assigned_skill).is_symlink())
+        self.assertTrue((isolated / self.assigned_skill / "SKILL.md").is_file())
+        self.assertFalse((isolated / self.unassigned_skill).exists())
+
+    def test_isolate_cleanup_removes_directory(self) -> None:
+        isolated = Path(self.temp.name) / "isolated-cleanup"
+        isolated.mkdir(parents=True, exist_ok=True)
+        (isolated / "stale").write_text("stale", encoding="utf-8")
+        cleanup_isolated_skills(isolated)
+        self.assertFalse(isolated.exists())
+
+    def test_isolate_cleanup_nonexistent_does_not_raise(self) -> None:
+        cleanup_isolated_skills(Path(self.temp.name) / "nonexistent")
+
+    def test_unassigned_skill_absent_from_isolated_root(self) -> None:
+        isolated = Path(self.temp.name) / "check-absent"
+        effective = [{"name": self.assigned_skill, "kind": "standard"}]
+        isolate_skills(isolated, self.canonical, effective)
+        dir_entries = list(isolated.iterdir())
+        names = [e.name for e in dir_entries]
+        self.assertIn(self.assigned_skill, names)
+        self.assertNotIn(self.unassigned_skill, names)
+
+    def test_no_assignments_creates_empty_isolated_root(self) -> None:
+        isolated = Path(self.temp.name) / "empty-isolated"
+        isolate_skills(isolated, self.canonical, [])
+        self.assertTrue(isolated.is_dir())
+        self.assertEqual(len(list(isolated.iterdir())), 0)
+
+    def test_empty_isolated_root_prevents_global_leak(self) -> None:
+        isolated = Path(self.temp.name) / "empty-leak-guard"
+        isolate_skills(isolated, self.canonical, [])
+        self.assertTrue(isolated.is_dir())
+        names = [p.name for p in isolated.iterdir()]
+        self.assertNotIn(self.unassigned_skill, names)
+
+
+class SuperpowerApprovalIntegrityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.skills_root = Path(self.temp.name) / "skills"
+        self.skills_root.mkdir()
+        self.db_path = Path(self.temp.name) / "test.sqlite3"
+        self.db = Database(self.db_path)
+        self.db.migrate()
+
+        for name, kind, allowed in [
+            ("std-skill", "standard", None),
+            ("sup-skill", "superpower", None),
+            ("restricted-sup", "superpower", ["coder"]),
+        ]:
+            (self.skills_root / name).mkdir(exist_ok=True)
+            fm = f"---\nname: {name}\ndescription: Test {kind}\nkind: {kind}\n"
+            if allowed:
+                fm += f"allowed_profiles: {', '.join(allowed)}\n"
+            fm += "---\n"
+            (self.skills_root / name / "SKILL.md").write_text(fm, encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_approve_unknown_skill_raises(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            approve_superpower(self.db, "general", "no-such-skill",
+                               canonical_root=self.skills_root)
+        self.assertIn("unknown skill", str(ctx.exception))
+
+    def test_approve_standard_skill_raises(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            approve_superpower(self.db, "general", "std-skill",
+                               canonical_root=self.skills_root)
+        self.assertIn("not superpower", str(ctx.exception))
+
+    def test_approve_disallowed_profile_raises(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            approve_superpower(self.db, "general", "restricted-sup",
+                               canonical_root=self.skills_root)
+        self.assertIn("not allowed", str(ctx.exception))
+
+    def test_approve_valid_superpower_succeeds(self) -> None:
+        result = approve_superpower(self.db, "general", "sup-skill",
+                                     actor="admin", surface="web",
+                                     canonical_root=self.skills_root)
+        self.assertTrue(result["approved"])
+
+    def test_revoke_fails_for_unapproved(self) -> None:
+        with self.assertRaises(ValueError):
+            revoke_superpower(self.db, "general", "sup-skill")
 
 
 if __name__ == "__main__":

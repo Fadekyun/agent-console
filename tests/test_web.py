@@ -591,6 +591,90 @@ class WebTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_skills_effective_returns_assigned(self) -> None:
+        self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "coder", "skill_name": "test-skill-for-web"},
+        )
+        response = self.client.post(
+            "/api/skills/effective",
+            headers=self.headers,
+            json={"profile": "coder"},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["profile"], "coder")
+        self.assertIn("effective", data)
+        self.assertIn("issues", data)
+        names = [s["name"] for s in data["effective"]]
+        self.assertIn("test-skill-for-web", names)
+
+    def test_skills_validate_valid_returns_valid(self) -> None:
+        self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "planner", "skill_name": "test-skill-for-web"},
+        )
+        response = self.client.post(
+            "/api/skills/validate",
+            headers=self.headers,
+            json={"profile": "planner"},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["valid"])
+
+    def test_skills_validate_invalid_returns_invalid(self) -> None:
+        stale_root = Path(self.temp.name) / "stale-validate"
+        stale_root.mkdir(parents=True, exist_ok=True)
+        skill_name = "stale-skill"
+        (stale_root / skill_name).mkdir(exist_ok=True)
+        (stale_root / skill_name / "SKILL.md").write_text(
+            "---\nkind: standard\ndescription: Initially valid\n---\n",
+            encoding="utf-8",
+        )
+        old_root = os.environ.get("AGCONSOLE_SKILLS_ROOT")
+        os.environ["AGCONSOLE_SKILLS_ROOT"] = str(stale_root)
+        try:
+            self.client.post(
+                "/api/skills/assign",
+                headers=self.headers,
+                json={"profile": "general", "skill_name": skill_name},
+            )
+            (stale_root / skill_name / "SKILL.md").unlink()
+            response = self.client.post(
+                "/api/skills/validate",
+                headers=self.headers,
+                json={"profile": "general"},
+            )
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertFalse(data["valid"])
+            self.assertGreater(len(data["issues"]), 0)
+            self.assertTrue(
+                any("stale source" in i or "missing from catalog" in i for i in data["issues"])
+            )
+        finally:
+            if old_root is not None:
+                os.environ["AGCONSOLE_SKILLS_ROOT"] = old_root
+            else:
+                os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
+
+    def test_skills_effective_no_auth_returns_403(self) -> None:
+        response = self.client.post(
+            "/api/skills/effective",
+            json={"profile": "general"},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_skills_validate_no_auth_returns_403(self) -> None:
+        response = self.client.post(
+            "/api/skills/validate",
+            json={"profile": "general"},
+        )
+        self.assertEqual(response.status_code, 403)
+
 
 if __name__ == "__main__":
     unittest.main()

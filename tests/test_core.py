@@ -11,8 +11,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_console.config import Settings
+from agent_console.database import Database
 from agent_console.manager import SessionManager
 from agent_console.providers import LaunchSpec
+from agent_console.skills import assign_skill
 from agent_console.tmux import Tmux
 from agent_console.validation import contained_path, validate_session_name
 
@@ -665,6 +667,304 @@ class SessionIntegrationTests(unittest.TestCase):
         self.assertTrue(Path(session["worktree"]).is_dir())
         self.manager.kill("plan-implementation")
         self.assertTrue(Path(session["worktree"]).is_dir())
+
+    def test_create_rejects_invalid_skill_assignments(self) -> None:
+        skills_root = Path(self.temp.name) / "skills"
+        skills_root.mkdir()
+        skill_name = "test-core-skill"
+        (skills_root / skill_name).mkdir(exist_ok=True)
+        (skills_root / skill_name / "SKILL.md").write_text(
+            "---\nname: test-core-skill\ndescription: Core test\nkind: standard\n---\n",
+            encoding="utf-8",
+        )
+        old_env = os.environ.get("AGCONSOLE_SKILLS_ROOT")
+        os.environ["AGCONSOLE_SKILLS_ROOT"] = str(skills_root)
+        try:
+            assign_skill(self.manager.database, "general", skill_name)
+            with patch.object(
+                self.manager,
+                "_launch_spec",
+                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+            ):
+                session = self.manager.create(
+                    tool="codex",
+                    profile="general",
+                    name="skill-valid-test",
+                    repository=str(self.workspace),
+                )
+                self.assertEqual(session["profile"], "general")
+                self.manager.kill("skill-valid-test")
+            (skills_root / skill_name / "SKILL.md").unlink()
+            with self.assertRaises(ValueError) as ctx:
+                self.manager.create(
+                    tool="codex",
+                    profile="general",
+                    name="skill-invalid-test",
+                    repository=str(self.workspace),
+                )
+            self.assertIn("invalid skill assignments", str(ctx.exception))
+        finally:
+            if old_env is not None:
+                os.environ["AGCONSOLE_SKILLS_ROOT"] = old_env
+            else:
+                os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
+
+    def test_restart_rejects_invalid_skill_assignments(self) -> None:
+        skills_root = Path(self.temp.name) / "skills-restart"
+        skills_root.mkdir()
+        skill_name = "restart-core-skill"
+        (skills_root / skill_name).mkdir(exist_ok=True)
+        (skills_root / skill_name / "SKILL.md").write_text(
+            "---\nname: restart-core-skill\ndescription: Restart test\nkind: standard\n---\n",
+            encoding="utf-8",
+        )
+        old_env = os.environ.get("AGCONSOLE_SKILLS_ROOT")
+        os.environ["AGCONSOLE_SKILLS_ROOT"] = str(skills_root)
+        try:
+            assign_skill(self.manager.database, "coder", skill_name)
+            with patch.object(
+                self.manager,
+                "_launch_spec",
+                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+            ):
+                session = self.manager.create(
+                    tool="codex",
+                    profile="coder",
+                    name="restart-valid-test",
+                    repository=str(self.workspace),
+                )
+            (skills_root / skill_name / "SKILL.md").unlink()
+            with self.assertRaises(ValueError) as ctx:
+                self.manager.restart("restart-valid-test")
+            self.assertIn("invalid skill assignments preventing restart", str(ctx.exception))
+            self.manager.kill("restart-valid-test")
+        finally:
+            if old_env is not None:
+                os.environ["AGCONSOLE_SKILLS_ROOT"] = old_env
+            else:
+                os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
+
+    def test_launcher_overlay_contains_isolated_skills(self) -> None:
+        skills_root = Path(self.temp.name) / "overlay-skills"
+        skills_root.mkdir()
+        skill_name = "overlay-skill"
+        (skills_root / skill_name).mkdir(exist_ok=True)
+        (skills_root / skill_name / "SKILL.md").write_text(
+            "---\nname: overlay-skill\ndescription: Overlay test\nkind: standard\n---\n",
+            encoding="utf-8",
+        )
+        old_env = os.environ.get("AGCONSOLE_SKILLS_ROOT")
+        os.environ["AGCONSOLE_SKILLS_ROOT"] = str(skills_root)
+        try:
+            assign_skill(self.manager.database, "general", skill_name)
+            with patch.object(
+                self.manager,
+                "_launch_spec",
+                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+            ):
+                session = self.manager.create(
+                    tool="codex",
+                    profile="general",
+                    name="overlay-test",
+                    repository=str(self.workspace),
+                )
+            launcher = Path(self.manager.settings.state_dir) / "launchers" / "overlay-test.sh"
+            launcher_text = launcher.read_text(encoding="utf-8")
+            self.assertIn("CODEX_HOME=", launcher_text)
+            overlay_line = next(
+                l for l in launcher_text.splitlines() if l.startswith("export CODEX_HOME=")
+            )
+            overlay_path = overlay_line.split("=", 1)[1].strip().strip("'\"")
+            overlay_dir = Path(overlay_path)
+            self.assertTrue(overlay_dir.is_dir())
+            overlay_skills = overlay_dir / "skills"
+            self.assertTrue(overlay_skills.is_symlink())
+            self.assertTrue((overlay_skills / skill_name).is_dir())
+            isolated_root = Path(
+                self.manager.settings.state_dir / "skills-isolated" / "overlay-test"
+            )
+            self.assertEqual(overlay_skills.resolve(), isolated_root.resolve())
+            unassigned_entries = [p for p in overlay_skills.iterdir()]
+            self.assertEqual(len(unassigned_entries), 1)
+            self.assertEqual(unassigned_entries[0].name, skill_name)
+            self.manager.kill("overlay-test")
+        finally:
+            if old_env is not None:
+                os.environ["AGCONSOLE_SKILLS_ROOT"] = old_env
+            else:
+                os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
+
+    def test_real_codex_launcher_overlay_wins_over_global(self) -> None:
+        skills_root = Path(self.temp.name) / "real-overlay-skills"
+        skills_root.mkdir()
+        skill_name = "real-skill"
+        (skills_root / skill_name).mkdir(exist_ok=True)
+        (skills_root / skill_name / "SKILL.md").write_text(
+            "---\nname: real-skill\ndescription: Real overlay test\nkind: standard\n---\n",
+            encoding="utf-8",
+        )
+        codex_bin = Path(self.temp.name) / "codex-stub"
+        codex_bin.write_text("#!/usr/bin/env bash\necho stub\n", encoding="utf-8")
+        codex_bin.chmod(0o755)
+        old_bin = os.environ.get("AGCONSOLE_CODEX_BIN")
+        os.environ["AGCONSOLE_CODEX_BIN"] = str(codex_bin)
+        old_skill_env = os.environ.get("AGCONSOLE_SKILLS_ROOT")
+        os.environ["AGCONSOLE_SKILLS_ROOT"] = str(skills_root)
+        global_codex_home = self.manager.auth.codex_home("default")
+        try:
+            assign_skill(self.manager.database, "general", skill_name)
+            session = self.manager.create(
+                tool="codex",
+                profile="general",
+                name="real-overlay-test",
+                repository=str(self.workspace),
+            )
+            launcher = Path(self.manager.settings.state_dir) / "launchers" / "real-overlay-test.sh"
+            launcher_text = launcher.read_text(encoding="utf-8")
+            cod_ex_lines = [
+                l for l in launcher_text.splitlines()
+                if l.startswith("export CODEX_HOME=")
+            ]
+            self.assertEqual(
+                len(cod_ex_lines), 1,
+                f"expected exactly one CODEX_HOME export, got {len(cod_ex_lines)}: {cod_ex_lines}"
+            )
+            overlay_path_str = cod_ex_lines[0].split("=", 1)[1].strip().strip("'\"")
+            overlay_path = Path(overlay_path_str)
+            self.assertTrue(
+                overlay_path.is_dir(),
+                f"overlay path {overlay_path} should exist",
+            )
+            self.assertNotEqual(
+                str(overlay_path), str(global_codex_home),
+                "overlay CODEX_HOME must differ from global codex home",
+            )
+            overlay_skills = overlay_path / "skills"
+            self.assertTrue(
+                overlay_skills.is_symlink(),
+                f"overlay skills should be a symlink: {overlay_skills}",
+            )
+            isolated_root = Path(
+                self.manager.settings.state_dir / "skills-isolated" / "real-overlay-test"
+            )
+            self.assertEqual(
+                overlay_skills.resolve(), isolated_root.resolve(),
+                "overlay skills symlink must resolve to isolated root",
+            )
+            self.assertTrue(
+                (overlay_skills / skill_name).is_dir(),
+                "assigned skill must be present in overlay skills",
+            )
+            global_skills = global_codex_home / "skills"
+            if global_skills.is_symlink():
+                self.assertNotEqual(
+                    overlay_skills.resolve(), global_skills.resolve(),
+                    "overlay skills must NOT resolve to the global skills root",
+                )
+            self.manager.kill("real-overlay-test")
+        finally:
+            if old_skill_env is not None:
+                os.environ["AGCONSOLE_SKILLS_ROOT"] = old_skill_env
+            else:
+                os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
+            if old_bin is not None:
+                os.environ["AGCONSOLE_CODEX_BIN"] = old_bin
+            else:
+                os.environ.pop("AGCONSOLE_CODEX_BIN", None)
+
+    def test_empty_assignments_creates_empty_overlay(self) -> None:
+        with patch.object(
+            self.manager,
+            "_launch_spec",
+            return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+        ):
+            session = self.manager.create(
+                tool="codex",
+                profile="general",
+                name="empty-overlay-test",
+                repository=str(self.workspace),
+            )
+        launcher = Path(self.manager.settings.state_dir) / "launchers" / "empty-overlay-test.sh"
+        launcher_text = launcher.read_text(encoding="utf-8")
+        overlay_line = next(
+            l for l in launcher_text.splitlines() if l.startswith("export CODEX_HOME=")
+        )
+        overlay_path = overlay_line.split("=", 1)[1].strip().strip("'\"")
+        overlay_skills = Path(overlay_path) / "skills"
+        self.assertTrue(overlay_skills.is_symlink())
+        self.assertEqual(len(list(overlay_skills.iterdir())), 0,
+                         "empty-assignment overlay must be empty to prevent global skill leak")
+        self.manager.kill("empty-overlay-test")
+
+    def test_tool_without_isolation_fails_closed_for_assignments(self) -> None:
+        skills_root = Path(self.temp.name) / "fail-closed-skills"
+        skills_root.mkdir()
+        skill_name = "fail-closed-skill"
+        (skills_root / skill_name).mkdir(exist_ok=True)
+        (skills_root / skill_name / "SKILL.md").write_text(
+            "---\nname: fail-closed-skill\ndescription: FC\ntools: opencode, hermes, claude, codex\nkind: standard\n---\n",
+            encoding="utf-8",
+        )
+        old_env = os.environ.get("AGCONSOLE_SKILLS_ROOT")
+        os.environ["AGCONSOLE_SKILLS_ROOT"] = str(skills_root)
+        try:
+            assign_skill(self.manager.database, "general", skill_name)
+            for bad_tool in ("opencode", "hermes", "claude"):
+                with self.assertRaises(RuntimeError) as ctx:
+                    with patch.object(
+                        self.manager,
+                        "_launch_spec",
+                        return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+                    ):
+                        self.manager.create(
+                            tool=bad_tool,
+                            profile="general",
+                            name=f"fail-{bad_tool}",
+                            repository=str(self.workspace),
+                        )
+                err = str(ctx.exception)
+                self.assertIn("cannot isolate", err, f"{bad_tool} should be rejected")
+                self.assertIn(bad_tool, err)
+            with patch.object(
+                self.manager,
+                "_launch_spec",
+                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+            ):
+                codex_session = self.manager.create(
+                    tool="codex", profile="general",
+                    name="fail-closed-codex-ok",
+                    repository=str(self.workspace),
+                )
+                self.assertEqual(codex_session["profile"], "general")
+                self.manager.kill("fail-closed-codex-ok")
+        finally:
+            if old_env is not None:
+                os.environ["AGCONSOLE_SKILLS_ROOT"] = old_env
+            else:
+                os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
+
+    def test_tool_without_isolation_passes_without_assignments(self) -> None:
+        models = [{
+            "id": "cheap", "model": "opencode-go/cheap", "provider": "opencode-go",
+            "name": "Cheap", "status": "active", "selectable": True,
+            "cost": {"input": 0.1, "output": 0.2, "cache_read": None, "reasoning": None},
+            "limits": {"context": 1000, "output": 100},
+            "capabilities": {"reasoning": False, "attachment": False, "toolcall": True},
+        }]
+        with patch.object(self.manager.models, "list", return_value={"provider": "opencode-go", "models": models}):
+            with patch.object(
+                self.manager,
+                "_launch_spec",
+                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+            ):
+                session = self.manager.create(
+                    tool="opencode",
+                    profile="general",
+                    name="no-assign-opencode-pass",
+                    repository=str(self.workspace),
+                )
+                self.assertEqual(session["profile"], "general")
+                self.manager.kill("no-assign-opencode-pass")
 
 
 class WaitProtocolTests(unittest.TestCase):

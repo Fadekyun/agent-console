@@ -56,6 +56,10 @@ class ProviderAdapter:
     def auth_status(self, context_name: str | None = None) -> dict[str, Any]:
         return self.availability(context_name)
 
+    @property
+    def can_isolate_skills(self) -> bool:
+        return False
+
     def build_environment(self, context: dict[str, Any]) -> dict[str, str]:
         return {}
 
@@ -104,6 +108,10 @@ class ProviderAdapter:
 
 class CodexAdapter(ProviderAdapter):
     tool = "codex"
+
+    @property
+    def can_isolate_skills(self) -> bool:
+        return True
 
     def build_environment(self, context: dict[str, Any]) -> dict[str, str]:
         return {"CODEX_HOME": str(self.registry.codex_home(context["name"]))}
