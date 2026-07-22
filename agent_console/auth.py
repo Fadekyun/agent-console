@@ -57,7 +57,7 @@ def default_registry() -> dict[str, Any]:
                     "verified": True,
                 },
                 "opencode-go-default": {
-                    "provider": "opencode-go",
+                    "provider": "opencode",
                     "kind": "oauth-native",
                     "source_ref": "opencode/provider-native",
                     "enabled": True,
@@ -105,7 +105,7 @@ class AuthRegistry:
         contexts = data.setdefault("contexts", {}).setdefault("opencode", {})
         if "opencode-go-default" not in contexts:
             contexts["opencode-go-default"] = {
-                "provider": "opencode-go",
+                "provider": "opencode",
                 "kind": "oauth-native",
                 "source_ref": "opencode/provider-native",
                 "enabled": True,
