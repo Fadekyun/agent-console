@@ -29,6 +29,8 @@ let mode = coarsePointer ? 'scroll' : 'type';
 let resizeFrame;
 let alternateScreen = false;
 let touchStartY = null;
+let following = true;
+let hasUnread = false;
 let briefLoaded = false;
 let reconnectTimer = null;
 let reconnectAttempt = 0;
@@ -55,6 +57,7 @@ function resize() {
     try {
       fit.fit();
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
+      if (following) terminal.scrollToBottom();
     } catch { /* the container can be between viewport sizes */ }
   });
 }
@@ -92,13 +95,18 @@ function connect() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   socket = new WebSocket(`${protocol}//${location.host}/ws/sessions/${encodeURIComponent(name)}`);
   socket.binaryType = 'arraybuffer'; setStatus('Connecting…'); reconnect.disabled = true;
-  socket.onopen = () => { cancelReconnect(); setStatus('Connected'); resize(); if (mode === 'type') terminal.focus(); };
+  socket.onopen = () => { cancelReconnect(); setStatus('Connected'); resize(); following = true; terminal.scrollToBottom(); if (mode === 'type') terminal.focus(); };
   socket.onmessage = (event) => {
-    const keepAtBottom = atBottom();
     const output = typeof event.data === 'string' ? event.data : decoder.decode(event.data, { stream: true });
     terminal.write(output, () => {
-      if (keepAtBottom) terminal.scrollToBottom();
-      else { newOutput.hidden = false; newOutput.textContent = 'New output \u00b7 Scroll to bottom'; }
+      if (following) {
+        terminal.scrollToBottom();
+      } else {
+        hasUnread = true;
+        newOutput.hidden = false;
+        newOutput.textContent = 'New output \u00b7 Scroll to bottom';
+        newOutput.classList.add('has-unread');
+      }
     });
   };
   socket.onclose = (event) => {
@@ -252,7 +260,18 @@ async function openPeers() {
 
 terminal.onData((value) => { if (mode === 'type') { try { send(value); } catch { /* status is visible */ } } });
 terminal.onSelectionChange(() => { /* xterm selection is secondary to selectable Text View */ });
-terminal.onScroll(() => { newOutput.hidden = atBottom(); if (!newOutput.hidden) newOutput.textContent = 'Scroll to bottom'; });
+terminal.onScroll(() => {
+  const atBottomNow = atBottom();
+  newOutput.hidden = atBottomNow;
+  if (atBottomNow) {
+    following = true;
+    hasUnread = false;
+    newOutput.classList.remove('has-unread');
+  } else {
+    following = false;
+    newOutput.textContent = 'Scroll to bottom';
+  }
+});
 window.__terminal = terminal;
 $('#terminal').addEventListener('touchstart', (event) => {
   if (mode === 'scroll' && event.touches.length === 1) touchStartY = event.touches[0].clientY;
@@ -295,7 +314,7 @@ $('#paste-device').onclick = pasteFromDevice;
 $('#peers').onclick = openPeers;
 $('#send').onclick = () => submit(false);
 $('#send-enter').onclick = () => submit(true);
-newOutput.onclick = () => { terminal.scrollToBottom(); newOutput.hidden = true; };
+newOutput.onclick = () => { terminal.scrollToBottom(); following = true; hasUnread = false; newOutput.hidden = true; newOutput.classList.remove('has-unread'); };
 $('#use-manual-paste').onclick = () => { insertComposer($('#paste-sheet-text').value); $('#paste-sheet').close(); setStatus('Pasted into composer; review before sending'); };
 composer.addEventListener('input', autoSizeComposer);
 composer.addEventListener('keydown', (event) => {

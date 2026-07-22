@@ -94,6 +94,7 @@ async function mockApi(page) {
 async function installFakeWebSocket(page) {
   await page.addInitScript(() => {
     window.__wsSent = [];
+    window.__fakeWs = null;
     Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true });
     Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
     document.execCommand = () => true;
@@ -101,6 +102,7 @@ async function installFakeWebSocket(page) {
       static OPEN = 1;
       constructor() {
         this.readyState = FakeWebSocket.OPEN;
+        window.__fakeWs = this;
         queueMicrotask(() => {
           this.onopen?.();
           const output = Array.from({ length: 180 }, (_, index) => `terminal line ${index}`).join('\n');
@@ -469,21 +471,74 @@ test('new session form includes project selector', async ({ page }, testInfo) =>
   await expect(select).toContainText('selector-project');
 });
 
-test('new-output button appears when not at bottom and contextual label works', async ({ page }, testInfo) => {
+test('terminal scroll-follow: connect, scroll-away, unread, manual-jump, resize', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Scroll-to-bottom coverage on desktop.');
   await installFakeWebSocket(page);
   await mockApi(page);
   await page.goto('/terminal?session=codex-root');
-  // Simulate scroll away from bottom by setting viewportY < baseY via page.evaluate
+
+  // 1. Initial connect/reconnect scrolls to bottom
+  await expect(page.locator('#new-output')).toBeHidden();
+  expect(await page.evaluate(() => {
+    const buf = window.__terminal?.buffer.active;
+    return buf ? buf.viewportY >= buf.baseY : false;
+  })).toBe(true);
+
+  // 2. Deliberate scroll-away → button shows "Scroll to bottom"
+  await page.waitForFunction(() => window.__terminal?.buffer.active.baseY > 0, { timeout: 5000 });
   await page.evaluate(() => {
     const term = window.__terminal;
-    if (term) { term.buffer.active.viewportY = 0; term.buffer.active.baseY = 100; term.scrollLines(10); }
-    // Trigger onScroll
-    term?.scrollLines(1);
+    if (term) {
+      term.buffer.active.viewportY = 0;
+      term.scrollToBottom();
+      term.scrollLines(-1);
+    }
   });
   await expect(page.locator('#new-output')).toBeVisible();
   await expect(page.locator('#new-output')).toContainText('Scroll to bottom');
-  // Click to scroll to bottom
+  expect(await page.evaluate(() => {
+    const buf = window.__terminal?.buffer.active;
+    return buf ? buf.viewportY < buf.baseY : false;
+  })).toBe(true);
+
+  // 3. New output while scrolled away → unread indicator, viewport preserved
+  await page.evaluate(() => {
+    const encoder = new TextEncoder();
+    window.__fakeWs?.onmessage?.({ data: encoder.encode('\nnew unread output\n').buffer });
+  });
+  await expect(page.locator('#new-output')).toContainText('New output');
+  await expect(page.locator('#new-output')).toContainText('Scroll to bottom');
+  const btnClass = await page.locator('#new-output').getAttribute('class');
+  expect(btnClass).toContain('has-unread');
+  expect(await page.evaluate(() => {
+    const buf = window.__terminal?.buffer.active;
+    return buf ? buf.viewportY < buf.baseY : false;
+  })).toBe(true);
+
+  // 4. Manual jump (click) → scrolls to bottom, resumes following
   await page.locator('#new-output').click();
   await expect(page.locator('#new-output')).toBeHidden();
+  expect(await page.evaluate(() => {
+    const buf = window.__terminal?.buffer.active;
+    return buf ? buf.viewportY === buf.baseY : false;
+  })).toBe(true);
+  // Following active — new output auto-scrolls, viewport stays at bottom
+  await page.evaluate(() => {
+    const encoder = new TextEncoder();
+    window.__fakeWs?.onmessage?.({ data: encoder.encode('\nauto-followed output\n').buffer });
+  });
+  await expect(page.locator('#new-output')).toBeHidden();
+  expect(await page.evaluate(() => {
+    const buf = window.__terminal?.buffer.active;
+    return buf ? buf.viewportY === buf.baseY : false;
+  })).toBe(true);
+
+  // 5. Window resize while following keeps at bottom
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.waitForTimeout(200);
+  await expect(page.locator('#new-output')).toBeHidden();
+  expect(await page.evaluate(() => {
+    const buf = window.__terminal?.buffer.active;
+    return buf ? buf.viewportY === buf.baseY : false;
+  })).toBe(true);
 });
