@@ -405,10 +405,26 @@ class SessionManager:
                 summary["children"] = child_states
                 summary["exit_code"] = exit_code
 
+                intervention_detected = any(
+                    c.get("wait_status") == "intervention" for c in child_states
+                )
+                failure_detected = any(
+                    c.get("wait_status") == "completed"
+                    and c.get("attention_state") != "ready_for_review"
+                    for c in child_states
+                )
+
+                if intervention_detected:
+                    outcome = "intervention"
+                    summary["exit_code"] = 2
+                    break
+
                 if all_terminal:
-                    outcome = "success" if exit_code == 0 else (
-                        "intervention" if exit_code == 2 else "failure"
-                    )
+                    outcome = "success" if exit_code == 0 else "failure"
+                    break
+
+                if failure_detected:
+                    outcome = "failure"
                     break
 
                 time.sleep(poll_interval)

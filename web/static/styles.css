@@ -222,6 +222,10 @@ dialog::backdrop { background: rgb(0 0 0 / .58); } .dialog-form, dialog form { d
 .brief-block { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
 .brief-block h3 { margin-bottom: 7px; }
 .brief-block p { white-space: pre-wrap; }
+#inspector-wait-status { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+#inspector-wait-status h3 { margin-bottom: 7px; }
+#inspector-wait-status .wait-children { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; font-size: .86rem; }
+#inspector-wait-status .wait-child { color: var(--muted); }
 .attention-form { display: grid; grid-template-columns: 1fr; gap: 9px; padding: 13px 15px; border-top: 1px solid var(--border); background: var(--surface); }
 .attention-form textarea { min-height: 72px; }
 .attention-form p { margin: 0; }

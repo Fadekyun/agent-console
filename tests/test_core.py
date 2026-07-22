@@ -549,6 +549,125 @@ class WaitProtocolTests(unittest.TestCase):
         self.assertIn("ready_for_review", child_ctx["context"])
         self.assertIn("wait-for-children", child_ctx["context"])
 
+    def test_wait_detects_blocked_child_immediately(self) -> None:
+        parent = self.manager.create(
+            tool="shell", profile="general", name="wait-blocked-parent",
+            repository=str(self.workspace),
+        )
+        child1 = self.manager.delegate(
+            profile="planner", parent=parent["id"], task="blocked child",
+            tool="shell",
+        )["session"]
+        child2 = self.manager.delegate(
+            profile="planner", parent=parent["id"], task="running child",
+            tool="shell",
+        )["session"]
+
+        self.manager.set_attention(child1["tmux_name"], state="blocked", note="needs help", actor="test")
+        self.manager.kill(child1["tmux_name"])
+
+        result = self.manager.wait_for_children(
+            parent["tmux_name"], timeout=15, poll_interval=1
+        )
+        self.assertEqual(result["outcome"], "intervention")
+        self.assertEqual(result["exit_code"], 2)
+        blocked = next(c for c in result["children"] if c["tmux_name"] == child1["tmux_name"])
+        self.assertEqual(blocked["wait_status"], "intervention")
+        self.assertEqual(blocked["attention_state"], "blocked")
+        self.assertEqual(blocked["attention_note"], "needs help")
+
+        self.manager.kill(child2["tmux_name"])
+
+    def test_wait_detects_failed_child_after_all_terminal(self) -> None:
+        parent = self.manager.create(
+            tool="shell", profile="general", name="wait-fail-parent",
+            repository=str(self.workspace),
+        )
+        child1 = self.manager.delegate(
+            profile="planner", parent=parent["id"], task="fail child",
+            tool="shell",
+        )["session"]
+        child2 = self.manager.delegate(
+            profile="planner", parent=parent["id"], task="also fail child",
+            tool="shell",
+        )["session"]
+
+        self.manager.kill(child1["tmux_name"])
+        self.manager.kill(child2["tmux_name"])
+
+        result = self.manager.wait_for_children(
+            parent["tmux_name"], timeout=15, poll_interval=1
+        )
+        self.assertEqual(result["outcome"], "failure")
+        self.assertEqual(result["exit_code"], 3)
+        for child in result["children"]:
+            self.assertEqual(child["wait_status"], "completed")
+
+    def test_wait_failed_child_while_sibling_waiting(self) -> None:
+        parent = self.manager.create(
+            tool="shell", profile="general", name="wait-fail-sibling-parent",
+            repository=str(self.workspace),
+        )
+        child1 = self.manager.delegate(
+            profile="planner", parent=parent["id"], task="fail child",
+            tool="shell",
+        )["session"]
+        child2 = self.manager.delegate(
+            profile="planner", parent=parent["id"], task="waiting sibling",
+            tool="shell",
+        )["session"]
+
+        self.manager.kill(child1["tmux_name"])
+
+        t0 = time.monotonic()
+        result = self.manager.wait_for_children(
+            parent["tmux_name"], timeout=15, poll_interval=1
+        )
+        elapsed = time.monotonic() - t0
+        self.assertLess(
+            elapsed, 10,
+            f"should break immediately, not wait for timeout or sibling; took {elapsed:.1f}s",
+        )
+        self.assertEqual(result["outcome"], "failure")
+        self.assertEqual(result["exit_code"], 3)
+
+        self.manager.kill(child2["tmux_name"])
+
+    def test_wait_web_endpoint(self) -> None:
+        os.environ["AGENT_CONSOLE_TAILSCALE_LOGIN"] = "test@example.com"
+        from fastapi.testclient import TestClient
+        from agent_console.web import create_app
+        client = TestClient(create_app(self.manager), base_url="http://localhost")
+        headers = {"Tailscale-User-Login": "test@example.com"}
+
+        parent = self.manager.create(
+            tool="shell", profile="general", name="wait-web-parent",
+            repository=str(self.workspace),
+        )
+        child = self.manager.delegate(
+            profile="planner", parent=parent["id"], task="web wait child",
+            tool="shell",
+        )["session"]
+
+        status_resp = client.get(
+            f"/api/sessions/{parent['tmux_name']}/wait-status", headers=headers
+        )
+        self.assertEqual(status_resp.status_code, 200)
+        self.assertIsNone(status_resp.json())
+
+        self.manager.set_attention(child["tmux_name"], state="ready_for_review", actor="test")
+        self.manager.kill(child["tmux_name"])
+
+        wait_resp = client.post(
+            f"/api/sessions/{parent['tmux_name']}/wait-for-children",
+            headers=headers,
+            json={"timeout": 15, "poll_interval": 1},
+        )
+        self.assertEqual(wait_resp.status_code, 200)
+        data = wait_resp.json()
+        self.assertEqual(data["outcome"], "success")
+        self.assertEqual(data["exit_code"], 0)
+
 
 class SessionGroupTests(unittest.TestCase):
     def setUp(self) -> None:

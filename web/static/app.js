@@ -136,6 +136,46 @@ function openTerminal(name) {
   terminalTabs.set(name, { tab, frame }); activateTerminal(name);
 }
 
+function renderWaitStatus(session) {
+  const el = $('#inspector-wait-status');
+  if (!session.total_child_count) { el.hidden = true; return; }
+  el.hidden = false;
+  el.innerHTML = '<h3>Wait cycle</h3><p class="muted">Loading wait status…</p>';
+  api(`/api/sessions/${encodeURIComponent(session.tmux_name)}/wait-status`).then((data) => {
+    if (!data) {
+      el.innerHTML = '<h3>Wait cycle</h3><p class="muted">No wait initiated yet.</p>';
+      return;
+    }
+    const outcome = data.outcome || 'unknown';
+    const outcomeClass = outcome === 'success' ? 'live' : outcome === 'timeout' ? 'stopped' : 'danger';
+    const summary = data.summary || {};
+    const childrenHtml = (summary.children || []).map((c) =>
+      `<span class="wait-child">${escapeHtml(c.tmux_name)}: <strong>${c.wait_status || 'unknown'}</strong></span>`
+    ).join('');
+    el.innerHTML = `<h3>Wait cycle</h3>
+      <p>Outcome: <strong class="badge ${outcomeClass}">${outcome}</strong>${data.completed_at ? ` · ${formatActivity(data.completed_at)}` : ''}</p>
+      ${childrenHtml ? `<div class="wait-children">${childrenHtml}</div>` : ''}`;
+  }).catch(() => {
+    el.innerHTML = '<h3>Wait cycle</h3><p class="muted">Unable to load wait status.</p>';
+  });
+}
+
+async function waitForChildren(name, button) {
+  button.disabled = true; button.textContent = 'Waiting…';
+  try {
+    const result = await api(`/api/sessions/${encodeURIComponent(name)}/wait-for-children`, {
+      method: 'POST', body: JSON.stringify({ timeout: 120, poll_interval: 5 }),
+    });
+    const outcome = result.outcome || 'unknown';
+    showNotice(`Wait outcome: ${outcome} (exit code ${result.exit_code})`, outcome === 'success' ? 'success' : outcome === 'intervention' ? 'warning' : 'error');
+    await refresh();
+  } catch (error) {
+    showNotice(error.message || String(error), 'error');
+  } finally {
+    button.disabled = false; button.textContent = 'Wait for children';
+  }
+}
+
 function renderInspector(session) {
   state.selectedSession = session.tmux_name;
   $('#inspector-name').textContent = session.tmux_name;
@@ -152,10 +192,12 @@ function renderInspector(session) {
       <div><dt>Parent / plan</dt><dd>${escapeHtml(session.parent_session || 'Root')} · ${escapeHtml(session.linked_plan_id || 'No plan')}</dd></div>
       <div><dt>Process / socket</dt><dd>${escapeHtml(session.current_command || 'None')} · ${escapeHtml(session.socket_scope)}</dd></div>
       <div><dt>Clients</dt><dd>${session.attached_clients} attached</dd></div>
+      <div><dt>Children</dt><dd>${session.child_count || 0} / ${session.total_child_count || 0} active</dd></div>
       <div><dt>Last activity</dt><dd title="${escapeHtml(session.last_activity || '')}">${formatActivity(session.last_activity)}</dd></div>
       <div><dt>Attention updated</dt><dd>${escapeHtml(session.attention_updated_by || 'Never')} · ${formatActivity(session.attention_updated_at)}</dd></div>
     </dl>
-    <div class="brief-block"><h3>Stored brief</h3><p>${escapeHtml(session.initial_task || 'No brief recorded.')}</p></div>`;
+    <div class="brief-block"><h3>Stored brief</h3><p>${escapeHtml(session.initial_task || 'No brief recorded.')}</p></div>
+    <div id="inspector-wait-status"></div>`;
   attentionForm.elements.state.value = session.attention_state || 'normal';
   attentionForm.elements.note.value = session.attention_note || '';
   attentionForm.dataset.session = session.tmux_name; $('#attention-status').textContent = '';
@@ -168,11 +210,15 @@ function renderInspector(session) {
   addButton('Copy name', () => copyName(session.tmux_name));
   addButton('Review output', () => showReview(session.tmux_name));
   if (session.running) addButton('Delegate', () => openDelegate(session));
+  if (session.total_child_count) {
+    const waitBtn = addButton('Wait for children', () => waitForChildren(session.tmux_name, waitBtn));
+  }
   for (const [operation, label] of [['interrupt', 'Interrupt'], ['restart', 'Restart agent'], ['kill', 'Kill']]) {
     if (!session.actions.includes(operation)) continue;
     const button = addButton(label, () => lifecycle(session, operation, button), operation === 'kill' ? 'danger' : '');
   }
   inspector.hidden = false;
+  renderWaitStatus(session);
   renderSessions();
 }
 

@@ -99,6 +99,11 @@ class ConfirmRequest(BaseModel):
     understand_unmanaged: bool = False
 
 
+class WaitForChildrenRequest(BaseModel):
+    timeout: int | None = Field(default=None, ge=1, le=3600)
+    poll_interval: int | None = Field(default=None, ge=1, le=120)
+
+
 class AttentionRequest(BaseModel):
     state: str = Field(pattern="^(normal|needs_input|blocked|ready_for_review)$")
     note: str | None = Field(default=None, max_length=1000)
@@ -343,6 +348,18 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         name: str, _: AuthContext = Depends(require_identity)
     ) -> dict[str, Any] | None:
         return session_manager.wait_status(name)
+
+    @app.post("/api/sessions/{name}/wait-for-children")
+    async def wait_for_children(
+        name: str,
+        payload: WaitForChildrenRequest,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.wait_for_children(
+            name,
+            timeout=payload.timeout,
+            poll_interval=payload.poll_interval,
+        )
 
     @app.get("/api/sessions/{name}/review")
     async def review_session(
