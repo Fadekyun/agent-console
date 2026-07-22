@@ -1,4 +1,4 @@
-import { initTheme } from '/static/theme.js?v=7';
+import { initTheme } from '/static/theme.js?v=8';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -86,6 +86,12 @@ function updateDockLayout() {
   document.body.classList.toggle('terminal-dock-open', open);
   const height = open ? (terminalDock.classList.contains('collapsed') ? 50 : terminalDock.getBoundingClientRect().height) : 0;
   document.documentElement.style.setProperty('--dock-height', `${Math.round(height)}px`);
+  if (open && activeTerminal) {
+    const active = terminalTabs.get(activeTerminal);
+    if (active?.frame && !active.frame.hidden) {
+      requestAnimationFrame(() => { try { active.frame.contentWindow?.dispatchEvent(new Event('resize')); } catch { /* cross-origin guard, unreachable same-origin */ } });
+    }
+  }
 }
 
 function activateTerminal(name) {
