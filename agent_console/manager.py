@@ -1519,12 +1519,16 @@ class SessionManager:
         return {"delegation_id": delegation_id, "session": session}
 
     def doctor(self) -> dict[str, Any]:
+        profile_dir = self.settings.profile_dir
+        profile_count = sum(1 for p in PROFILES if (profile_dir / f"{p}.md").is_file())
         checks: dict[str, Any] = {
             "workspace_root": self.settings.workspace_root.is_dir(),
             "state_dir": self.settings.state_dir.is_dir(),
             "database": self.settings.database_path.is_file(),
             "tmux": subprocess.run(["tmux", "-V"], capture_output=True).returncode == 0,
-            "profiles": sum(1 for p in PROFILES if (self.settings.profile_dir / f"{p}.md").is_file()),
+            "profiles": profile_count,
+            "profile_dir": str(profile_dir),
+            "profile_dir_exists": profile_dir.is_dir(),
             "tools": {name: path.is_file() for name, path in TOOL_BINARIES.items()},
             "authentication": self.auth.doctor(),
         }
