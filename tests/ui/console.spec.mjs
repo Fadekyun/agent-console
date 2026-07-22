@@ -268,25 +268,49 @@ test('desktop terminal dock keeps four tabs connected and rejects a fifth', asyn
   await expect(page.locator('#terminal-dock')).toHaveClass(/collapsed/);
 });
 
-test('embedded terminal iframe receives resize dispatch and has embedded class', async ({ page }, testInfo) => {
+test('embedded terminal renders content, has visible layout, and transmits changed resize payloads on dock resize', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop only.');
-  await page.addInitScript(() => {
-    window.__iframeResizeCount = 0;
-    window.addEventListener('resize', () => { window.__iframeResizeCount++; });
-  });
   await installFakeWebSocket(page); await mockApi(page); await page.goto('/desktop');
   await page.locator('#active-sessions .session-row').filter({ hasText: 'codex-root' }).locator('[data-attach]').click();
   await expect(page.locator('.terminal-embed')).toHaveCount(1);
   const iframe = await page.locator('.terminal-embed').first().elementHandle().then((el) => el.contentFrame());
   expect(iframe).toBeTruthy();
   await expect.poll(() => iframe.evaluate(() => document.body.classList.contains('terminal-embedded'))).toBeTruthy();
-  expect(await iframe.evaluate(() => !!document.getElementById('terminal'))).toBeTruthy();
-  await page.locator('#terminal-dock-collapse').click();
-  await page.waitForTimeout(100);
-  await page.locator('#terminal-dock-collapse').click();
+  await expect.poll(() => iframe.evaluate(() => {
+    const t = window.__terminal;
+    return t ? t.buffer.active.length : 0;
+  })).toBeGreaterThan(1);
+  await expect.poll(() => iframe.evaluate(() => {
+    const t = window.__terminal; if (!t) return false;
+    for (let y = 0; y < Math.min(t.buffer.active.length, 20); y++) {
+      if ((t.buffer.active.getLine(y)?.translateToString() || '').includes('terminal line')) return true;
+    }
+    return false;
+  })).toBeTruthy();
+  const initialResize = await iframe.evaluate(() => {
+    const msgs = window.__wsSent || [];
+    const s = msgs.find((m) => typeof m === 'string' && m.includes('"type":"resize"'));
+    return s ? JSON.parse(s) : null;
+  });
+  expect(initialResize).toBeTruthy();
+  expect(initialResize.cols).toBeGreaterThan(0);
+  expect(initialResize.rows).toBeGreaterThan(0);
+  const initCount = await iframe.evaluate(() => (window.__wsSent || []).length);
+  const dockBefore = await page.locator('#terminal-dock').evaluate((el) => el.getBoundingClientRect().height);
+  const handle = page.locator('#terminal-dock-handle');
+  await expect(handle).toBeVisible();
+  const box = await handle.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + 3);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y - 120, { steps: 20 });
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  const dockAfter = await page.locator('#terminal-dock').evaluate((el) => el.getBoundingClientRect().height);
+  expect(dockAfter).not.toBe(dockBefore);
   await expect.poll(async () => {
-    try { return await iframe.evaluate(() => window.__iframeResizeCount); } catch { return 0; }
-  }).toBeGreaterThan(0);
+    const msgs = await iframe.evaluate(() => window.__wsSent || []);
+    return msgs.length > initCount;
+  }).toBeTruthy();
 });
 
 test('Codex exposes safe Auto and read-only Plan modes', async ({ page }, testInfo) => {
