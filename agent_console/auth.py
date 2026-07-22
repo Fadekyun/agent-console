@@ -24,7 +24,7 @@ def default_registry() -> dict[str, Any]:
         "defaults": {
             "codex": "default",
             "claude": "default",
-            "opencode": "opencode-go-default",
+            "opencode": "opencode-default",
             "hermes": "openrouter-main",
             "shell": "default",
         },
@@ -56,8 +56,8 @@ def default_registry() -> dict[str, Any]:
                     "enabled": True,
                     "verified": True,
                 },
-                "opencode-go-default": {
-                    "provider": "opencode-go",
+                "opencode-default": {
+                    "provider": "opencode",
                     "kind": "oauth-native",
                     "source_ref": "opencode/provider-native",
                     "enabled": True,
@@ -103,9 +103,9 @@ class AuthRegistry:
     def _ensure_builtin_contexts(self) -> None:
         data = self._read()
         contexts = data.setdefault("contexts", {}).setdefault("opencode", {})
-        if "opencode-go-default" not in contexts:
-            contexts["opencode-go-default"] = {
-                "provider": "opencode-go",
+        if "opencode-default" not in contexts:
+            contexts["opencode-default"] = {
+                "provider": "opencode",
                 "kind": "oauth-native",
                 "source_ref": "opencode/provider-native",
                 "enabled": True,

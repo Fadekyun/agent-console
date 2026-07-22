@@ -253,7 +253,7 @@ class SessionIntegrationTests(unittest.TestCase):
 
     def test_opencode_launcher_defaults_to_plan(self) -> None:
         models = [{
-            "id": "cheap", "model": "opencode-go/cheap", "provider": "opencode-go",
+            "id": "cheap", "model": "opencode/cheap", "provider": "opencode",
             "name": "Cheap", "status": "active", "selectable": True,
             "cost": {"input": 0.1, "output": 0.2, "cache_read": None, "reasoning": None},
             "limits": {"context": 1000, "output": 100},
@@ -266,7 +266,7 @@ class SessionIntegrationTests(unittest.TestCase):
         self.assertIn("--model", args)
         self.assertIn("--auto", args)
         self.assertNotIn("--prompt", args)
-        self.assertIn("opencode-go/cheap", args)
+        self.assertIn("opencode/cheap", args)
         with patch.object(self.manager.models, "list", return_value={"models": models}):
             build = self.manager._launcher_args(
                 "opencode", "general", self.workspace, None, agent_mode="build"

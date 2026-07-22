@@ -79,7 +79,7 @@ class WebTests(unittest.TestCase):
             item for item in me["auth_contexts"]
             if item["tool"] == "opencode" and item["default"]
         )
-        self.assertEqual(default_opencode["name"], "opencode-go-default")
+        self.assertEqual(default_opencode["name"], "opencode-default")
         claude = next(item for item in me["tool_status"] if item["name"] == "claude")
         self.assertEqual(claude["status"], "disabled")
 
