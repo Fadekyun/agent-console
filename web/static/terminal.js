@@ -1,6 +1,6 @@
 import { Terminal } from '/vendor/xterm.mjs';
 import { FitAddon } from '/vendor/addon-fit.mjs';
-import { initTheme, xtermTheme } from '/static/theme.js?v=7';
+import { initTheme, xtermTheme } from '/static/theme.js?v=8';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];

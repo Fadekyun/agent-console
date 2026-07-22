@@ -1,4 +1,4 @@
-import { initTheme } from '/static/theme.js?v=7';
+import { initTheme } from '/static/theme.js?v=8';
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const form=$('#mobile-new'); let identity; let currentModels=[]; let pending; let currentPlanId;
 async function api(path, options={}) { const response=await fetch(path,{cache:'no-store',headers:{'Content-Type':'application/json',...(options.headers||{})},...options}); const body=await response.json(); if(!response.ok) throw new Error(body.detail||response.statusText); return body; }

@@ -8,7 +8,7 @@
     document.documentElement.dataset.theme=localStorage.getItem('agent-console-theme')||'system';
     if(location.pathname==='/'){const v=localStorage.getItem('agent-console-layout')||'auto';if(v==='mobile'||(v==='auto'&&matchMedia('(max-width:760px)').matches))location.replace('/mobile'+location.search+location.hash);}
   </script>
-  <link rel="stylesheet" href="/static/styles.css?v=7">
+  <link rel="stylesheet" href="/static/styles.css?v=8">
 </head>
 <body class="app-page">
   <div class="app-shell">
@@ -220,6 +220,6 @@
   </dialog>
 
   <textarea id="clipboard-fallback" class="visually-hidden" aria-hidden="true"></textarea>
-  <script type="module" src="/static/app.js?v=7"></script>
+  <script type="module" src="/static/app.js?v=8"></script>
 </body>
 </html>

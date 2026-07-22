@@ -278,6 +278,59 @@ test('desktop terminal dock keeps four tabs connected and rejects a fifth', asyn
   await expect(page.locator('#terminal-dock')).toHaveClass(/collapsed/);
 });
 
+test('embedded terminal renders content, has visible layout, and transmits changed resize payloads on dock resize', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop only.');
+  await installFakeWebSocket(page); await mockApi(page); await page.goto('/desktop');
+  await page.locator('#active-sessions .session-row').filter({ hasText: 'codex-root' }).locator('[data-attach]').click();
+  await expect(page.locator('.terminal-embed')).toHaveCount(1);
+  const iframe = await page.locator('.terminal-embed').first().elementHandle().then((el) => el.contentFrame());
+  expect(iframe).toBeTruthy();
+  await expect.poll(() => iframe.evaluate(() => document.body.classList.contains('terminal-embedded'))).toBeTruthy();
+  const computedGrid = await iframe.evaluate(() => getComputedStyle(document.body).gridTemplateRows);
+  expect(computedGrid.split(/\s+/).length).toBe(3);
+  await expect.poll(() => iframe.evaluate(() => {
+    const f = document.querySelector('.terminal-frame');
+    return f ? f.getBoundingClientRect().height : 0;
+  })).toBeGreaterThan(100);
+  await expect.poll(() => iframe.evaluate(() => {
+    const t = window.__terminal;
+    return t ? t.buffer.active.length : 0;
+  })).toBeGreaterThan(1);
+  await expect.poll(() => iframe.evaluate(() => {
+    const t = window.__terminal; if (!t) return false;
+    for (let y = 0; y < Math.min(t.buffer.active.length, 20); y++) {
+      if ((t.buffer.active.getLine(y)?.translateToString() || '').includes('terminal line')) return true;
+    }
+    return false;
+  })).toBeTruthy();
+  const initialResize = await iframe.evaluate(() => {
+    const msgs = window.__wsSent || [];
+    const s = msgs.find((m) => typeof m === 'string' && m.includes('"type":"resize"'));
+    return s ? JSON.parse(s) : null;
+  });
+  expect(initialResize).toBeTruthy();
+  expect(initialResize.cols).toBeGreaterThan(0);
+  expect(initialResize.rows).toBeGreaterThan(0);
+  const dockBefore = await page.locator('#terminal-dock').evaluate((el) => el.getBoundingClientRect().height);
+  const handle = page.locator('#terminal-dock-handle');
+  await expect(handle).toBeVisible();
+  const box = await handle.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + 3);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y - 120, { steps: 20 });
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  const dockAfter = await page.locator('#terminal-dock').evaluate((el) => el.getBoundingClientRect().height);
+  expect(dockAfter).not.toBe(dockBefore);
+  await expect.poll(async () => {
+    const msgs = await iframe.evaluate(() => window.__wsSent || []);
+    const resizeStrs = msgs.filter((m) => typeof m === 'string' && m.includes('"type":"resize"'));
+    const last = resizeStrs.length ? JSON.parse(resizeStrs[resizeStrs.length - 1]) : null;
+    if (!last) return false;
+    return last.rows !== initialResize.rows || last.cols !== initialResize.cols;
+  }).toBeTruthy();
+});
+
 test('Codex exposes safe Auto and read-only Plan modes', async ({ page }, testInfo) => {
   await mockApi(page);
   await page.goto(testInfo.project.name === 'desktop' ? '/desktop#new' : '/mobile');

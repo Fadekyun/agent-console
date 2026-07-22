@@ -4,7 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>Agent Console Mobile</title>
   <script>document.documentElement.dataset.theme=localStorage.getItem('agent-console-theme')||'system';</script>
-  <link rel="stylesheet" href="/static/styles.css?v=7">
+  <link rel="stylesheet" href="/static/styles.css?v=8">
 </head>
 <body class="mobile-console">
   <header class="mobile-header"><div><strong>Agent Console</strong><small id="mobile-identity">Connecting…</small></div><div><select id="mobile-layout" aria-label="Layout"><option value="auto">Auto</option><option value="mobile">Mobile</option><option value="desktop">Desktop</option></select><select id="mobile-theme" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div></header>
@@ -24,5 +24,5 @@
   <dialog id="mobile-delegate-dialog"><div class="dialog-form"><h2>Delegate child</h2><form id="mobile-delegate" class="mobile-form"><input type="hidden" name="parent"><label>Profile<select name="profile"></select></label><label>Tool<select name="tool"></select></label><label>Account<select name="auth_context"></select></label><label>Agent mode<select name="agent_mode"><option value="plan">Plan</option></select></label><label>Task<textarea name="task" rows="3" required></textarea></label><label>Repository<input name="repository" value=""></label><label>Name<input name="name" placeholder="Auto"></label><div class="dialog-actions"><button type="button" data-close="mobile-delegate-dialog">Cancel</button><button type="submit" class="primary">Create</button></div></form></div></dialog>
   <dialog id="mobile-project-detail-dialog"><div class="dialog-form"><h2 id="mobile-project-detail-title">Project</h2><p id="mobile-project-detail-repo" class="muted"></p><p id="mobile-project-detail-status" class="muted"></p><div id="mobile-project-detail-sessions" class="mobile-session-list"></div><div class="dialog-actions"><button type="button" data-close="mobile-project-detail-dialog">Close</button></div></div></dialog>
   <dialog id="mobile-profile-editor-dialog"><div class="dialog-form"><h2 id="mobile-profile-editor-title">Edit profile</h2><form id="mobile-profile-editor-form"><input type="hidden" name="profile_name"><div id="mobile-profile-editor-meta"class="profile-meta-summary"></div><label>Instructions<textarea name="content" rows="8"class="code-textarea"></textarea></label><p id="mobile-profile-editor-status"role="status"></p><div class="dialog-actions"><button type="button"data-close="mobile-profile-editor-dialog">Cancel</button><button type="submit" class="primary">Save</button></div></form></div></dialog>
-  <script type="module" src="/static/mobile.js?v=7"></script>
+  <script type="module" src="/static/mobile.js?v=8"></script>
 </body></html>
