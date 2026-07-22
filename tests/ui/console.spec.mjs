@@ -276,6 +276,12 @@ test('embedded terminal renders content, has visible layout, and transmits chang
   const iframe = await page.locator('.terminal-embed').first().elementHandle().then((el) => el.contentFrame());
   expect(iframe).toBeTruthy();
   await expect.poll(() => iframe.evaluate(() => document.body.classList.contains('terminal-embedded'))).toBeTruthy();
+  const computedGrid = await iframe.evaluate(() => getComputedStyle(document.body).gridTemplateRows);
+  expect(computedGrid.split(/\s+/).length).toBe(3);
+  await expect.poll(() => iframe.evaluate(() => {
+    const f = document.querySelector('.terminal-frame');
+    return f ? f.getBoundingClientRect().height : 0;
+  })).toBeGreaterThan(100);
   await expect.poll(() => iframe.evaluate(() => {
     const t = window.__terminal;
     return t ? t.buffer.active.length : 0;
@@ -295,7 +301,6 @@ test('embedded terminal renders content, has visible layout, and transmits chang
   expect(initialResize).toBeTruthy();
   expect(initialResize.cols).toBeGreaterThan(0);
   expect(initialResize.rows).toBeGreaterThan(0);
-  const initCount = await iframe.evaluate(() => (window.__wsSent || []).length);
   const dockBefore = await page.locator('#terminal-dock').evaluate((el) => el.getBoundingClientRect().height);
   const handle = page.locator('#terminal-dock-handle');
   await expect(handle).toBeVisible();
@@ -309,7 +314,10 @@ test('embedded terminal renders content, has visible layout, and transmits chang
   expect(dockAfter).not.toBe(dockBefore);
   await expect.poll(async () => {
     const msgs = await iframe.evaluate(() => window.__wsSent || []);
-    return msgs.length > initCount;
+    const resizeStrs = msgs.filter((m) => typeof m === 'string' && m.includes('"type":"resize"'));
+    const last = resizeStrs.length ? JSON.parse(resizeStrs[resizeStrs.length - 1]) : null;
+    if (!last) return false;
+    return last.rows !== initialResize.rows || last.cols !== initialResize.cols;
   }).toBeTruthy();
 });
 
