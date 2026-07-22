@@ -12,23 +12,39 @@ import struct
 import subprocess
 import termios
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import uvicorn.config
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 
-from .logging_config import configure_logging
+from .config import Settings
+from .logging_config import configure_logging, configure_uvicorn_logging
 from .manager import SessionManager
 from .profiles import profile_summaries
 from .skills import doctor_skills, skill_catalog, sync_skills
 from .validation import TOOLS, validate_session_name
 
+
+uvicorn.config.LOGGING_CONFIG = {}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    s = Settings.from_env()
+    configure_logging(log_dir=s.log_dir, retention_days=s.log_retention_days, backup_count=s.log_backup_count)
+    configure_uvicorn_logging()
+    yield
+
+
 configure_logging()
+configure_uvicorn_logging()
 log = logging.getLogger(__name__)
 
 
@@ -139,13 +155,9 @@ class ProjectUpdateRequest(BaseModel):
 def create_app(manager: SessionManager | None = None) -> FastAPI:
     session_manager = manager or SessionManager()
     pty_clients: dict[str, int] = defaultdict(int)
-    app = FastAPI(title="Agent Console", docs_url=None, redoc_url=None)
+    app = FastAPI(title="Agent Console", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
     app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
-    for uvi_name in ("uvicorn.access", "uvicorn.error", "uvicorn.asgi"):
-        uvi_log = logging.getLogger(uvi_name)
-        if not uvi_log.handlers:
-            uvi_log.addHandler(logging.getLogger().handlers[0] if logging.getLogger().handlers else logging.StreamHandler())
 
     def require_identity(
         request: Request,

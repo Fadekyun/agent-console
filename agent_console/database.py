@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -240,3 +240,10 @@ class Database:
                 "VALUES(?, ?, ?, ?, ?, ?, ?)",
                 (utc_now(), actor, surface, action, target, outcome, json.dumps(details or {})),
             )
+
+    def prune_audit_events(self, retention_days: int = 395) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        cutoff_str = cutoff.isoformat(timespec="seconds")
+        with self.connect() as conn:
+            conn.execute("DELETE FROM audit_events WHERE created_at < ?", (cutoff_str,))
+            return conn.total_changes
