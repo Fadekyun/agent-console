@@ -1,4 +1,4 @@
-import { initTheme } from '/static/theme.js?v=7';
+import { initTheme } from '/static/theme.js?v=8';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -22,6 +22,9 @@ const reviewDialog = $('#review-dialog');
 const inspector = $('#session-inspector');
 const attentionForm = $('#attention-form');
 const terminalDock = $('#terminal-dock');
+const groupDialog = $('#group-dialog');
+const groupForm = $('#group-form');
+const groupDetailDialog = $('#group-detail-dialog');
 const terminalTabs = new Map();
 let activeTerminal = null;
 
@@ -86,6 +89,12 @@ function updateDockLayout() {
   document.body.classList.toggle('terminal-dock-open', open);
   const height = open ? (terminalDock.classList.contains('collapsed') ? 50 : terminalDock.getBoundingClientRect().height) : 0;
   document.documentElement.style.setProperty('--dock-height', `${Math.round(height)}px`);
+  if (open && activeTerminal) {
+    const active = terminalTabs.get(activeTerminal);
+    if (active?.frame && !active.frame.hidden) {
+      requestAnimationFrame(() => { try { active.frame.contentWindow?.dispatchEvent(new Event('resize')); } catch { /* cross-origin guard, unreachable same-origin */ } });
+    }
+  }
 }
 
 function activateTerminal(name) {
@@ -136,6 +145,46 @@ function openTerminal(name) {
   terminalTabs.set(name, { tab, frame }); activateTerminal(name);
 }
 
+function renderWaitStatus(session) {
+  const el = $('#inspector-wait-status');
+  if (!session.total_child_count) { el.hidden = true; return; }
+  el.hidden = false;
+  el.innerHTML = '<h3>Wait cycle</h3><p class="muted">Loading wait status…</p>';
+  api(`/api/sessions/${encodeURIComponent(session.tmux_name)}/wait-status`).then((data) => {
+    if (!data) {
+      el.innerHTML = '<h3>Wait cycle</h3><p class="muted">No wait initiated yet.</p>';
+      return;
+    }
+    const outcome = data.outcome || 'unknown';
+    const outcomeClass = outcome === 'success' ? 'live' : outcome === 'timeout' ? 'stopped' : 'danger';
+    const summary = data.summary || {};
+    const childrenHtml = (summary.children || []).map((c) =>
+      `<span class="wait-child">${escapeHtml(c.tmux_name)}: <strong>${c.wait_status || 'unknown'}</strong></span>`
+    ).join('');
+    el.innerHTML = `<h3>Wait cycle</h3>
+      <p>Outcome: <strong class="badge ${outcomeClass}">${outcome}</strong>${data.completed_at ? ` · ${formatActivity(data.completed_at)}` : ''}</p>
+      ${childrenHtml ? `<div class="wait-children">${childrenHtml}</div>` : ''}`;
+  }).catch(() => {
+    el.innerHTML = '<h3>Wait cycle</h3><p class="muted">Unable to load wait status.</p>';
+  });
+}
+
+async function waitForChildren(name, button) {
+  button.disabled = true; button.textContent = 'Waiting…';
+  try {
+    const result = await api(`/api/sessions/${encodeURIComponent(name)}/wait-for-children`, {
+      method: 'POST', body: JSON.stringify({ timeout: 120, poll_interval: 5 }),
+    });
+    const outcome = result.outcome || 'unknown';
+    showNotice(`Wait outcome: ${outcome} (exit code ${result.exit_code})`, outcome === 'success' ? 'success' : outcome === 'intervention' ? 'warning' : 'error');
+    await refresh();
+  } catch (error) {
+    showNotice(error.message || String(error), 'error');
+  } finally {
+    button.disabled = false; button.textContent = 'Wait for children';
+  }
+}
+
 function renderInspector(session) {
   state.selectedSession = session.tmux_name;
   $('#inspector-name').textContent = session.tmux_name;
@@ -152,10 +201,12 @@ function renderInspector(session) {
       <div><dt>Parent / plan</dt><dd>${escapeHtml(session.parent_session || 'Root')} · ${escapeHtml(session.linked_plan_id || 'No plan')}</dd></div>
       <div><dt>Process / socket</dt><dd>${escapeHtml(session.current_command || 'None')} · ${escapeHtml(session.socket_scope)}</dd></div>
       <div><dt>Clients</dt><dd>${session.attached_clients} attached</dd></div>
+      <div><dt>Children</dt><dd>${session.child_count || 0} / ${session.total_child_count || 0} active</dd></div>
       <div><dt>Last activity</dt><dd title="${escapeHtml(session.last_activity || '')}">${formatActivity(session.last_activity)}</dd></div>
       <div><dt>Attention updated</dt><dd>${escapeHtml(session.attention_updated_by || 'Never')} · ${formatActivity(session.attention_updated_at)}</dd></div>
     </dl>
-    <div class="brief-block"><h3>Stored brief</h3><p>${escapeHtml(session.initial_task || 'No brief recorded.')}</p></div>`;
+    <div class="brief-block"><h3>Stored brief</h3><p>${escapeHtml(session.initial_task || 'No brief recorded.')}</p></div>
+    <div id="inspector-wait-status"></div>`;
   attentionForm.elements.state.value = session.attention_state || 'normal';
   attentionForm.elements.note.value = session.attention_note || '';
   attentionForm.dataset.session = session.tmux_name; $('#attention-status').textContent = '';
@@ -168,11 +219,15 @@ function renderInspector(session) {
   addButton('Copy name', () => copyName(session.tmux_name));
   addButton('Review output', () => showReview(session.tmux_name));
   if (session.running) addButton('Delegate', () => openDelegate(session));
+  if (session.total_child_count) {
+    const waitBtn = addButton('Wait for children', () => waitForChildren(session.tmux_name, waitBtn));
+  }
   for (const [operation, label] of [['interrupt', 'Interrupt'], ['restart', 'Restart agent'], ['kill', 'Kill']]) {
     if (!session.actions.includes(operation)) continue;
     const button = addButton(label, () => lifecycle(session, operation, button), operation === 'kill' ? 'danger' : '');
   }
   inspector.hidden = false;
+  renderWaitStatus(session);
   renderSessions();
 }
 
@@ -330,14 +385,15 @@ async function renderOrchestration() {
     Promise.resolve(state.tree),
   ]);
   const groupEl = document.createElement('div'); groupEl.className = 'panel';
-  groupEl.innerHTML = '<div class="panel-heading"><h3>Session groups</h3></div>';
+  groupEl.innerHTML = '<div class="panel-heading"><h3>Session groups</h3><button id="new-group-btn" class="compact">New group</button></div>';
   const groupList = document.createElement('div'); groupList.className = 'tree-list';
   if (groups.length) {
     groupList.replaceChildren(...groups.map(renderGroupCard));
   } else {
-    groupList.innerHTML = '<p class="empty">No session groups yet. Create one from a running session.</p>';
+    groupList.innerHTML = '<p class="empty">No session groups yet. Create one to coordinate multiple sessions.</p>';
   }
   groupEl.append(groupList);
+  $('#new-group-btn')?.addEventListener('click', openNewGroup);
   treeEl.replaceChildren(groupEl, ...state.tree.roots.map(renderTreeNode));
   if (!state.tree.roots.length && !groups.length) treeEl.innerHTML = '<p class="empty">No sessions discovered.</p>';
   const activePlans = state.plans.filter(p => p.status === 'planned' || p.status === 'executing');
@@ -349,20 +405,153 @@ async function renderOrchestration() {
   if (!activePlans.length) plansEl.innerHTML = '<p class="empty">No shared plans found.</p>';
 }
 
+function openNewGroup() {
+  groupForm.reset();
+  groupForm.elements.group_name.value = '';
+  groupForm.elements.group_purpose.value = '';
+  groupForm.dataset.edit = '';
+  $('#group-dialog-title').textContent = 'New session group';
+  $('#group-dialog-status').textContent = '';
+  groupDialog.showModal();
+}
+
+groupForm.onsubmit = async (event) => {
+  event.preventDefault(); const status = $('#group-dialog-status');
+  const submit = $('button[type="submit"]', groupForm); submit.disabled = true;
+  status.textContent = 'Creating…';
+  try {
+    const payload = { name: groupForm.elements.group_name.value };
+    const purpose = groupForm.elements.group_purpose.value?.trim();
+    if (purpose) payload.purpose = purpose;
+    await api('/api/session-groups', { method: 'POST', body: JSON.stringify(payload) });
+    status.textContent = 'Created.';
+    groupDialog.close();
+    await renderOrchestration();
+    showNotice(`Group "${payload.name}" created`);
+  } catch (error) { status.textContent = error.message; }
+  finally { submit.disabled = false; }
+};
+
 function renderGroupCard(group) {
   const card = document.createElement('article'); card.className = 'tree-node';
   const statusBadge = group.status === 'active' ? '<span class="badge live">active</span>' : '<span class="badge stopped">completed</span>';
-  card.innerHTML = `<div class="session-title"><h3>${escapeHtml(group.name)}</h3>${statusBadge}</div><p class="meta">${escapeHtml(group.purpose || 'No purpose set')}</p>`;
+  const memberInfo = `<span class="muted">${group.member_count || 0} session${group.member_count === 1 ? '' : 's'}</span>`;
+  card.innerHTML = `<div class="session-title"><h3>${escapeHtml(group.name)}</h3>${statusBadge}${memberInfo}</div><p class="meta">${escapeHtml(group.purpose || 'No purpose set')}</p><div class="tree-node-actions"><button class="compact" data-group-detail>Details</button><button class="compact primary" data-group-open>Open terminals</button></div>`;
   if (group.sessions && group.sessions.length) {
     const children = document.createElement('div'); children.className = 'tree-node-children';
     children.replaceChildren(...group.sessions.map((s) => {
       const child = document.createElement('div'); child.className = 'tree-node';
-      child.innerHTML = `<div class="session-title"><span>${escapeHtml(s.tmux_name || 'unknown')}</span><span class="badge ${s.status === 'detached' ? 'live' : 'stopped'}">${escapeHtml(s.profile || '')}</span></div><p class="meta">${escapeHtml(s.tool || '')} · ${escapeHtml(s.attention_state || 'normal')}</p>`;
+      const liveClass = s.running ? 'live' : 'stopped';
+      child.innerHTML = `<div class="session-title"><span>${escapeHtml(s.tmux_name || 'unknown')}</span><span class="badge ${liveClass}">${escapeHtml(s.profile || '')}</span></div><p class="meta">${escapeHtml(s.tool || '')} · ${escapeHtml(s.attention_state || 'normal')}</p>`;
       return child;
     }));
     card.append(children);
   }
+  $('[data-group-detail]', card).onclick = () => openGroupDetail(group.id, group.name);
+  $('[data-group-open]', card).onclick = () => openGroupTerminals(group.id, group.name);
   return card;
+}
+
+async function openGroupDetail(groupId, groupName) {
+  try {
+    const group = await api(`/api/session-groups/${encodeURIComponent(groupId)}`);
+    $('#group-detail-title').textContent = groupName;
+    $('#group-detail-purpose').textContent = group.purpose || 'No purpose set';
+    $('#group-detail-meta').textContent = `${group.member_count} session${group.member_count === 1 ? '' : 's'} · status: ${group.status}`;
+    const sessionList = $('#group-detail-sessions');
+    sessionList.replaceChildren();
+    const allSessions = state.sessions.filter((s) => s.running && s.managed);
+    const members = group.sessions || [];
+    if (members.length) {
+      const memberNames = new Set(members.map((m) => m.tmux_name));
+      members.forEach((s) => {
+        const el = document.createElement('div'); el.className = 'member-row';
+        const liveClass = s.running ? 'live' : 'stopped';
+        el.innerHTML = `<span class="session-name">${escapeHtml(s.tmux_name)}</span><span class="badge ${liveClass}">${escapeHtml(s.profile || '')}</span><span class="muted">${escapeHtml(s.tool || '')}</span><button class="compact danger" data-remove="${escapeHtml(s.tmux_name)}">Remove</button>`;
+        $('[data-remove]', el).onclick = async () => {
+          try {
+            await api(`/api/session-groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(s.tmux_name)}`, { method: 'DELETE' });
+            showNotice(`Removed ${s.tmux_name} from group`);
+            openGroupDetail(groupId, groupName);
+          } catch (e) { showNotice(e.message, 'error'); }
+        };
+        sessionList.append(el);
+      });
+      const addSection = document.createElement('div'); addSection.className = 'group-add-section';
+      addSection.innerHTML = '<hr><p class="muted">Add a running session to this group:</p><div class="group-add-controls"><select id="group-add-select"><option value="">Select a session…</option></select><button id="group-add-btn" class="primary compact" disabled>Add</button></div>';
+      const addSelect = addSection.querySelector('#group-add-select');
+      const addBtn = addSection.querySelector('#group-add-btn');
+      const eligible = allSessions.filter((s) => !memberNames.has(s.tmux_name));
+      eligible.forEach((s) => {
+        const opt = document.createElement('option');
+        opt.value = s.tmux_name;
+        opt.textContent = `${s.tmux_name} · ${s.tool || 'legacy'} · ${s.profile || 'legacy'}`;
+        addSelect.append(opt);
+      });
+      if (eligible.length) {
+        addSelect.onchange = () => { addBtn.disabled = !addSelect.value; };
+        addBtn.onclick = async () => {
+          const name = addSelect.value; if (!name) return;
+          try {
+            await api(`/api/session-groups/${encodeURIComponent(groupId)}/members`, { method: 'POST', body: JSON.stringify({ session_name: name }) });
+            showNotice(`Added ${name} to group`);
+            openGroupDetail(groupId, groupName);
+          } catch (e) { showNotice(e.message, 'error'); }
+        };
+      } else {
+        addSection.innerHTML += '<p class="empty">No additional running managed sessions available.</p>';
+      }
+      sessionList.append(addSection);
+    } else {
+      sessionList.innerHTML = '<p class="empty">No sessions in this group yet.</p>';
+      const addAll = document.createElement('div'); addAll.className = 'group-add-section';
+      addAll.innerHTML = '<hr><p class="muted">Add a running session to this group:</p><div class="group-add-controls"><select id="group-add-select"><option value="">Select a session…</option></select><button id="group-add-btn" class="primary compact" disabled>Add</button></div>';
+      const addSelect = addAll.querySelector('#group-add-select');
+      const addBtn = addAll.querySelector('#group-add-btn');
+      allSessions.forEach((s) => {
+        const opt = document.createElement('option');
+        opt.value = s.tmux_name;
+        opt.textContent = `${s.tmux_name} · ${s.tool || 'legacy'} · ${s.profile || 'legacy'}`;
+        addSelect.append(opt);
+      });
+      if (allSessions.length) {
+        addSelect.onchange = () => { addBtn.disabled = !addSelect.value; };
+        addBtn.onclick = async () => {
+          const name = addSelect.value; if (!name) return;
+          try {
+            await api(`/api/session-groups/${encodeURIComponent(groupId)}/members`, { method: 'POST', body: JSON.stringify({ session_name: name }) });
+            showNotice(`Added ${name} to group`);
+            openGroupDetail(groupId, groupName);
+          } catch (e) { showNotice(e.message, 'error'); }
+        };
+      } else {
+        addAll.innerHTML += '<p class="empty">No running managed sessions available.</p>';
+      }
+      sessionList.append(addAll);
+    }
+    $('#group-detail-dialog').showModal();
+  } catch (e) { showNotice(e.message, 'error'); }
+}
+
+async function openGroupTerminals(groupId, groupName) {
+  try {
+    const result = await api(`/api/session-groups/${encodeURIComponent(groupId)}/open`, { method: 'POST' });
+    const available = result.available || [];
+    const unavailable = result.unavailable || [];
+    let opened = 0;
+    for (const s of available) {
+      if (terminalTabs.size >= 4) break;
+      openTerminal(s.tmux_name);
+      opened++;
+    }
+    const skipped = available.length - opened;
+    const parts = [];
+    if (opened) parts.push(`Opened ${opened} terminal${opened === 1 ? '' : 's'} for "${groupName}"`);
+    if (skipped) parts.push(`${skipped} session${skipped === 1 ? '' : 's'} not opened due to tab limit (max 4)`);
+    const closedNames = unavailable.map((s) => s.tmux_name).join(', ');
+    if (closedNames) parts.push(`Not running: ${closedNames}`);
+    showNotice(parts.join('. ') || `No available sessions in group "${groupName}"`);
+  } catch (e) { showNotice(e.message, 'error'); }
 }
 
 async function openPlan(planId) {
@@ -462,8 +651,81 @@ function skillCard(entry) {
   const sourceBadge = document.createElement('span'); sourceBadge.className = `skill-tool-badge ${entry.source_present ? 'linked' : 'missing'}`;
   sourceBadge.textContent = entry.source_present ? 'source present' : 'source missing';
   tools.append(sourceBadge);
+
   card.append(header, desc, tools);
+
+  const approvalInfo = document.createElement('div'); approvalInfo.className = 'skill-approval-info';
+  if (entry.kind === 'superpower') {
+    const allowed = entry.allowed_profiles && entry.allowed_profiles.length ? entry.allowed_profiles.join(', ') : 'all profiles';
+    approvalInfo.textContent = entry.requires_approval ? `Superpower · approval required · profiles: ${allowed}` : `Superpower · profiles: ${allowed}`;
+  } else {
+    approvalInfo.textContent = 'Standard skill · no approval gate';
+  }
+  card.append(approvalInfo);
+
+  const assignedList = document.createElement('div'); assignedList.className = 'skill-assigned-list';
+  if (entry.assigned_to && entry.assigned_to.length) {
+    const label = document.createElement('span'); label.className = 'skill-assigned-label'; label.textContent = 'Assigned to:';
+    assignedList.append(label);
+    entry.assigned_to.forEach((a) => {
+      const tag = document.createElement('span'); tag.className = 'skill-assigned-tag';
+      tag.textContent = a.profile;
+      tag.title = `Assigned at ${a.assigned_at} by ${a.assigned_by}`;
+      assignedList.append(tag);
+    });
+  }
+  card.append(assignedList);
+
+  const actions = document.createElement('div'); actions.className = 'dialog-actions';
+  const assignBtn = document.createElement('button'); assignBtn.textContent = 'Assign to profile'; assignBtn.className = 'compact';
+  assignBtn.onclick = () => openAssignSkillDialog(entry.name);
+  actions.append(assignBtn);
+  if (entry.assigned_to && entry.assigned_to.length) {
+    entry.assigned_to.forEach((a) => {
+      const unassignBtn = document.createElement('button'); unassignBtn.textContent = `Remove from ${a.profile}`; unassignBtn.className = 'compact danger';
+      unassignBtn.onclick = () => unassignSkill(entry.name, a.profile);
+      actions.append(unassignBtn);
+    });
+  }
+  card.append(actions);
+
   return card;
+}
+
+async function openAssignSkillDialog(skillName) {
+  const form = $('#assign-skill-form'); form.reset();
+  form.elements.skill_name.value = skillName;
+  $('#assign-skill-title').textContent = `Assign: ${skillName}`;
+  const profiles = await api('/api/profiles');
+  form.elements.profile.replaceChildren(...profiles.map((p) => new Option(p.display_name || p.name, p.name)));
+  $('#assign-skill-status').textContent = '';
+  $('#assign-skill-dialog').showModal();
+}
+
+$('#assign-skill-form').onsubmit = async (event) => {
+  event.preventDefault(); const submit = event.target.querySelector('button[type="submit"]'); submit.disabled = true;
+  const status = $('#assign-skill-status'); status.textContent = 'Assigning…';
+  try {
+    await api('/api/skills/assign', {
+      method: 'POST',
+      body: JSON.stringify({ profile: event.target.elements.profile.value, skill_name: event.target.elements.skill_name.value }),
+    });
+    status.textContent = 'Assigned.';
+    setTimeout(() => { $('#assign-skill-dialog').close(); }, 800);
+    renderSkills();
+  } catch (e) { status.textContent = e.message; } finally { submit.disabled = false; }
+};
+
+async function unassignSkill(skillName, profile) {
+  const status = $('#skills-status'); status.textContent = `Removing ${skillName} from ${profile}…`;
+  try {
+    await api('/api/skills/unassign', {
+      method: 'POST',
+      body: JSON.stringify({ profile, skill_name: skillName }),
+    });
+    status.textContent = `Removed ${skillName} from ${profile}.`;
+    renderSkills();
+  } catch (e) { status.textContent = e.message; }
 }
 
 async function runSkillsSync() {
@@ -512,14 +774,29 @@ async function openProjectDetail(id, name) {
   try {
     const project = await api(`/api/projects/${encodeURIComponent(id)}`);
     $('#project-detail-title').textContent = name;
-    $('#project-detail-repo').textContent = project.repository || 'No repository';
+    $('#project-detail-repo').textContent = project.repository ? `Repository: ${project.repository}` : 'No repository';
+    $('#project-detail-status').textContent = `Status: ${project.status} · ${(project.sessions || []).length} session(s)`;
     const sessions = project.sessions || [];
-    $('#project-detail-sessions').replaceChildren(...sessions.map((s) => {
+    const list = $('#project-detail-sessions'); list.innerHTML = '';
+    sessions.forEach((s) => {
       const el = document.createElement('article'); el.className = 'tree-node';
       el.innerHTML = `<div class="session-title"><span>${escapeHtml(s.tmux_name || 'unknown')}</span><span class="badge ${s.status === 'detached' ? 'live' : 'stopped'}">${escapeHtml(s.profile || '')}</span></div><p class="meta">${escapeHtml(s.tool || '')} · ${escapeHtml(s.attention_state || 'normal')}${s.initial_task ? ` · ${escapeHtml(s.initial_task)}` : ''}</p>`;
-      return el;
-    }));
-    if (!sessions.length) $('#project-detail-sessions').innerHTML = '<p class="empty">No sessions assigned to this project.</p>';
+      const unassignBtn = document.createElement('button'); unassignBtn.textContent = 'Unassign'; unassignBtn.className = 'danger';
+      unassignBtn.onclick = async () => {
+        try {
+          await api(`/api/projects/${encodeURIComponent(id)}/unassign`, { method: 'POST', body: JSON.stringify({ session_name: s.tmux_name }) });
+          openProjectDetail(id, name);
+        } catch (e) { showNotice(e.message, 'error'); }
+      };
+      el.append(unassignBtn);
+      list.append(el);
+    });
+    if (!sessions.length) list.innerHTML = '<p class="empty">No sessions assigned to this project.</p>';
+    const assignSelect = $('#project-assign-select');
+    const availSessions = (state.sessions || []).filter((s) => s.running && !sessions.find((ps) => ps.tmux_name === s.tmux_name));
+    assignSelect.replaceChildren(...availSessions.map((s) => new Option(s.tmux_name, s.tmux_name)));
+    assignSelect.prepend(new Option('Select session…', ''));
+    assignSelect.dataset.projectId = id;
     $('#project-detail-dialog').showModal();
   } catch (e) { showNotice(e.message, 'error'); }
 }
@@ -534,6 +811,16 @@ $('#new-project-form').onsubmit = async (event) => {
   } catch (e) { status.textContent = e.message; } finally { submit.disabled = false; }
 };
 $('#new-project-btn').onclick = () => { $('#new-project-form').reset(); $('#new-project-status').textContent = ''; $('#new-project-dialog').showModal(); };
+$('#project-assign-btn').onclick = async () => {
+  const select = $('#project-assign-select');
+  const sessionName = select.value;
+  const projectId = select.dataset.projectId;
+  if (!sessionName || !projectId) return;
+  try {
+    await api(`/api/projects/${encodeURIComponent(projectId)}/assign`, { method: 'POST', body: JSON.stringify({ session_name: sessionName }) });
+    openProjectDetail(projectId, $('#project-detail-title').textContent);
+  } catch (e) { showNotice(e.message, 'error'); }
+};
 
 function updateAgentModeField() {
   const tool = newForm.elements.tool.value;
@@ -572,7 +859,7 @@ function updateNewToolFields() {
 }
 
 async function loadModels() {
-  const provider = newForm.elements.provider.value || 'opencode-go';
+  const provider = newForm.elements.provider.value || 'opencode';
   $('#model-status').textContent = 'Loading current catalogue…';
   try {
     const catalogue = await api(`/api/models?provider=${encodeURIComponent(provider)}`);
@@ -660,6 +947,14 @@ async function start() {
   newForm.elements.profile.onchange = () => { const p = state.identity.profiles.find(x => x.name === newForm.elements.profile.value); newForm.elements.worktree.checked = p ? p.worktree_requirement !== 'none' : false; updateAgentModeField(); };
   delegateForm.elements.tool.onchange = () => { updateContextSelect(delegateForm.elements.tool, delegateForm.elements.auth_context); $('#delegate-mode-field').hidden = delegateForm.elements.tool.value !== 'opencode'; };
   updateNewToolFields(); selectView(location.hash.slice(1) || 'sessions', false); await refresh();
+  (async () => {
+    try {
+      const projects = await api('/api/projects');
+      const projSelect = newForm.elements.project_id;
+      projSelect.replaceChildren(...projects.map((p) => new Option(`${p.name}${p.repository ? ' · ' + p.repository : ''}`, p.id)));
+      projSelect.prepend(new Option('None', ''));
+    } catch {}
+  })();
   setInterval(() => { if (!document.hidden && !$$('dialog').some((dialog) => dialog.open)) refresh().catch((error) => showNotice(error.message, 'error')); }, 10000);
 }
 
@@ -728,7 +1023,7 @@ window.addEventListener('keydown', (event) => {
 newForm.onsubmit = async (event) => {
   event.preventDefault(); formStatus.textContent = 'Creating…'; const submit = $('button[type="submit"]', newForm); submit.disabled = true;
   const data = Object.fromEntries(new FormData(newForm)); data.worktree = newForm.elements.worktree.checked;
-  for (const key of ['name', 'task', 'agent_mode', 'provider', 'model']) if (!data[key]) data[key] = null;
+  for (const key of ['name', 'task', 'agent_mode', 'provider', 'model', 'project_id']) if (!data[key]) data[key] = null;
   try { const session = await api('/api/sessions', { method: 'POST', body: JSON.stringify(data) }); await refresh(); selectView('sessions'); renderInspector(session); openTerminal(session.tmux_name); submit.disabled = false; }
   catch (error) { formStatus.textContent = error.message; submit.disabled = false; }
 };

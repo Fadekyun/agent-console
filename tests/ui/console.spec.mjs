@@ -1,5 +1,13 @@
 import { expect, test } from '@playwright/test';
 
+const SKILLS_RESPONSE = {
+  entries: [
+    { name: 'test-skill', description: 'A test skill', kind: 'standard', tools: ['codex', 'claude'], allowed_profiles: null, requires_approval: false, source_present: true, synced: [{ tool: 'codex', linked: true }, { tool: 'claude', linked: false }], assigned_to: [{ profile: 'coder', assigned_at: '2026-07-20T00:00:00', assigned_by: 'test' }] },
+    { name: 'super-skill', description: 'A superpower', kind: 'superpower', tools: ['codex'], allowed_profiles: ['general', 'coder'], requires_approval: true, source_present: true, synced: [{ tool: 'codex', linked: true }], assigned_to: [] },
+  ],
+  errors: [],
+};
+
 function session(overrides = {}) {
   return {
     id: 'sess-root', tmux_name: 'codex-root', tool: 'codex', profile: 'general',
@@ -40,7 +48,7 @@ async function mockApi(page) {
     auth_contexts: [
       { tool: 'codex', name: 'default', status: 'ready', enabled: true, default: true },
       { tool: 'opencode', name: 'openrouter-main', provider: 'openrouter', status: 'ready', enabled: true, default: false },
-      { tool: 'opencode', name: 'opencode-go-default', provider: 'opencode-go', status: 'ready', enabled: true, default: true },
+      { tool: 'opencode', name: 'opencode-go-default', provider: 'opencode', status: 'ready', enabled: true, default: true },
       { tool: 'shell', name: 'default', status: 'ready', enabled: true, default: true },
     ],
   };
@@ -59,6 +67,7 @@ async function mockApi(page) {
       const selected = url.searchParams.get('state') === 'active' ? sessions.filter((item) => item.running) : sessions;
       return fulfill(selected);
     }
+    if (url.pathname === '/api/profiles' && method === 'GET') return fulfill(identity.profiles);
     if (url.pathname === '/api/plans' && method === 'GET') return fulfill([plan]);
     if (url.pathname === '/api/delegations') return fulfill({ roots: [{ ...active, children: [child] }, stopped], delegations: [], max_children_per_parent: 3 });
     if (url.pathname === '/api/plans/plan-1' && method === 'GET') return fulfill(plan);
@@ -86,6 +95,7 @@ async function mockApi(page) {
 async function installFakeWebSocket(page) {
   await page.addInitScript(() => {
     window.__wsSent = [];
+    window.__fakeWs = null;
     Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true });
     Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
     document.execCommand = () => true;
@@ -93,6 +103,7 @@ async function installFakeWebSocket(page) {
       static OPEN = 1;
       constructor() {
         this.readyState = FakeWebSocket.OPEN;
+        window.__fakeWs = this;
         queueMicrotask(() => {
           this.onopen?.();
           const output = Array.from({ length: 180 }, (_, index) => `terminal line ${index}`).join('\n');
@@ -123,6 +134,10 @@ test('responsive shell, theme persistence, and no horizontal overflow', async ({
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBeTruthy();
+  if (mobile) {
+    await page.goto('/desktop');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBeTruthy();
+  }
 });
 
 test('guided orchestration keeps delegation and plan execution explicit', async ({ page }) => {
@@ -189,6 +204,7 @@ test('brief preload, alternate-screen paging, and Text View never auto-send the 
   await installFakeWebSocket(page); await mockApi(page);
   await page.goto('/terminal?session=codex-root');
   await expect(page.locator('#composer')).toHaveValue('Coordinate work');
+  await expect(page.locator('#connection')).toHaveText('Connected');
   expect(await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length)).toBe(0);
   await page.locator('#text-view').click();
   await expect(page.locator('#text-dialog')).toBeVisible();
@@ -213,7 +229,7 @@ test('OpenCode model picker estimates the cheapest model on desktop and mobile',
     await page.locator('#model-cost-details').evaluate((details) => { details.open = true; });
     await page.locator('#estimate-output').fill('1500');
     await page.locator('#estimate-models').click();
-    await expect(page.locator('#new-session select[name="provider"]')).toHaveValue('opencode-go');
+    await expect(page.locator('#new-session select[name="provider"]')).toHaveValue('opencode');
     await expect(page.locator('.estimate-field')).toHaveCount(4);
     await expect(page.locator('#model-status')).toContainText('Selected cheapest for this token mix');
   } else {
@@ -223,7 +239,7 @@ test('OpenCode model picker estimates the cheapest model on desktop and mobile',
     await page.getByText('Estimate cheapest model').click();
     await page.locator('#mobile-output').fill('1500');
     await page.locator('#mobile-estimate').click();
-    await expect(page.locator('#mobile-new select[name="provider"]')).toHaveValue('opencode-go');
+    await expect(page.locator('#mobile-new select[name="provider"]')).toHaveValue('opencode');
     await expect(page.locator('#mobile-model-status')).toContainText('Selected cheapest:');
   }
 });
@@ -268,6 +284,59 @@ test('desktop terminal dock keeps four tabs connected and rejects a fifth', asyn
   await expect(page.locator('#terminal-dock')).toHaveClass(/collapsed/);
 });
 
+test('embedded terminal renders content, has visible layout, and transmits changed resize payloads on dock resize', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop only.');
+  await installFakeWebSocket(page); await mockApi(page); await page.goto('/desktop');
+  await page.locator('#active-sessions .session-row').filter({ hasText: 'codex-root' }).locator('[data-attach]').click();
+  await expect(page.locator('.terminal-embed')).toHaveCount(1);
+  const iframe = await page.locator('.terminal-embed').first().elementHandle().then((el) => el.contentFrame());
+  expect(iframe).toBeTruthy();
+  await expect.poll(() => iframe.evaluate(() => document.body.classList.contains('terminal-embedded'))).toBeTruthy();
+  const computedGrid = await iframe.evaluate(() => getComputedStyle(document.body).gridTemplateRows);
+  expect(computedGrid.split(/\s+/).length).toBe(3);
+  await expect.poll(() => iframe.evaluate(() => {
+    const f = document.querySelector('.terminal-frame');
+    return f ? f.getBoundingClientRect().height : 0;
+  })).toBeGreaterThan(100);
+  await expect.poll(() => iframe.evaluate(() => {
+    const t = window.__terminal;
+    return t ? t.buffer.active.length : 0;
+  })).toBeGreaterThan(1);
+  await expect.poll(() => iframe.evaluate(() => {
+    const t = window.__terminal; if (!t) return false;
+    for (let y = 0; y < Math.min(t.buffer.active.length, 20); y++) {
+      if ((t.buffer.active.getLine(y)?.translateToString() || '').includes('terminal line')) return true;
+    }
+    return false;
+  })).toBeTruthy();
+  const initialResize = await iframe.evaluate(() => {
+    const msgs = window.__wsSent || [];
+    const s = msgs.find((m) => typeof m === 'string' && m.includes('"type":"resize"'));
+    return s ? JSON.parse(s) : null;
+  });
+  expect(initialResize).toBeTruthy();
+  expect(initialResize.cols).toBeGreaterThan(0);
+  expect(initialResize.rows).toBeGreaterThan(0);
+  const dockBefore = await page.locator('#terminal-dock').evaluate((el) => el.getBoundingClientRect().height);
+  const handle = page.locator('#terminal-dock-handle');
+  await expect(handle).toBeVisible();
+  const box = await handle.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + 3);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y - 120, { steps: 20 });
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  const dockAfter = await page.locator('#terminal-dock').evaluate((el) => el.getBoundingClientRect().height);
+  expect(dockAfter).not.toBe(dockBefore);
+  await expect.poll(async () => {
+    const msgs = await iframe.evaluate(() => window.__wsSent || []);
+    const resizeStrs = msgs.filter((m) => typeof m === 'string' && m.includes('"type":"resize"'));
+    const last = resizeStrs.length ? JSON.parse(resizeStrs[resizeStrs.length - 1]) : null;
+    if (!last) return false;
+    return last.rows !== initialResize.rows || last.cols !== initialResize.cols;
+  }).toBeTruthy();
+});
+
 test('Codex exposes safe Auto and read-only Plan modes', async ({ page }, testInfo) => {
   await mockApi(page);
   await page.goto(testInfo.project.name === 'desktop' ? '/desktop#new' : '/mobile');
@@ -291,63 +360,278 @@ test('profiles view shows profile cards with metadata', async ({ page }, testInf
   await expect(page.locator('.profile-card').first()).toContainText('General');
 });
 
-test('skills view renders skill cards from catalog', async ({ page }, testInfo) => {
+test('skills view renders skill cards from catalog with assignments and approval info', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop skills coverage.');
-  await page.route('**/api/skills', async (route) => {
-    await route.fulfill({
-      status: 200, contentType: 'application/json',
-      body: JSON.stringify({ entries: [{ name: 'test-skill', description: 'A test skill', kind: 'standard', tools: ['codex', 'claude'], synced: [{ tool: 'codex', linked: true }, { tool: 'claude', linked: false }], source_present: true }], errors: [] }),
-    });
-  });
   await mockApi(page);
+  await page.route('**/api/skills', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(SKILLS_RESPONSE) });
+  });
   await page.goto('/desktop#skills');
   await expect(page.locator('#skills-list')).toBeVisible();
   await expect(page.locator('.skill-card')).not.toHaveCount(0);
-  await expect(page.locator('.skill-card').first()).toContainText('test-skill');
+  const firstCard = page.locator('.skill-card').first();
+  await expect(firstCard).toContainText('test-skill');
+  await expect(firstCard).toContainText('standard');
+  await expect(firstCard).toContainText('Standard skill · no approval gate');
+  await expect(firstCard).toContainText('Assigned to:');
+  await expect(firstCard).toContainText('coder');
+  await expect(firstCard.getByRole('button', { name: 'Assign to profile', exact: true })).toBeVisible();
+  await expect(firstCard.getByRole('button', { name: 'Remove from coder', exact: true })).toBeVisible();
+  const superCard = page.locator('.skill-card').nth(1);
+  await expect(superCard).toContainText('super-skill');
+  await expect(superCard).toContainText('superpower');
+  await expect(superCard).toContainText('Superpower · approval required');
+});
+
+test('skill card DOM order: header, description, tools before approval, assigned, actions', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop skills coverage.');
+  await mockApi(page);
+  await page.route('**/api/skills', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(SKILLS_RESPONSE) });
+  });
+  await page.goto('/desktop#skills');
+  await expect(page.locator('#skills-list')).toBeVisible();
+  const order = await page.evaluate(() => {
+    const card = document.querySelector('.skill-card');
+    const children = Array.from(card.children);
+    const classNames = children.map((el) => el.className);
+    const tagNames = children.map((el) => el.tagName);
+    const headerIdx = classNames.indexOf('skill-card-header');
+    const descIdx = tagNames.indexOf('P');
+    const toolsIdx = classNames.indexOf('skill-tools');
+    const approvalIdx = classNames.indexOf('skill-approval-info');
+    const assignedIdx = classNames.indexOf('skill-assigned-list');
+    const actionsIdx = classNames.indexOf('dialog-actions');
+    return { headerIdx, descIdx, toolsIdx, approvalIdx, assignedIdx, actionsIdx };
+  });
+  expect(order.headerIdx).not.toBe(-1);
+  expect(order.descIdx).not.toBe(-1);
+  expect(order.toolsIdx).not.toBe(-1);
+  expect(order.approvalIdx).not.toBe(-1);
+  expect(order.assignedIdx).not.toBe(-1);
+  expect(order.actionsIdx).not.toBe(-1);
+  expect(order.headerIdx).toBeLessThan(order.descIdx);
+  expect(order.descIdx).toBeLessThan(order.toolsIdx);
+  expect(order.toolsIdx).toBeLessThan(order.approvalIdx);
+  expect(order.approvalIdx).toBeLessThan(order.assignedIdx);
+  expect(order.assignedIdx).toBeLessThan(order.actionsIdx);
+});
+
+test('skill assign dialog opens and dispatches assign API call', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop skills coverage.');
+  await mockApi(page);
+  await page.route('**/api/skills', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(SKILLS_RESPONSE) });
+  });
+  const assignRequest = page.waitForRequest((r) => r.url().includes('/api/skills/assign') && r.method() === 'POST');
+  await page.route('**/api/skills/assign', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ profile: 'planner', skill_name: 'super-skill' }) });
+  });
+  await page.goto('/desktop#skills');
+  await page.locator('.skill-card').nth(1).getByRole('button', { name: 'Assign to profile' }).click();
+  await expect(page.locator('#assign-skill-dialog')).toBeVisible();
+  await expect(page.locator('#assign-skill-title')).toContainText('Assign: super-skill');
+  await page.locator('#assign-skill-form select[name="profile"]').selectOption('planner');
+  await page.locator('#assign-skill-form button[type="submit"]').click();
+  await assignRequest;
+});
+
+test('skill unassign button dispatches unassign API call', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop skills coverage.');
+  await mockApi(page);
+  await page.route('**/api/skills', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(SKILLS_RESPONSE) });
+  });
+  const unassignRequest = page.waitForRequest((r) => r.url().includes('/api/skills/unassign') && r.method() === 'POST');
+  await page.route('**/api/skills/unassign', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ profile: 'coder', skill_name: 'test-skill' }) });
+  });
+  await page.goto('/desktop#skills');
+  await page.locator('.skill-card').first().getByRole('button', { name: 'Remove from coder' }).click();
+  await unassignRequest;
+});
+
+test('orchestration view shows session groups with interactive controls', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop orchestration coverage.');
+  await mockApi(page);
+  await page.route('**/api/session-groups**', async (route) => {
+    const url = new URL(route.request().url());
+    const method = route.request().method();
+    if (method === 'GET') {
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify([{ id: 'grp-1', name: 'test-group', purpose: 'coordinate work', status: 'active', member_count: 1, sessions: [{ tmux_name: 'child-1', profile: 'planner', tool: 'codex', status: 'detached', attention_state: 'normal', running: true }] }]),
+      });
+    } else if (url.pathname.endsWith('/members') && method === 'POST') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'grp-1', name: 'test-group', member_count: 2, sessions: [] }) });
+    } else if (url.pathname.includes('/open') && method === 'POST') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ member_count: 1, available: [{ tmux_name: 'child-1' }], unavailable: [] }) });
+    } else {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'grp-1', name: 'test-group', member_count: 1, sessions: [{ tmux_name: 'child-1', profile: 'planner', tool: 'codex', status: 'detached', attention_state: 'normal', running: true }] }) });
+    }
+  });
+  await page.goto('/desktop#orchestration');
+  await expect(page.locator('#session-tree')).toBeVisible();
+  await expect(page.locator('#session-tree')).toContainText('test-group');
+  await expect(page.locator('#new-group-btn')).toBeVisible();
+  await expect(page.locator('[data-group-open]').first()).toBeVisible();
+  await page.locator('[data-group-open]').first().click();
+  await expect(page.locator('#notice')).toContainText('Opened');
 });
 
 test('orchestration view shows session groups', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop orchestration coverage.');
+  await mockApi(page);
   await page.route('**/api/session-groups', async (route) => {
     await route.fulfill({
       status: 200, contentType: 'application/json',
       body: JSON.stringify([{ id: 'grp-1', name: 'test-group', purpose: 'coordinate work', status: 'active', sessions: [{ tmux_name: 'child-1', profile: 'planner', tool: 'codex', status: 'detached', attention_state: 'normal' }] }]),
     });
   });
-  await mockApi(page);
   await page.goto('/desktop#orchestration');
   await expect(page.locator('#session-tree')).toBeVisible();
 });
 
 test('projects view shows project cards', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop projects coverage.');
+  await mockApi(page);
   await page.route('**/api/projects', async (route) => {
     await route.fulfill({
       status: 200, contentType: 'application/json',
       body: JSON.stringify([{ id: 'proj-1', name: 'test-project', repository: '/workspace/repo', description: 'A test project', status: 'active', session_count: 2 }]),
     });
   });
-  await mockApi(page);
   await page.goto('/desktop#projects');
   await expect(page.locator('#projects-list')).toBeVisible();
   await expect(page.locator('.profile-card').first()).toContainText('test-project');
 });
 
-test('new-output button appears when not at bottom and contextual label works', async ({ page }, testInfo) => {
+test('terminal displays session name in header, page title, and aria-label', async ({ page }, testInfo) => {
+  await installFakeWebSocket(page);
+  await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await expect(page).toHaveTitle(/Agent Terminal - codex-root/);
+  await expect(page.locator('#session-name')).toHaveText('codex-root');
+  await expect(page.locator('.terminal-frame')).toHaveAttribute('aria-label', 'Terminal session codex-root');
+  // Dashboard terminal dock uses encoded name in iframe src (desktop only)
+  if (testInfo.project.name === 'desktop') {
+    await page.goto('/desktop');
+    await page.locator('#active-sessions .session-row').filter({ hasText: 'codex-root' }).locator('[data-attach]').click();
+    const dockFrame = page.locator('.terminal-embed').first();
+    await expect(dockFrame).toHaveAttribute('src', /session=codex-root/);
+    await expect(dockFrame).toHaveAttribute('title', 'Terminal codex-root');
+  }
+});
+
+test('project detail dialog shows sessions with unassign', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop project detail coverage.');
+  await mockApi(page);
+  await page.route('**/api/projects', async (route) => {
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([{ id: 'proj-1', name: 'detail-project', repository: '/workspace/repo', status: 'active', session_count: 1 }]),
+    });
+  });
+  await page.route('**/api/projects/proj-1', async (route) => {
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'proj-1', name: 'detail-project', repository: '/workspace/repo',
+        description: '', status: 'active',
+        sessions: [{ tmux_name: 'sess-1', tool: 'shell', profile: 'general', attention_state: 'normal', status: 'detached' }],
+      }),
+    });
+  });
+  await page.goto('/desktop#projects');
+  await page.locator('button:has-text("View sessions")').click();
+  await expect(page.locator('#project-detail-dialog')).toBeVisible();
+  await expect(page.locator('#project-detail-dialog')).toContainText('sess-1');
+  await expect(page.locator('#project-detail-dialog')).toContainText('Unassign');
+});
+
+test('new session form includes project selector', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop new session coverage.');
+  await mockApi(page);
+  await page.route('**/api/projects', async (route) => {
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([{ id: 'proj-1', name: 'selector-project', repository: '/repo', status: 'active', session_count: 0 }]),
+    });
+  });
+  await page.goto('/desktop#new');
+  const select = page.locator('select[name="project_id"]');
+  await expect(select).toBeVisible();
+  await expect(select).toContainText('selector-project');
+});
+
+test('terminal scroll-follow: connect, scroll-away, unread, manual-jump, resize', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Scroll-to-bottom coverage on desktop.');
   await installFakeWebSocket(page);
   await mockApi(page);
   await page.goto('/terminal?session=codex-root');
-  // Simulate scroll away from bottom by setting viewportY < baseY via page.evaluate
+
+  // 1. Initial connect/reconnect scrolls to bottom
+  await expect(page.locator('#new-output')).toBeHidden();
+  expect(await page.evaluate(() => {
+    const buf = window.__terminal?.buffer.active;
+    return buf ? buf.viewportY >= buf.baseY : false;
+  })).toBe(true);
+
+  // 2. Deliberate scroll-away → button shows "Scroll to bottom"
+  await page.waitForFunction(() => window.__terminal?.buffer.active.baseY > 0, { timeout: 5000 });
   await page.evaluate(() => {
     const term = window.__terminal;
-    if (term) { term.buffer.active.viewportY = 0; term.buffer.active.baseY = 100; term.scrollLines(10); }
-    // Trigger onScroll
-    term?.scrollLines(1);
+    if (term) {
+      term.buffer.active.viewportY = 0;
+      term.scrollToBottom();
+      term.scrollLines(-1);
+    }
   });
   await expect(page.locator('#new-output')).toBeVisible();
   await expect(page.locator('#new-output')).toContainText('Scroll to bottom');
-  // Click to scroll to bottom
+  expect(await page.evaluate(() => {
+    const buf = window.__terminal?.buffer.active;
+    return buf ? buf.viewportY < buf.baseY : false;
+  })).toBe(true);
+
+  // 3. New output while scrolled away → unread indicator, viewport preserved
+  await page.evaluate(() => {
+    const encoder = new TextEncoder();
+    window.__fakeWs?.onmessage?.({ data: encoder.encode('\nnew unread output\n').buffer });
+  });
+  await expect(page.locator('#new-output')).toContainText('New output');
+  await expect(page.locator('#new-output')).toContainText('Scroll to bottom');
+  const btnClass = await page.locator('#new-output').getAttribute('class');
+  expect(btnClass).toContain('has-unread');
+  expect(await page.evaluate(() => {
+    const buf = window.__terminal?.buffer.active;
+    return buf ? buf.viewportY < buf.baseY : false;
+  })).toBe(true);
+
+  // 4. Manual jump (click) → scrolls to bottom, resumes following
   await page.locator('#new-output').click();
   await expect(page.locator('#new-output')).toBeHidden();
+  expect(await page.evaluate(() => {
+    const buf = window.__terminal?.buffer.active;
+    return buf ? buf.viewportY === buf.baseY : false;
+  })).toBe(true);
+  // Following active — new output auto-scrolls, viewport stays at bottom
+  await page.evaluate(() => {
+    const encoder = new TextEncoder();
+    window.__fakeWs?.onmessage?.({ data: encoder.encode('\nauto-followed output\n').buffer });
+  });
+  await expect(page.locator('#new-output')).toBeHidden();
+  expect(await page.evaluate(() => {
+    const buf = window.__terminal?.buffer.active;
+    return buf ? buf.viewportY === buf.baseY : false;
+  })).toBe(true);
+
+  // 5. Window resize while following keeps at bottom
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.waitForTimeout(200);
+  await expect(page.locator('#new-output')).toBeHidden();
+  expect(await page.evaluate(() => {
+    const buf = window.__terminal?.buffer.active;
+    return buf ? buf.viewportY === buf.baseY : false;
+  })).toBe(true);
 });

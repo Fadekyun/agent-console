@@ -12,23 +12,52 @@ import struct
 import subprocess
 import termios
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import uvicorn.config
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 
-from .logging_config import configure_logging
+from .config import Settings
+from .logging_config import configure_logging, configure_uvicorn_logging
 from .manager import SessionManager
 from .profiles import profile_summaries
-from .skills import doctor_skills, skill_catalog, sync_skills
+from .skills import (
+    approve_superpower,
+    assign_skill,
+    doctor_skills,
+    enrich_catalog_with_assignments,
+    get_effective_skills,
+    list_assignments,
+    list_superpower_approvals,
+    revoke_superpower,
+    skill_catalog,
+    sync_skills,
+    unassign_skill,
+    validate_profile_skills,
+)
 from .validation import TOOLS, validate_session_name
 
+
+uvicorn.config.LOGGING_CONFIG = {}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    s = Settings.from_env()
+    configure_logging(log_dir=s.log_dir, retention_days=s.log_retention_days, backup_count=s.log_backup_count)
+    configure_uvicorn_logging()
+    yield
+
+
 configure_logging()
+configure_uvicorn_logging()
 log = logging.getLogger(__name__)
 
 
@@ -65,12 +94,13 @@ class CreateSessionRequest(BaseModel):
     worktree: bool = False
     auth_context: str | None = Field(default=None, max_length=64)
     agent_mode: str | None = Field(default=None, pattern="^(plan|build|auto)$")
-    provider: str | None = Field(default=None, pattern="^(openrouter|opencode-go)$")
+    provider: str | None = Field(default=None, pattern="^(openrouter|opencode)$")
     model: str | None = Field(default=None, max_length=240)
+    project_id: str | None = Field(default=None, max_length=80)
 
 
 class ModelEstimateRequest(BaseModel):
-    provider: str = Field(pattern="^(openrouter|opencode-go)$")
+    provider: str = Field(pattern="^(openrouter|opencode)$")
     uncached_input_tokens: int = Field(default=0, ge=0)
     cached_input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
@@ -81,6 +111,11 @@ class ConfirmRequest(BaseModel):
     confirmed: bool = False
     allow_unmanaged: bool = False
     understand_unmanaged: bool = False
+
+
+class WaitForChildrenRequest(BaseModel):
+    timeout: int | None = Field(default=None, ge=1, le=3600)
+    poll_interval: int | None = Field(default=None, ge=1, le=120)
 
 
 class AttentionRequest(BaseModel):
@@ -103,6 +138,9 @@ class GroupCreateRequest(BaseModel):
     purpose: str | None = Field(default=None, max_length=2000)
     parent_session: str | None = Field(default=None, max_length=80)
 
+class GroupMemberRequest(BaseModel):
+    session_name: str = Field(min_length=1, max_length=80)
+
 class PlanExecuteRequest(BaseModel):
     confirmed: bool = False
     profile: str = Field(default="coder", pattern="^(coder|bugfix)$")
@@ -110,8 +148,30 @@ class PlanExecuteRequest(BaseModel):
     allow_revision_change: bool = False
     project_id: str | None = Field(default=None, max_length=80)
 
+class RecordEvidenceRequest(BaseModel):
+    evidence_type: str = Field(min_length=1)
+    result: str = Field(min_length=1)
+    candidate_sha: str = Field(min_length=1, max_length=128)
+    detail: str | None = Field(default=None, max_length=5000)
+    capability: str | None = Field(default=None, min_length=1, max_length=256)
+
+class PromoteRequest(BaseModel):
+    confirmed: bool = False
+    candidate_sha: str | None = Field(default=None, max_length=128)
+
 class AssignSessionRequest(BaseModel):
     session_name: str = Field(min_length=1, max_length=80)
+
+class SkillAssignRequest(BaseModel):
+    profile: str = Field(min_length=1, pattern="^[a-z_]+$")
+    skill_name: str = Field(min_length=1, max_length=200)
+
+class SkillEffectiveRequest(BaseModel):
+    profile: str = Field(min_length=1, pattern="^[a-z_]+$")
+
+class SkillApprovalRequest(BaseModel):
+    profile: str = Field(min_length=1, pattern="^[a-z_]+$")
+    skill_name: str = Field(min_length=1, max_length=200)
 
 class ProjectCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
@@ -128,13 +188,9 @@ class ProjectUpdateRequest(BaseModel):
 def create_app(manager: SessionManager | None = None) -> FastAPI:
     session_manager = manager or SessionManager()
     pty_clients: dict[str, int] = defaultdict(int)
-    app = FastAPI(title="Agent Console", docs_url=None, redoc_url=None)
+    app = FastAPI(title="Agent Console", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
     app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
-    for uvi_name in ("uvicorn.access", "uvicorn.error", "uvicorn.asgi"):
-        uvi_log = logging.getLogger(uvi_name)
-        if not uvi_log.handlers:
-            uvi_log.addHandler(logging.getLogger().handlers[0] if logging.getLogger().handlers else logging.StreamHandler())
 
     def require_identity(
         request: Request,
@@ -265,9 +321,46 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     @app.post("/api/session-groups")
     async def create_session_group(
         payload: GroupCreateRequest,
-        _: AuthContext = Depends(require_identity),
+        auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
-        return session_manager.create_group(payload.name, payload.purpose, payload.parent_session)
+        return session_manager.create_group(
+            payload.name, payload.purpose, payload.parent_session,
+            actor=auth.actor, surface="web",
+        )
+
+    @app.get("/api/session-groups/{group_id}")
+    async def get_session_group(
+        group_id: str, _: AuthContext = Depends(require_identity)
+    ) -> dict[str, Any]:
+        return session_manager.get_group(group_id)
+
+    @app.post("/api/session-groups/{group_id}/members")
+    async def add_group_member(
+        group_id: str,
+        payload: GroupMemberRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.add_group_session(
+            group_id, payload.session_name,
+            actor=auth.actor, surface="web",
+        )
+
+    @app.delete("/api/session-groups/{group_id}/members/{session_name}")
+    async def remove_group_member(
+        group_id: str,
+        session_name: str,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.remove_group_session(
+            group_id, validate_session_name(session_name),
+            actor=auth.actor, surface="web",
+        )
+
+    @app.post("/api/session-groups/{group_id}/open")
+    async def open_session_group(
+        group_id: str, _: AuthContext = Depends(require_identity)
+    ) -> dict[str, Any]:
+        return session_manager.open_group(group_id)
 
     @app.get("/api/projects")
     async def projects_list(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
@@ -276,9 +369,12 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     @app.post("/api/projects")
     async def projects_create(
         payload: ProjectCreateRequest,
-        _: AuthContext = Depends(require_identity),
+        auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
-        return session_manager.create_project(payload.name, payload.repository, payload.description)
+        return session_manager.create_project(
+            payload.name, payload.repository, payload.description,
+            actor=auth.actor, surface="web",
+        )
 
     @app.get("/api/projects/{project_id}")
     async def projects_get(
@@ -290,7 +386,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     async def projects_update(
         project_id: str,
         payload: ProjectUpdateRequest,
-        _: AuthContext = Depends(require_identity),
+        auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
         return session_manager.update_project(
             project_id,
@@ -298,28 +394,58 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             repository=payload.repository,
             description=payload.description,
             status=payload.status,
+            actor=auth.actor, surface="web",
         )
 
     @app.delete("/api/projects/{project_id}")
     async def projects_delete(
-        project_id: str, _: AuthContext = Depends(require_identity)
+        project_id: str,
+        auth: AuthContext = Depends(require_identity),
     ) -> dict[str, str]:
-        session_manager.delete_project(project_id)
+        session_manager.delete_project(
+            project_id, actor=auth.actor, surface="web",
+        )
         return {"status": "deleted"}
 
     @app.post("/api/projects/{project_id}/assign")
     async def projects_assign(
         project_id: str,
         payload: AssignSessionRequest,
-        _: AuthContext = Depends(require_identity),
+        auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
-        return session_manager.assign_session_to_project(payload.session_name, project_id)
+        return session_manager.assign_session_to_project(
+            payload.session_name, project_id,
+            actor=auth.actor, surface="web",
+        )
+
+    @app.post("/api/projects/{project_id}/unassign")
+    async def projects_unassign(
+        project_id: str,
+        payload: AssignSessionRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.unassign_session_from_project(
+            payload.session_name, project_id,
+            actor=auth.actor, surface="web",
+        )
 
     @app.get("/api/sessions/{name}/wait-status")
     async def wait_status(
         name: str, _: AuthContext = Depends(require_identity)
     ) -> dict[str, Any] | None:
         return session_manager.wait_status(name)
+
+    @app.post("/api/sessions/{name}/wait-for-children")
+    async def wait_for_children(
+        name: str,
+        payload: WaitForChildrenRequest,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.wait_for_children(
+            name,
+            timeout=payload.timeout,
+            poll_interval=payload.poll_interval,
+        )
 
     @app.get("/api/sessions/{name}/review")
     async def review_session(
@@ -354,14 +480,14 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
 
     @app.get("/api/models")
     async def models(
-        provider: str = Query(pattern="^(openrouter|opencode-go)$"),
+        provider: str = Query(pattern="^(openrouter|opencode)$"),
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
         return session_manager.model_catalogue(provider)
 
     @app.post("/api/models/refresh")
     async def refresh_models(
-        provider: str = Query(pattern="^(openrouter|opencode-go)$"),
+        provider: str = Query(pattern="^(openrouter|opencode)$"),
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
         return session_manager.model_catalogue(provider, refresh=True)
@@ -404,6 +530,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             provider=payload.provider,
             model=payload.model,
             creator_surface="web",
+            project_id=payload.project_id,
         )
 
     @app.post("/api/sessions/{parent}/delegations")
@@ -441,6 +568,43 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             project_id=payload.project_id,
         )
 
+    @app.post("/api/plans/{plan_id}/evidence")
+    async def record_evidence(
+        plan_id: str,
+        payload: RecordEvidenceRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.record_evidence(
+            plan_id,
+            evidence_type=payload.evidence_type,
+            result=payload.result,
+            candidate_sha=payload.candidate_sha,
+            detail=payload.detail,
+            capability=payload.capability,
+        )
+
+    @app.get("/api/plans/{plan_id}/gate")
+    async def release_gate(
+        plan_id: str,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.check_release_gate(plan_id)
+
+    @app.post("/api/plans/{plan_id}/promote")
+    async def promote_plan_api(
+        plan_id: str,
+        payload: PromoteRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        if not payload.confirmed:
+            raise HTTPException(status_code=400, detail="promote confirmation is required")
+        return session_manager.promote_plan(
+            plan_id,
+            candidate_sha=payload.candidate_sha,
+            actor=auth.actor,
+            surface="web",
+        )
+
     @app.post("/api/sessions/{name}/interrupt")
     async def interrupt(name: str, _: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         return session_manager.interrupt(validate_session_name(name))
@@ -451,7 +615,9 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
 
     @app.get("/api/skills")
     async def skills_api(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
-        return skill_catalog()
+        catalog = skill_catalog()
+        assignments = list_assignments(session_manager.database)
+        return enrich_catalog_with_assignments(catalog, assignments)
 
     class SkillsSyncRequest(BaseModel):
         pass
@@ -463,6 +629,94 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     @app.post("/api/skills/doctor")
     async def skills_doctor(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         return doctor_skills()
+
+    @app.get("/api/deploy/releases")
+    async def deploy_releases(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
+        return session_manager.list_releases()
+
+    @app.get("/api/deploy/current")
+    async def deploy_current(_: AuthContext = Depends(require_identity)) -> dict[str, Any] | None:
+        return session_manager.current_release()
+
+    @app.get("/api/deploy/canary")
+    async def deploy_canary(_: AuthContext = Depends(require_identity)) -> dict[str, Any] | None:
+        return session_manager.canary_release()
+
+    @app.get("/api/skills/assignments")
+    async def skills_assignments(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
+        return list_assignments(session_manager.database)
+
+    @app.post("/api/skills/assign")
+    async def skills_assign(
+        payload: SkillAssignRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return assign_skill(
+            session_manager.database,
+            payload.profile,
+            payload.skill_name,
+            actor=auth.actor,
+            surface=auth.access_surface,
+        )
+
+    @app.post("/api/skills/unassign")
+    async def skills_unassign(
+        payload: SkillAssignRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return unassign_skill(
+            session_manager.database,
+            payload.profile,
+            payload.skill_name,
+            actor=auth.actor,
+            surface=auth.access_surface,
+        )
+
+    @app.post("/api/skills/effective")
+    async def skills_effective(
+        payload: SkillEffectiveRequest,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return get_effective_skills(session_manager.database, payload.profile)
+
+    @app.post("/api/skills/validate")
+    async def skills_validate(
+        payload: SkillEffectiveRequest,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return validate_profile_skills(session_manager.database, payload.profile)
+
+    @app.post("/api/skills/approve")
+    async def skills_approve(
+        payload: SkillApprovalRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return approve_superpower(
+            session_manager.database,
+            payload.profile,
+            payload.skill_name,
+            actor=auth.actor,
+            surface=auth.access_surface,
+        )
+
+    @app.post("/api/skills/revoke")
+    async def skills_revoke(
+        payload: SkillApprovalRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return revoke_superpower(
+            session_manager.database,
+            payload.profile,
+            payload.skill_name,
+            actor=auth.actor,
+            surface=auth.access_surface,
+        )
+
+    @app.get("/api/skills/approvals")
+    async def skills_approvals_list(
+        _: AuthContext = Depends(require_identity),
+    ) -> list[dict[str, Any]]:
+        return list_superpower_approvals(session_manager.database)
 
     @app.post("/api/sessions/{name}/kill")
     async def kill(

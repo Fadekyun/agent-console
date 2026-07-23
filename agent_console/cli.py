@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Any
 
 from .manager import SessionManager
 from .secrets_store import migrate_openrouter_secret, secret_status, set_openrouter_secret
-from .skills import doctor_skills, sync_skills
+from .skills import approve_superpower, doctor_skills, get_effective_skills, list_superpower_approvals, revoke_superpower, sync_skills
 from .validation import PROFILES, TOOLS
 
 
@@ -94,7 +95,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--worktree", action="store_true")
     create.add_argument("--auth-context")
     create.add_argument("--agent-mode", choices=["plan", "build", "auto"])
-    create.add_argument("--provider", choices=["openrouter", "opencode-go"])
+    create.add_argument("--provider", choices=["openrouter", "opencode"])
     create.add_argument("--model")
     interrupt = session_commands.add_parser("interrupt")
     interrupt.add_argument("name")
@@ -103,6 +104,24 @@ def parser() -> argparse.ArgumentParser:
     rename = session_commands.add_parser("rename")
     rename.add_argument("name")
     rename.add_argument("new_name")
+    group = session_commands.add_parser("group")
+    group_commands = group.add_subparsers(dest="group_command", required=True)
+    group_create = group_commands.add_parser("create")
+    group_create.add_argument("name")
+    group_create.add_argument("--purpose")
+    group_create.add_argument("--parent-session")
+    group_commands.add_parser("list")
+    group_show = group_commands.add_parser("show")
+    group_show.add_argument("group_id")
+    group_add = group_commands.add_parser("add")
+    group_add.add_argument("group_id")
+    group_add.add_argument("session_name")
+    group_remove = group_commands.add_parser("remove")
+    group_remove.add_argument("group_id")
+    group_remove.add_argument("session_name")
+    group_open = group_commands.add_parser("open")
+    group_open.add_argument("group_id")
+
     kill = session_commands.add_parser("kill")
     kill.add_argument("name")
     kill.add_argument("--yes", action="store_true")
@@ -135,6 +154,23 @@ def parser() -> argparse.ArgumentParser:
     plan_execute.add_argument("--allow-revision-change", action="store_true")
     plan_execute.add_argument("--yes", action="store_true")
 
+    plan_evidence = plan_commands.add_parser("evidence")
+    plan_evidence.add_argument("plan_id")
+    plan_evidence.add_argument("--type", required=True, choices=["review", "verification", "scout"])
+    plan_evidence.add_argument("--result", required=True, choices=["pass", "fail", "blocked"])
+    plan_evidence.add_argument("--sha", required=True)
+    plan_evidence.add_argument("--detail")
+    plan_evidence.add_argument("--capability")
+
+    plan_gate = plan_commands.add_parser("gate")
+    plan_gate.add_argument("plan_id")
+    plan_gate.add_argument("--json", action="store_true")
+
+    plan_promote = plan_commands.add_parser("promote")
+    plan_promote.add_argument("plan_id")
+    plan_promote.add_argument("--sha")
+    plan_promote.add_argument("--yes", action="store_true")
+
     delegate = commands.add_parser("delegate")
     delegate.add_argument("profile", choices=["planner", "researcher", "reviewer", "scout"])
     delegate.add_argument("--parent", required=True)
@@ -148,11 +184,11 @@ def parser() -> argparse.ArgumentParser:
     models = commands.add_parser("models")
     model_commands = models.add_subparsers(dest="models_command", required=True)
     model_list = model_commands.add_parser("list")
-    model_list.add_argument("--provider", required=True, choices=["openrouter", "opencode-go"])
+    model_list.add_argument("--provider", required=True, choices=["openrouter", "opencode"])
     model_list.add_argument("--refresh", action="store_true")
     model_list.add_argument("--json", action="store_true")
     estimate = model_commands.add_parser("estimate")
-    estimate.add_argument("--provider", required=True, choices=["openrouter", "opencode-go"])
+    estimate.add_argument("--provider", required=True, choices=["openrouter", "opencode"])
     estimate.add_argument("--uncached-input-tokens", type=int, default=0)
     estimate.add_argument("--cached-input-tokens", type=int, default=0)
     estimate.add_argument("--output-tokens", type=int, default=0)
@@ -163,6 +199,17 @@ def parser() -> argparse.ArgumentParser:
     skills_commands.add_parser("sync")
     skills_doctor = skills_commands.add_parser("doctor")
     skills_doctor.add_argument("--quiet", action="store_true")
+    skills_effective = skills_commands.add_parser("effective")
+    skills_effective.add_argument("profile", choices=sorted(PROFILES))
+    skills_validate = skills_commands.add_parser("validate")
+    skills_validate.add_argument("profile", choices=sorted(PROFILES))
+    skills_approve = skills_commands.add_parser("approve")
+    skills_approve.add_argument("profile", choices=sorted(PROFILES))
+    skills_approve.add_argument("skill_name")
+    skills_revoke = skills_commands.add_parser("revoke")
+    skills_revoke.add_argument("profile", choices=sorted(PROFILES))
+    skills_revoke.add_argument("skill_name")
+    skills_commands.add_parser("approvals")
 
     secrets = commands.add_parser("secrets")
     secrets_commands = secrets.add_subparsers(dest="secrets_command", required=True)
@@ -203,6 +250,24 @@ def parser() -> argparse.ArgumentParser:
     context_disable.add_argument("name")
     context_disable.add_argument("--reason", default="context disabled")
 
+    deploy = commands.add_parser("deploy")
+    deploy_commands = deploy.add_subparsers(dest="deploy_command", required=True)
+    deploy_apply = deploy_commands.add_parser("apply")
+    deploy_apply.add_argument("plan_id")
+    deploy_apply.add_argument("--yes", action="store_true")
+    deploy_commands.add_parser("list")
+    deploy_commands.add_parser("current")
+    deploy_commands.add_parser("canary")
+    deploy_validate = deploy_commands.add_parser("validate")
+    deploy_validate.add_argument("release_name")
+    deploy_promote_user = deploy_commands.add_parser("promote-user-service")
+    deploy_promote_user.add_argument("release_name")
+    deploy_promote_user.add_argument("--yes", action="store_true")
+    deploy_rollback = deploy_commands.add_parser("rollback")
+    deploy_rollback.add_argument("--target", default="previous")
+    deploy_rollback.add_argument("--yes", action="store_true")
+    deploy_commands.add_parser("doctor")
+
     commands.add_parser("doctor")
     return root
 
@@ -211,6 +276,32 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         if args.command == "skills":
+            if args.skills_command == "effective":
+                manager = SessionManager()
+                emit(get_effective_skills(manager.database, args.profile))
+                return 0
+            if args.skills_command == "validate":
+                manager = SessionManager()
+                from .skills import validate_profile_skills
+                result = validate_profile_skills(manager.database, args.profile)
+                emit(result)
+                return 0 if result["valid"] else 1
+            if args.skills_command == "approve":
+                manager = SessionManager()
+                from .skills import approve_superpower
+                emit(approve_superpower(manager.database, args.profile, args.skill_name,
+                                         actor="CLI-user", surface="CLI"))
+                return 0
+            if args.skills_command == "revoke":
+                manager = SessionManager()
+                from .skills import revoke_superpower
+                emit(revoke_superpower(manager.database, args.profile, args.skill_name,
+                                        actor="CLI-user", surface="CLI"))
+                return 0
+            if args.skills_command == "approvals":
+                manager = SessionManager()
+                emit(list_superpower_approvals(manager.database))
+                return 0
             result = sync_skills() if args.skills_command == "sync" else doctor_skills()
             if not getattr(args, "quiet", False):
                 emit(result)
@@ -257,6 +348,42 @@ def main(argv: list[str] | None = None) -> int:
                 return 0 if result["ok"] else 1
             elif args.context_command == "disable":
                 emit(manager.auth.disable(args.tool, args.name, args.reason))
+            return 0
+        if args.command == "deploy":
+            if args.deploy_command == "apply":
+                confirmed = args.yes or confirm_typed(
+                    "Create immutable release and select canary?",
+                    expected=args.plan_id,
+                )
+                emit(manager.deploy_apply(args.plan_id, confirmed=confirmed))
+            elif args.deploy_command == "list":
+                emit(manager.list_releases())
+            elif args.deploy_command == "current":
+                result = manager.current_release()
+                emit(result or {"release_name": None, "release_path": None})
+            elif args.deploy_command == "canary":
+                result = manager.canary_release()
+                emit(result or {"release_name": None, "release_path": None})
+            elif args.deploy_command == "validate":
+                emit(manager.validate_release(args.release_name))
+            elif args.deploy_command == "promote-user-service":
+                confirmed = args.yes or confirm_typed(
+                    "Promote canary release to user-service? This is equivalent to selecting current.",
+                    expected=args.release_name,
+                )
+                if not confirmed:
+                    raise PermissionError("promotion confirmation required")
+                emit(manager.promote_user_service(args.release_name))
+            elif args.deploy_command == "rollback":
+                confirmed = args.yes or confirm_typed(
+                    "Rollback to previous release?",
+                    expected="rollback",
+                )
+                if not confirmed:
+                    raise PermissionError("rollback confirmation required")
+                emit(manager.rollback_release(target=args.target))
+            elif args.deploy_command == "doctor":
+                emit(manager.deployer_doctor())
             return 0
         if args.command == "doctor":
             result = manager.doctor()
@@ -366,6 +493,19 @@ def main(argv: list[str] | None = None) -> int:
                         allow_unmanaged=args.allow_unmanaged,
                     )
                 )
+            elif args.session_command == "group":
+                if args.group_command == "list":
+                    emit(manager.list_groups())
+                elif args.group_command == "create":
+                    emit(manager.create_group(args.name, args.purpose, args.parent_session))
+                elif args.group_command == "show":
+                    emit(manager.get_group(args.group_id))
+                elif args.group_command == "add":
+                    emit(manager.add_group_session(args.group_id, args.session_name))
+                elif args.group_command == "remove":
+                    emit(manager.remove_group_session(args.group_id, args.session_name))
+                elif args.group_command == "open":
+                    emit(manager.open_group(args.group_id))
         elif args.command == "profile":
             emit(
                 manager.list_profiles()
@@ -377,6 +517,41 @@ def main(argv: list[str] | None = None) -> int:
                 emit(manager.list_plans())
             elif args.plan_command == "inspect":
                 emit(manager.inspect_plan(args.plan_id))
+            elif args.plan_command == "evidence":
+                cap = args.capability or os.environ.get("AGENT_CONSOLE_EVIDENCE_CAPABILITY")
+                emit(
+                    manager.record_evidence(
+                        args.plan_id,
+                        evidence_type=args.type,
+                        result=args.result,
+                        candidate_sha=args.sha,
+                        detail=args.detail,
+                        capability=cap,
+                    )
+                )
+            elif args.plan_command == "gate":
+                gate = manager.check_release_gate(args.plan_id)
+                if args.json:
+                    emit(gate)
+                else:
+                    status = "ALLOWED" if gate["allowed"] else "BLOCKED"
+                    print(f"Release gate: {status}")
+                    print(f"  Plan: {args.plan_id}")
+                    print(f"  SHA: {gate.get('candidate_sha', 'none')}")
+                    print(f"  Reason: {gate['reason']}")
+                    if gate.get("blocked_by"):
+                        print(f"  Blocked by: {gate['blocked_by']}")
+            elif args.plan_command == "promote":
+                if not args.yes and not confirm_typed(
+                    "Promote plan to releasable?", expected=args.plan_id
+                ):
+                    raise PermissionError("confirmation required")
+                emit(
+                    manager.promote_plan(
+                        args.plan_id,
+                        candidate_sha=args.sha,
+                    )
+                )
             elif args.plan_command == "execute":
                 plan = manager.inspect_plan(args.plan_id)
                 print(plan["plan"])

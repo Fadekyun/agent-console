@@ -3,12 +3,17 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 10
+
+
+EVIDENCE_TYPES = frozenset({"review", "verification", "scout"})
+EVIDENCE_RESULTS = frozenset({"pass", "fail", "blocked"})
+REQUIRED_EVIDENCE_TYPES = frozenset({"review", "verification", "scout"})
 
 
 def utc_now() -> str:
@@ -131,6 +136,47 @@ class Database:
                     details_json TEXT NOT NULL DEFAULT '{}'
                 );
 
+                CREATE TABLE IF NOT EXISTS plan_evidence (
+                    id TEXT PRIMARY KEY,
+                    plan_id TEXT NOT NULL,
+                    candidate_sha TEXT NOT NULL,
+                    evidence_type TEXT NOT NULL,
+                    result TEXT NOT NULL,
+                    detail TEXT,
+                    session_id TEXT,
+                    session_name TEXT,
+                    recorded_at TEXT NOT NULL,
+                    FOREIGN KEY(plan_id) REFERENCES plans(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS superpower_approvals (
+                    profile TEXT NOT NULL,
+                    skill_name TEXT NOT NULL,
+                    approved_by TEXT NOT NULL,
+                    approved_surface TEXT NOT NULL DEFAULT 'CLI',
+                    approved_at TEXT NOT NULL,
+                    revoked_at TEXT,
+                    PRIMARY KEY (profile, skill_name)
+                );
+
+                CREATE TABLE IF NOT EXISTS skill_assignments (
+                    profile TEXT NOT NULL,
+                    skill_name TEXT NOT NULL,
+                    assigned_by TEXT NOT NULL DEFAULT 'system',
+                    assigned_surface TEXT NOT NULL DEFAULT 'CLI',
+                    assigned_at TEXT NOT NULL,
+                    PRIMARY KEY (profile, skill_name)
+                );
+
+                CREATE TABLE IF NOT EXISTS group_members (
+                    id TEXT PRIMARY KEY,
+                    group_id TEXT NOT NULL REFERENCES session_groups(id) ON DELETE CASCADE,
+                    session_id TEXT NOT NULL REFERENCES sessions(id),
+                    added_at TEXT NOT NULL,
+                    added_by TEXT NOT NULL DEFAULT 'system',
+                    UNIQUE(group_id, session_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS session_waits (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     parent_session_id TEXT NOT NULL,
@@ -168,6 +214,39 @@ class Database:
                     conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {definition}")
             if "project_id" not in columns:
                 conn.execute("ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id)")
+            if "evidence_capability_hash" not in columns:
+                conn.execute("ALTER TABLE sessions ADD COLUMN evidence_capability_hash TEXT")
+
+            plans_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(plans)").fetchall()
+            }
+            if "release_blocked_at" not in plans_columns:
+                conn.execute("ALTER TABLE plans ADD COLUMN release_blocked_at TEXT")
+                conn.execute("ALTER TABLE plans ADD COLUMN release_blocked_reason TEXT")
+            releases_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(releases)").fetchall()
+            } if conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='releases'"
+            ).fetchone() else set()
+            if not releases_columns:
+                conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS releases (
+                        release_name TEXT PRIMARY KEY,
+                        created_at TEXT NOT NULL,
+                        source_sha TEXT,
+                        plan_id TEXT,
+                        file_count INTEGER NOT NULL DEFAULT 0,
+                        status TEXT NOT NULL DEFAULT 'created',
+                        current_at TEXT,
+                        canary_at TEXT,
+                        promoted_at TEXT,
+                        rollback_at TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_releases_status ON releases(status);
+                    """
+                )
+
             conn.execute(
                 "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -190,3 +269,10 @@ class Database:
                 "VALUES(?, ?, ?, ?, ?, ?, ?)",
                 (utc_now(), actor, surface, action, target, outcome, json.dumps(details or {})),
             )
+
+    def prune_audit_events(self, retention_days: int = 395) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        cutoff_str = cutoff.isoformat(timespec="seconds")
+        with self.connect() as conn:
+            conn.execute("DELETE FROM audit_events WHERE created_at < ?", (cutoff_str,))
+            return conn.total_changes

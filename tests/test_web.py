@@ -9,6 +9,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 os.environ["AGENT_CONSOLE_TAILSCALE_LOGIN"] = "test@example.com"
+os.environ["AGENT_CONSOLE_TRUSTED_HOSTS"] = "localhost,127.0.0.1,testserver,10.0.0.1"
+os.environ["AGENT_CONSOLE_LAN_CIDR"] = "10.0.0.0/8"
+os.environ["AGCONSOLE_RETAINED_SKILLS"] = "test-skill-for-web"
 
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -31,6 +34,18 @@ class WebTests(unittest.TestCase):
         root = Path(self.temp.name)
         self.workspace = root / "workspace"
         self.workspace.mkdir()
+
+        skills_root = root / "skills"
+        skills_root.mkdir()
+        for skill_name in ("test-skill-for-web",):
+            (skills_root / skill_name).mkdir(exist_ok=True)
+            (skills_root / skill_name / "SKILL.md").write_text(
+                "---\nname: test-skill\ndescription: Web test skill\n---\n",
+                encoding="utf-8",
+            )
+        self._old_skills_root = os.environ.get("AGCONSOLE_SKILLS_ROOT")
+        os.environ["AGCONSOLE_SKILLS_ROOT"] = str(skills_root)
+
         profiles = root / "profiles"
         profiles.mkdir()
         for profile in PROFILES:
@@ -55,6 +70,10 @@ class WebTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         subprocess.run(["tmux", "-L", self.socket, "kill-server"], capture_output=True)
+        if self._old_skills_root is not None:
+            os.environ["AGCONSOLE_SKILLS_ROOT"] = self._old_skills_root
+        else:
+            os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
         self.temp.cleanup()
 
     def test_health_and_identity_gate(self) -> None:
@@ -363,6 +382,99 @@ class WebTests(unittest.TestCase):
         self.assertFalse(killed.json()["running"])
         self.assertFalse(self.manager.tmux.exists("unmanaged-web-test"))
 
+    def test_group_create_and_list_api(self) -> None:
+        group = self.client.post("/api/session-groups", headers=self.headers, json={"name": "web-group-test", "purpose": "API test"}).json()
+        self.assertEqual(group["name"], "web-group-test")
+        self.assertEqual(group["purpose"], "API test")
+        groups = self.client.get("/api/session-groups", headers=self.headers).json()
+        self.assertGreaterEqual(len(groups), 1)
+
+    def test_group_membership_api(self) -> None:
+        group = self.client.post("/api/session-groups", headers=self.headers, json={"name": "web-member-test"}).json()
+        self.manager.create(
+            tool="shell", profile="general", name="web-member-session",
+            repository=str(self.workspace),
+        )
+        added = self.client.post(
+            f"/api/session-groups/{group['id']}/members",
+            headers=self.headers,
+            json={"session_name": "web-member-session"},
+        ).json()
+        self.assertEqual(added["member_count"], 1)
+        fetched = self.client.get(f"/api/session-groups/{group['id']}", headers=self.headers).json()
+        self.assertEqual(fetched["member_count"], 1)
+        removed = self.client.delete(
+            f"/api/session-groups/{group['id']}/members/web-member-session",
+            headers=self.headers,
+        ).json()
+        self.assertEqual(removed["member_count"], 0)
+
+    def test_group_create_with_unknown_parent_returns_400(self) -> None:
+        resp = self.client.post(
+            "/api/session-groups",
+            headers=self.headers,
+            json={"name": "bad-parent-web", "parent_session": "no-such-session"},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("not found", resp.json()["detail"])
+
+    def test_group_create_audit_shows_web_actor(self) -> None:
+        self.client.post(
+            "/api/session-groups",
+            headers=self.headers,
+            json={"name": "audit-web-test"},
+        )
+        with self.manager.database.connect() as conn:
+            audit = conn.execute(
+                "SELECT actor, surface FROM audit_events WHERE action='group.created' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit["actor"], "test@example.com")
+        self.assertEqual(audit["surface"], "web")
+
+    def test_group_add_duplicate_api_returns_400(self) -> None:
+        group = self.client.post("/api/session-groups", headers=self.headers, json={"name": "web-dup-test"}).json()
+        self.manager.create(
+            tool="shell", profile="general", name="web-dup-session",
+            repository=str(self.workspace),
+        )
+        self.client.post(
+            f"/api/session-groups/{group['id']}/members",
+            headers=self.headers,
+            json={"session_name": "web-dup-session"},
+        )
+        dup = self.client.post(
+            f"/api/session-groups/{group['id']}/members",
+            headers=self.headers,
+            json={"session_name": "web-dup-session"},
+        )
+        self.assertEqual(dup.status_code, 400)
+
+    def test_group_open_api(self) -> None:
+        group = self.client.post("/api/session-groups", headers=self.headers, json={"name": "web-open-test"}).json()
+        self.manager.create(
+            tool="shell", profile="general", name="web-open-s1",
+            repository=str(self.workspace),
+        )
+        self.manager.create(
+            tool="shell", profile="general", name="web-open-s2",
+            repository=str(self.workspace),
+        )
+        self.client.post(
+            f"/api/session-groups/{group['id']}/members",
+            headers=self.headers,
+            json={"session_name": "web-open-s1"},
+        )
+        self.client.post(
+            f"/api/session-groups/{group['id']}/members",
+            headers=self.headers,
+            json={"session_name": "web-open-s2"},
+        )
+        result = self.client.post(f"/api/session-groups/{group['id']}/open", headers=self.headers).json()
+        self.assertEqual(result["member_count"], 2)
+        self.assertGreaterEqual(len(result["available"]), 2)
+
     def test_websocket_detach_preserves_tmux(self) -> None:
         self.manager.create(
             tool="shell",
@@ -431,6 +543,421 @@ class WebTests(unittest.TestCase):
             self.assertEqual(closed.exception.code, 4001)
         self.assertFalse(self.manager.tmux.exists("kill-attached-test"))
         self.assertTrue(self.manager.tmux.exists("other-live-session"))
+
+
+    def test_skills_assign_success(self) -> None:
+        response = self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "general", "skill_name": "test-skill-for-web"},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["profile"], "general")
+        self.assertEqual(data["skill_name"], "test-skill-for-web")
+        self.assertIn("kind", data)
+
+    def test_skills_assign_unknown_profile_returns_400(self) -> None:
+        response = self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "nonexistent", "skill_name": "test-skill-for-web"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("nonexistent", response.json()["detail"])
+
+    def test_skills_assign_unknown_skill_returns_400(self) -> None:
+        response = self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "general", "skill_name": "no-such-skill"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("no-such-skill", response.json()["detail"])
+
+    def test_skills_assign_duplicate_returns_400(self) -> None:
+        self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "coder", "skill_name": "test-skill-for-web"},
+        )
+        response = self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "coder", "skill_name": "test-skill-for-web"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("already assigned", response.json()["detail"])
+
+    def test_skills_assign_disallowed_profile_returns_400(self) -> None:
+        restricted_root = Path(self.temp.name) / "restricted-skills"
+        restricted_root.mkdir(parents=True, exist_ok=True)
+        (restricted_root / "restricted-web").mkdir(exist_ok=True)
+        (restricted_root / "restricted-web" / "SKILL.md").write_text(
+            "---\nkind: superpower\ndescription: Only for coder\nallowed_profiles: coder\n---\n",
+            encoding="utf-8",
+        )
+        old_root = os.environ.get("AGCONSOLE_SKILLS_ROOT")
+        os.environ["AGCONSOLE_SKILLS_ROOT"] = str(restricted_root)
+        try:
+            response = self.client.post(
+                "/api/skills/assign",
+                headers=self.headers,
+                json={"profile": "general", "skill_name": "restricted-web"},
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("general", response.json()["detail"])
+            self.assertIn("restricted-web", response.json()["detail"])
+            self.assertIn("coder", response.json()["detail"])
+        finally:
+            if old_root is not None:
+                os.environ["AGCONSOLE_SKILLS_ROOT"] = old_root
+            else:
+                os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
+
+    def test_skills_assignments_list_after_assign(self) -> None:
+        self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "planner", "skill_name": "test-skill-for-web"},
+        )
+        response = self.client.get("/api/skills/assignments", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIsInstance(data, list)
+        self.assertTrue(any(
+            a["profile"] == "planner" and a["skill_name"] == "test-skill-for-web"
+            for a in data
+        ))
+
+    def test_skills_unassign_success(self) -> None:
+        self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "scout", "skill_name": "test-skill-for-web"},
+        )
+        response = self.client.post(
+            "/api/skills/unassign",
+            headers=self.headers,
+            json={"profile": "scout", "skill_name": "test-skill-for-web"},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["profile"], "scout")
+        self.assertEqual(data["skill_name"], "test-skill-for-web")
+
+    def test_skills_unassign_not_assigned_returns_400(self) -> None:
+        response = self.client.post(
+            "/api/skills/unassign",
+            headers=self.headers,
+            json={"profile": "general", "skill_name": "test-skill-for-web"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not assigned", response.json()["detail"])
+
+    def test_skills_catalog_includes_assignments(self) -> None:
+        self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "reviewer", "skill_name": "test-skill-for-web"},
+        )
+        response = self.client.get("/api/skills", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("entries", data)
+        skill = next((e for e in data["entries"] if e["name"] == "test-skill-for-web"), None)
+        self.assertIsNotNone(skill, "test-skill-for-web should be in catalog entries")
+        self.assertIn("assigned_to", skill)
+        self.assertTrue(
+            any(a["profile"] == "reviewer" for a in skill["assigned_to"]),
+            f"expected reviewer assignment in {skill['assigned_to']}",
+        )
+
+    def test_skills_assignments_list_no_auth_returns_403(self) -> None:
+        response = self.client.get("/api/skills/assignments")
+        self.assertEqual(response.status_code, 403)
+
+    def test_skills_assign_no_auth_returns_403(self) -> None:
+        response = self.client.post(
+            "/api/skills/assign",
+            json={"profile": "general", "skill_name": "test-skill-for-web"},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_skills_effective_returns_assigned(self) -> None:
+        self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "coder", "skill_name": "test-skill-for-web"},
+        )
+        response = self.client.post(
+            "/api/skills/effective",
+            headers=self.headers,
+            json={"profile": "coder"},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["profile"], "coder")
+        self.assertIn("effective", data)
+        self.assertIn("issues", data)
+        names = [s["name"] for s in data["effective"]]
+        self.assertIn("test-skill-for-web", names)
+
+    def test_skills_validate_valid_returns_valid(self) -> None:
+        self.client.post(
+            "/api/skills/assign",
+            headers=self.headers,
+            json={"profile": "planner", "skill_name": "test-skill-for-web"},
+        )
+        response = self.client.post(
+            "/api/skills/validate",
+            headers=self.headers,
+            json={"profile": "planner"},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["valid"])
+
+    def test_skills_validate_invalid_returns_invalid(self) -> None:
+        stale_root = Path(self.temp.name) / "stale-validate"
+        stale_root.mkdir(parents=True, exist_ok=True)
+        skill_name = "stale-skill"
+        (stale_root / skill_name).mkdir(exist_ok=True)
+        (stale_root / skill_name / "SKILL.md").write_text(
+            "---\nkind: standard\ndescription: Initially valid\n---\n",
+            encoding="utf-8",
+        )
+        old_root = os.environ.get("AGCONSOLE_SKILLS_ROOT")
+        os.environ["AGCONSOLE_SKILLS_ROOT"] = str(stale_root)
+        try:
+            self.client.post(
+                "/api/skills/assign",
+                headers=self.headers,
+                json={"profile": "general", "skill_name": skill_name},
+            )
+            (stale_root / skill_name / "SKILL.md").unlink()
+            response = self.client.post(
+                "/api/skills/validate",
+                headers=self.headers,
+                json={"profile": "general"},
+            )
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertFalse(data["valid"])
+            self.assertGreater(len(data["issues"]), 0)
+            self.assertTrue(
+                any("stale source" in i or "missing from catalog" in i for i in data["issues"])
+            )
+        finally:
+            if old_root is not None:
+                os.environ["AGCONSOLE_SKILLS_ROOT"] = old_root
+            else:
+                os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
+
+    def test_skills_effective_no_auth_returns_403(self) -> None:
+        response = self.client.post(
+            "/api/skills/effective",
+            json={"profile": "general"},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_skills_validate_no_auth_returns_403(self) -> None:
+        response = self.client.post(
+            "/api/skills/validate",
+            json={"profile": "general"},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    # --- Project API tests ---
+
+    def test_project_create_and_list_api(self) -> None:
+        repo = str(self.workspace / "web-repo")
+        (self.workspace / "web-repo").mkdir(exist_ok=True)
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-proj", "repository": repo, "description": "Web test"},
+        ).json()
+        self.assertEqual(proj["name"], "web-proj")
+        self.assertEqual(proj["repository"], repo)
+        projects = self.client.get("/api/projects", headers=self.headers).json()
+        self.assertGreaterEqual(len(projects), 1)
+        found = next(p for p in projects if p["name"] == "web-proj")
+        self.assertEqual(found["repository"], repo)
+
+    def test_project_get_api(self) -> None:
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-get-proj"},
+        ).json()
+        got = self.client.get(f"/api/projects/{proj['id']}", headers=self.headers).json()
+        self.assertEqual(got["name"], "web-get-proj")
+        self.assertIn("sessions", got)
+
+    def test_project_update_api(self) -> None:
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-upd-proj"},
+        ).json()
+        updated = self.client.put(
+            f"/api/projects/{proj['id']}", headers=self.headers,
+            json={"status": "paused"},
+        ).json()
+        self.assertEqual(updated["status"], "paused")
+
+    def test_project_delete_api(self) -> None:
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-del-proj"},
+        ).json()
+        resp = self.client.delete(
+            f"/api/projects/{proj['id']}", headers=self.headers,
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["status"], "deleted")
+        get_resp = self.client.get(f"/api/projects/{proj['id']}", headers=self.headers)
+        self.assertEqual(get_resp.status_code, 400)
+
+    def test_project_bad_id_returns_400(self) -> None:
+        resp = self.client.get("/api/projects/proj-bad", headers=self.headers)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_project_create_no_auth_returns_403(self) -> None:
+        resp = self.client.post("/api/projects", json={"name": "no-auth-proj"})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_project_update_no_auth_returns_403(self) -> None:
+        resp = self.client.put("/api/projects/proj-x", json={"status": "paused"})
+        self.assertEqual(resp.status_code, 403)
+
+    def test_project_delete_no_auth_returns_403(self) -> None:
+        resp = self.client.delete("/api/projects/proj-x")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_project_assign_no_auth_returns_403(self) -> None:
+        resp = self.client.post(
+            "/api/projects/proj-x/assign",
+            json={"session_name": "sess"},
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_project_unassign_no_auth_returns_403(self) -> None:
+        resp = self.client.post(
+            "/api/projects/proj-x/unassign",
+            json={"session_name": "sess"},
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_project_create_audit_shows_web_actor(self) -> None:
+        self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "audit-web-proj"},
+        )
+        with self.manager.database.connect() as conn:
+            audit = conn.execute(
+                "SELECT actor, surface FROM audit_events WHERE action='project.created' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit["actor"], "test@example.com")
+        self.assertEqual(audit["surface"], "web")
+
+    def test_project_assign_and_unassign_api(self) -> None:
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-assign-proj", "repository": str(self.workspace)},
+        ).json()
+        self.manager.create(
+            tool="shell", profile="general", name="web-api-assign-sess",
+            repository=str(self.workspace),
+        )
+        assign = self.client.post(
+            f"/api/projects/{proj['id']}/assign",
+            headers=self.headers,
+            json={"session_name": "web-api-assign-sess"},
+        ).json()
+        sess_names = [s["tmux_name"] for s in assign.get("sessions", [])]
+        self.assertIn("web-api-assign-sess", sess_names)
+        unassign = self.client.post(
+            f"/api/projects/{proj['id']}/unassign",
+            headers=self.headers,
+            json={"session_name": "web-api-assign-sess"},
+        ).json()
+        unassign_names = [s["tmux_name"] for s in unassign.get("sessions", [])]
+        self.assertNotIn("web-api-assign-sess", unassign_names)
+
+    def test_project_assign_duplicate_returns_400(self) -> None:
+        repo = str(self.workspace)
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-dup-assign", "repository": repo},
+        ).json()
+        self.manager.create(
+            tool="shell", profile="general", name="web-dup-assign-sess",
+            repository=repo, project_id=proj["id"],
+        )
+        dup = self.client.post(
+            f"/api/projects/{proj['id']}/assign",
+            headers=self.headers,
+            json={"session_name": "web-dup-assign-sess"},
+        )
+        self.assertEqual(dup.status_code, 400)
+
+    def test_create_session_with_project_id_api(self) -> None:
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-create-proj", "repository": str(self.workspace)},
+        ).json()
+        sess = self.client.post(
+            "/api/sessions", headers=self.headers,
+            json={
+                "tool": "shell", "profile": "general",
+                "name": "web-create-proj-sess",
+                "repository": str(self.workspace),
+                "project_id": proj["id"],
+            },
+        ).json()
+        self.assertEqual(sess.get("project_id"), proj["id"])
+
+    def test_project_unassign_wrong_project_id_returns_400(self) -> None:
+        repo = str(self.workspace)
+        proj_a = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-unassign-wrong-a", "repository": repo},
+        ).json()
+        proj_b = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-unassign-wrong-b", "repository": repo},
+        ).json()
+        self.manager.create(
+            tool="shell", profile="general", name="web-unassign-wrong-sess",
+            repository=repo, project_id=proj_a["id"],
+        )
+        resp = self.client.post(
+            f"/api/projects/{proj_b['id']}/unassign",
+            headers=self.headers,
+            json={"session_name": "web-unassign-wrong-sess"},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_create_session_with_incompatible_repo_api_returns_400(self) -> None:
+        repo_a = str(self.workspace / "repo-a")
+        repo_b = str(self.workspace / "repo-b")
+        (self.workspace / "repo-a").mkdir(exist_ok=True)
+        (self.workspace / "repo-b").mkdir(exist_ok=True)
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-repo-mismatch", "repository": repo_a},
+        ).json()
+        resp = self.client.post(
+            "/api/sessions", headers=self.headers,
+            json={
+                "tool": "shell", "profile": "general",
+                "name": "web-repo-mismatch-sess",
+                "repository": repo_b,
+                "project_id": proj["id"],
+            },
+        )
+        self.assertEqual(resp.status_code, 400)
 
 
 if __name__ == "__main__":
