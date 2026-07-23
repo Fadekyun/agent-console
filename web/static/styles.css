@@ -245,7 +245,7 @@ dialog::backdrop { background: rgb(0 0 0 / .58); } .dialog-form, dialog form { d
 .preset-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 .preset-row button { min-height: 36px; padding: 5px 9px; }
 
-.terminal-dock { position: fixed; z-index: 45; left: 0; right: 0; bottom: 0; height: 42vh; min-height: 240px; max-height: calc(100dvh - 56px); display: grid; grid-template-rows: 7px auto minmax(0, 1fr); border-top: 1px solid var(--border-strong); background: var(--terminal-bg); box-shadow: 0 -16px 34px rgb(0 0 0 / .22); }
+.terminal-dock { position: fixed; z-index: 45; left: 0; right: 0; bottom: 0; height: var(--dock-height, 42vh); min-height: 240px; max-height: calc(100dvh - 56px); display: grid; grid-template-rows: 7px auto minmax(0, 1fr); border-top: 1px solid var(--border-strong); background: var(--terminal-bg); box-shadow: 0 -16px 34px rgb(0 0 0 / .22); }
 .terminal-dock-open .view-stack { padding-bottom: calc(var(--dock-height, 42vh) + 28px); }
 .terminal-dock[hidden] { display: none; }
 .terminal-dock.collapsed { height: 50px !important; min-height: 50px; grid-template-rows: 0 auto 0; }
