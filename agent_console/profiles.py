@@ -153,16 +153,16 @@ PROFILE_SCHEMA: dict[str, dict[str, Any]] = {
         "manages_session_links": True,
         "status": "active",
     },
-    "operator": {
-        "name": "operator",
-        "display_name": "Operator",
+    "orchestrator": {
+        "name": "orchestrator",
+        "display_name": "Orchestrator",
         "description": "Manage services, deployments, logs, and server configuration within the approved task. Show potentially destructive commands before running them. Require explicit confirmation for deletion, data migration, firewall changes, credential changes, and service replacement. Prefer user services and always provide rollback instructions.",
         "read_write_capability": "write",
         "worktree_requirement": "none",
         "delegation_permissions": frozenset({"read_only"}),
         "allowed_delegation_profiles": frozenset({"planner", "researcher", "reviewer", "scout"}),
         "allowed_collaboration_profiles": _ALL_PROFILES,
-        "legacy_aliases": frozenset(),
+        "legacy_aliases": frozenset({"operator"}),
         "replacement_profile": None,
         "provider_mode_constraints": frozenset(),
         "requires_human_approval": True,
@@ -188,9 +188,15 @@ def validate_profile_capability(
       - reason: str | None — explanation if not allowed, or enforcement caveat
       - enforcement: str — one of enforced|unsupported|unverified|pending_approval
     """
+    # Resolve legacy alias
+    original_profile = profile
+    for name, meta in PROFILE_SCHEMA.items():
+        if profile in meta.get("legacy_aliases", frozenset()):
+            profile = name
+            break
     meta = PROFILE_SCHEMA.get(profile)
     if meta is None:
-        return {"allowed": False, "reason": f"unknown profile: {profile!r}", "enforcement": "enforced"}
+        return {"allowed": False, "reason": f"unknown profile: {original_profile!r}", "enforcement": "enforced"}
 
     rwc = meta["read_write_capability"]
     constraints = meta["provider_mode_constraints"]
@@ -318,14 +324,19 @@ def profile_summaries() -> list[dict[str, Any]]:
     summaries = []
     for name in ordered:
         meta = PROFILE_SCHEMA[name]
-        summaries.append({
+        entry = {
             "name": name,
             "display_name": meta["display_name"],
             "read_write_capability": meta["read_write_capability"],
             "worktree_requirement": meta["worktree_requirement"],
             "requires_human_approval": meta["requires_human_approval"],
             "status": meta["status"],
-        })
+        }
+        if meta.get("legacy_aliases"):
+            entry["legacy_aliases"] = sorted(meta["legacy_aliases"])
+        if meta.get("replacement_profile"):
+            entry["replacement_profile"] = meta["replacement_profile"]
+        summaries.append(entry)
     return summaries
 
 

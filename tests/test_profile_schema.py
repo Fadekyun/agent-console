@@ -73,8 +73,8 @@ class ProfileSchemaTests(unittest.TestCase):
                 f"{name} should have no mode constraints",
             )
 
-    def test_release_and_operator_require_human_approval(self) -> None:
-        for name in ("release", "operator"):
+    def test_release_and_orchestrator_require_human_approval(self) -> None:
+        for name in ("release", "orchestrator"):
             self.assertTrue(
                 PROFILE_SCHEMA[name]["requires_human_approval"],
                 f"{name} should require human approval",
@@ -88,8 +88,8 @@ class ProfileSchemaTests(unittest.TestCase):
                 f"{name} should not require human approval",
             )
 
-    def test_coder_planner_release_operator_manage_session_links(self) -> None:
-        for name in ("coder", "planner", "release", "operator"):
+    def test_coder_planner_release_orchestrator_manage_session_links(self) -> None:
+        for name in ("coder", "planner", "release", "orchestrator"):
             self.assertTrue(
                 PROFILE_SCHEMA[name]["manages_session_links"],
                 f"{name} should manage session links",
@@ -112,15 +112,23 @@ class ProfileSchemaTests(unittest.TestCase):
                 f"{name} should collaborate with all profiles",
             )
 
-    def test_all_profiles_have_no_legacy_aliases(self) -> None:
-        for name, meta in PROFILE_SCHEMA.items():
-            self.assertEqual(
-                meta["legacy_aliases"], frozenset(),
-                f"{name} should have no legacy aliases",
-            )
+    def test_operator_is_legacy_alias_for_orchestrator(self) -> None:
+        self.assertEqual(
+            PROFILE_SCHEMA["orchestrator"]["legacy_aliases"],
+            frozenset({"operator"}),
+            "orchestrator should have operator as legacy alias",
+        )
+        self.assertEqual(
+            PROFILE_SCHEMA["orchestrator"]["replacement_profile"],
+            None,  # orchestrator itself is not a replacement
+        )
+        # operator is not in PROFILE_SCHEMA (it's a legacy alias)
+        self.assertNotIn("operator", PROFILE_SCHEMA)
 
-    def test_all_profiles_have_no_replacement(self) -> None:
+    def test_all_profiles_have_no_replacement_except_orchestrator(self) -> None:
         for name, meta in PROFILE_SCHEMA.items():
+            if name == "orchestrator":
+                continue  # operator is legacy alias, not a replacement profile
             self.assertIsNone(
                 meta["replacement_profile"],
                 f"{name} should have no replacement profile",
