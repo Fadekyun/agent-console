@@ -518,6 +518,7 @@ class UpdateScriptTests(unittest.TestCase):
             "sessions-before.json",
             "sessions-after.json",
             "rollback()",
+            "wait_for_health 30",
             "systemctl --user restart agent-console-web.service",
         ):
             self.assertIn(expected, text)
