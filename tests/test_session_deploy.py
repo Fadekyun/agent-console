@@ -700,6 +700,25 @@ class DeploymentModeTests(unittest.TestCase):
             result = runner.check_health()
             self.assertFalse(result, "staging: reaches httpx.get but connection fails")
 
+    def test_restart_waits_for_service_health(self) -> None:
+        runner = ProductionServiceRunner(ServiceConfig(deployment_mode=DeploymentMode.STAGING))
+        completed = subprocess.CompletedProcess([], 0)
+        with mock.patch.object(subprocess, "run", return_value=completed), \
+             mock.patch.object(runner, "check_health", side_effect=[False, True]) as health, \
+             mock.patch("agent_console.deployer.time.sleep") as sleep:
+            self.assertTrue(runner.restart())
+        self.assertEqual(health.call_count, 2)
+        sleep.assert_called_once_with(1)
+
+    def test_restart_fails_when_service_never_becomes_healthy(self) -> None:
+        runner = ProductionServiceRunner(ServiceConfig(deployment_mode=DeploymentMode.STAGING))
+        completed = subprocess.CompletedProcess([], 0)
+        with mock.patch.object(subprocess, "run", return_value=completed), \
+             mock.patch.object(runner, "check_health", return_value=False) as health, \
+             mock.patch("agent_console.deployer.time.sleep"):
+            self.assertFalse(runner.restart())
+        self.assertEqual(health.call_count, 30)
+
     # --- production / unrecognized mode ---
 
     def test_production_mode_rejected_in_settings(self) -> None:

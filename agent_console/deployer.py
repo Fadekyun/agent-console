@@ -273,7 +273,13 @@ class ProductionServiceRunner(ServiceRunner):
                 ["systemctl", "--user", "restart", name],
                 capture_output=True, timeout=30,
             )
-            return result.returncode == 0
+            if result.returncode != 0:
+                return False
+            for _ in range(30):
+                if self.check_health(port=self.config.service_port):
+                    return True
+                time.sleep(1)
+            return False
         except (subprocess.TimeoutExpired, OSError):
             return False
 

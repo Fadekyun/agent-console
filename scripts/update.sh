@@ -79,6 +79,27 @@ source.close()
 PY
 "$HOME/bin/agentctl" session list > "$backup/sessions-before.json"
 
+set -a
+source "$runtime"
+set +a
+health_host="${AGENT_CONSOLE_BIND_HOST:-127.0.0.1}"
+case "$health_host" in
+  0.0.0.0|::) health_host=127.0.0.1 ;;
+esac
+
+wait_for_health() {
+  local attempts="${1:-30}"
+  local attempt
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if curl --fail --silent --show-error \
+      "http://$health_host:${AGENT_CONSOLE_PORT:-3210}/healthz" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 rollback() {
   cp -a "$backup/runtime.env" "$runtime"
   cp -a "$backup/agent-console-web.service" "$unit"
@@ -96,11 +117,11 @@ rollback() {
   done
   systemctl --user daemon-reload
   systemctl --user restart agent-console-web.service
+  if ! wait_for_health 30; then
+    printf 'WARNING: restored service did not become healthy within 30 seconds.\n' >&2
+  fi
 }
 
-set -a
-source "$runtime"
-set +a
 export AGENT_CONSOLE_SOURCE_ROOT="$checkout"
 export AGENT_CONSOLE_PROFILE_DIR="$checkout/agent-profiles"
 
@@ -110,12 +131,7 @@ if ! "$checkout/scripts/install.sh"; then
   exit 1
 fi
 
-health_host="${AGENT_CONSOLE_BIND_HOST:-127.0.0.1}"
-case "$health_host" in
-  0.0.0.0|::) health_host=127.0.0.1 ;;
-esac
-if ! curl --fail --silent --show-error \
-  "http://$health_host:${AGENT_CONSOLE_PORT:-3210}/healthz" >/dev/null; then
+if ! wait_for_health 30; then
   rollback
   printf 'FATAL: updated service failed health check; previous unit/runtime/runner restored from %s.\n' "$backup" >&2
   exit 1
