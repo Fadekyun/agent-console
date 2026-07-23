@@ -652,6 +652,8 @@ function skillCard(entry) {
   sourceBadge.textContent = entry.source_present ? 'source present' : 'source missing';
   tools.append(sourceBadge);
 
+  card.append(header, desc, tools);
+
   const approvalInfo = document.createElement('div'); approvalInfo.className = 'skill-approval-info';
   if (entry.kind === 'superpower') {
     const allowed = entry.allowed_profiles && entry.allowed_profiles.length ? entry.allowed_profiles.join(', ') : 'all profiles';
@@ -687,7 +689,6 @@ function skillCard(entry) {
   }
   card.append(actions);
 
-  card.append(header, desc, tools);
   return card;
 }
 

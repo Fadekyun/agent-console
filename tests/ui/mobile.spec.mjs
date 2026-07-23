@@ -76,6 +76,141 @@ test.describe('mobile Agent Console tabs', () => {
   });
 });
 
+test.describe('mobile skills view', () => {
+  const SKILLS_RESPONSE = {
+    entries: [
+      { name: 'test-catalog-skill', description: 'A test catalog skill', kind: 'standard', tools: ['codex', 'claude'], allowed_profiles: null, requires_approval: false, source_present: true, synced: [{ tool: 'codex', linked: true }, { tool: 'claude', linked: false }], assigned_to: [{ profile: 'coder', assigned_at: '2026-07-20T00:00:00', assigned_by: 'test' }] },
+      { name: 'super-skill', description: 'A superpower for testing', kind: 'superpower', tools: ['codex'], allowed_profiles: ['general', 'coder'], requires_approval: true, source_present: true, synced: [{ tool: 'codex', linked: true }], assigned_to: [] },
+    ],
+    errors: [],
+  };
+
+  test('mobile skill card shows six ordered direct children with assigned standard skill content and actions', async ({ page }) => {
+    await page.route('**/api/me', async (route) => {
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({
+          access_surface: 'test', login: 'test',
+          tool_status: [{ name: 'shell', status: 'ready' }],
+          profiles: [{ name: 'general', display_name: 'General', read_write_capability: 'write', worktree_requirement: 'none', requires_human_approval: false, status: 'active' }],
+          auth_contexts: [{ tool: 'shell', name: 'default', status: 'ready', default: true }],
+          default_tool: 'shell',
+        }),
+      });
+    });
+    await page.route('**/api/models*', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ models: [], stale: false }) });
+    });
+    await page.route('**/api/sessions?state=all', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+    });
+    await page.route('**/api/projects', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+    });
+    await page.route('**/api/skills', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(SKILLS_RESPONSE) });
+    });
+
+    await page.goto('/mobile');
+    await page.locator('[data-mobile-tab="skills"]').click();
+    await expect(page.locator('[data-mobile-view="skills"]:not([hidden])')).toBeVisible();
+    await expect(page.locator('#mobile-skills-list')).toBeVisible();
+
+    const card = page.locator('.mobile-skill-card').first();
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('test-catalog-skill');
+    await expect(card).toContainText('standard');
+    await expect(card).toContainText('A test catalog skill');
+    await expect(card).toContainText('codex: ✓');
+    await expect(card).toContainText('claude: ✗');
+    await expect(card).toContainText('Standard skill · no approval gate');
+    await expect(card).toContainText('Assigned:');
+    await expect(card).toContainText('coder');
+    await expect(card.getByRole('button', { name: 'Assign', exact: true })).toBeVisible();
+    await expect(card.getByRole('button', { name: 'Unassign coder', exact: true })).toBeVisible();
+
+    const directChildrenOrder = await page.evaluate(() => {
+      const c = document.querySelector('.mobile-skill-card');
+      return Array.from(c.children).map((el) => {
+        if (el.tagName === 'STRONG') return 'name';
+        if (el.tagName === 'SMALL') return 'description';
+        if (el.classList.contains('skill-approval-info')) return 'approval';
+        if (el.classList.contains('skill-assigned-list')) return 'assignments';
+        if (el.querySelector('button')) return 'actions';
+        return 'tools';
+      });
+    });
+    expect(directChildrenOrder).toEqual(['name', 'description', 'tools', 'approval', 'assignments', 'actions']);
+  });
+});
+
+test.describe('mobile Attach rendering at narrow widths (Issue #31)', () => {
+  for (const width of [360, 390]) {
+    test(`Attach anchor visible and no overflow at ${width}px width`, async ({ page }) => {
+      test.skip(!!process.env.LIVE_AGENT_CONSOLE_URL, 'Mock test, skip when live URL set.');
+
+      await page.setViewportSize({ width, height: 800 });
+      await page.route('**/api/me', async (route) => {
+        await route.fulfill({
+          status: 200, contentType: 'application/json',
+          body: JSON.stringify({
+            access_surface: 'test', login: 'test',
+            tool_status: [{ name: 'shell', status: 'ready' }],
+            profiles: [{ name: 'general', display_name: 'General', read_write_capability: 'write', worktree_requirement: 'none', requires_human_approval: false, status: 'active' }],
+            auth_contexts: [{ tool: 'shell', name: 'default', status: 'ready', default: true }],
+            default_tool: 'shell',
+          }),
+        });
+      });
+      await page.route('**/api/models*', async (route) => {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ models: [], stale: false }) });
+      });
+      await page.route('**/api/sessions?state=all', async (route) => {
+        await route.fulfill({
+          status: 200, contentType: 'application/json',
+          body: JSON.stringify([{
+            tmux_name: 'attach-test-session', tool: 'shell', profile: 'general',
+            live_state: 'tmux live', managed: true,
+            actions: ['attach', 'interrupt', 'restart', 'kill'],
+          }]),
+        });
+      });
+      await page.route('**/api/delegations', async (route) => {
+        await route.fulfill({
+          status: 200, contentType: 'application/json',
+          body: JSON.stringify({
+            roots: [{ tmux_name: 'root-session', tool: 'opencode', profile: 'coder', running: true, children: [{ tmux_name: 'child-session', profile: 'scout' }] }],
+            delegations: [],
+            max_children_per_parent: 3,
+          }),
+        });
+      });
+
+      await page.goto('/mobile');
+
+      // Check Attach in session card
+      const sessionAttach = page.locator('.mobile-session a.button.primary');
+      await expect(sessionAttach.first()).toBeVisible();
+      await expect(sessionAttach.first()).toHaveText('Attach');
+      await expect(sessionAttach.first()).not.toHaveCSS('clip', /rect/);
+
+      // Check Attach in orchestration card
+      await page.locator('[data-mobile-tab="orchestration"]').click();
+      await expect(page.locator('[data-mobile-view="orchestration"]:not([hidden])')).toBeVisible();
+      const treeAttach = page.locator('.mobile-tree-node a.button.primary');
+      await expect(treeAttach.first()).toBeVisible();
+      await expect(treeAttach.first()).toHaveText('Attach');
+      await expect(treeAttach.first()).not.toHaveCSS('clip', /rect/);
+
+      // No horizontal overflow
+      await expect(async () => {
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+        expect(overflow).toBeFalsy();
+      }).toPass({ timeout: 3000 });
+    });
+  }
+});
+
 test.describe('mobile lifecycle button clicks', () => {
   test('clicking Interrupt/Restart/Kill buttons dispatches correct API calls', async ({ page }) => {
     const sessionName = 'ui-mock-buttons-test';
@@ -134,15 +269,16 @@ test.describe('mobile lifecycle button clicks', () => {
     await expect(page.locator('.mobile-session')).toBeVisible();
 
     // Click Interrupt
-    await page.locator('button:has-text("Interrupt")').click();
+    const actions = page.locator('.mobile-session-actions');
+    await actions.getByRole('button', { name: 'Interrupt', exact: true }).click();
     await interruptReq;
 
     // Click Restart
-    await page.locator('button:has-text("Restart")').click();
+    await actions.getByRole('button', { name: 'Restart', exact: true }).click();
     await restartReq;
 
     // Click Kill — triggers confirmation dialog
-    await page.locator('button:has-text("Kill")').click();
+    await actions.getByRole('button', { name: 'Kill', exact: true }).click();
     await expect(page.locator('#mobile-kill-dialog')).toBeVisible();
     await page.locator('#mobile-kill-confirm').click();
     await killReq;

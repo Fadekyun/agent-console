@@ -59,6 +59,39 @@ if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
   exit 1
 fi
 
+source_root="${AGENT_CONSOLE_SOURCE_ROOT:-$root}"
+case "$source_root" in
+  /*) ;;
+  *)
+    printf 'FATAL: AGENT_CONSOLE_SOURCE_ROOT=%s must be an absolute path.\n' "$source_root" >&2
+    exit 1
+    ;;
+esac
+if [ ! -d "$source_root" ]; then
+  printf 'FATAL: AGENT_CONSOLE_SOURCE_ROOT=%s is not a directory.\n' "$source_root" >&2
+  exit 1
+fi
+canary_bind="${AGENT_CONSOLE_CANARY_BIND:-127.0.0.1}"
+canary_port="${AGENT_CONSOLE_CANARY_PORT:-33100}"
+case "$canary_port" in
+  ''|*[!0-9]*)
+    printf 'FATAL: AGENT_CONSOLE_CANARY_PORT=%s is not numeric.\n' "$canary_port" >&2
+    exit 1
+    ;;
+esac
+if [ "$canary_port" -lt 1 ] || [ "$canary_port" -gt 65535 ]; then
+  printf 'FATAL: AGENT_CONSOLE_CANARY_PORT=%s is out of range (1-65535).\n' "$canary_port" >&2
+  exit 1
+fi
+deployment_mode="${AGENT_CONSOLE_DEPLOYMENT_MODE:-disabled}"
+case "$deployment_mode" in
+  disabled|staging) ;;
+  *)
+    printf 'FATAL: AGENT_CONSOLE_DEPLOYMENT_MODE=%s is not valid (must be disabled or staging).\n' "$deployment_mode" >&2
+    exit 1
+    ;;
+esac
+
 tunnel_port="${AGENT_CONSOLE_TUNNEL_PORT:-13210}"
 case "$tunnel_port" in
   ''|*[!0-9]*)
@@ -79,6 +112,7 @@ handoff_dir="${AGENT_CONSOLE_HANDOFF_DIR:-$workspace_root/handoffs}"
 worktree_root="${AGENT_CONSOLE_WORKTREE_ROOT:-$workspace_root/worktrees}"
 skills_root="${AGCONSOLE_SKILLS_ROOT:-$HOME/codex/skills}"
 retained_skills="${AGCONSOLE_RETAINED_SKILLS:-}"
+tunnel_host="${AGENT_CONSOLE_TUNNEL_HOST:-localhost}"
 
 mkdir -p "$config_dir"
 
@@ -105,6 +139,12 @@ fi
   echo "AGENT_CONSOLE_WORKTREE_ROOT=$worktree_root"
   echo "AGENT_CONSOLE_PORT=$port"
   echo "AGENT_CONSOLE_TUNNEL_PORT=$tunnel_port"
+  echo "AGENT_CONSOLE_TUNNEL_HOST=$tunnel_host"
+  echo "AGENT_CONSOLE_SOURCE_ROOT=$source_root"
+  echo "AGENT_CONSOLE_BIND_HOST=$bind_host"
+  echo "AGENT_CONSOLE_CANARY_BIND=$canary_bind"
+  echo "AGENT_CONSOLE_CANARY_PORT=$canary_port"
+  echo "AGENT_CONSOLE_DEPLOYMENT_MODE=$deployment_mode"
   [ -n "$codex_bin" ] && echo "AGCONSOLE_CODEX_BIN=$codex_bin"
   [ -n "$claude_bin" ] && echo "AGCONSOLE_CLAUDE_BIN=$claude_bin"
   [ -n "$opencode_bin" ] && echo "AGCONSOLE_OPENCODE_BIN=$opencode_bin"
@@ -114,6 +154,38 @@ fi
 } > "$config_dir/runtime.env"
 chmod 600 "$config_dir/runtime.env"
 
+runner_path="$state/runner.sh"
+cat > "$runner_path" <<RUNNEREOF
+#!/usr/bin/env bash
+set -euo pipefail
+runner_state="$state"
+runner_root="$root"
+runner_bind="$bind_host"
+runner_port="$port"
+runner_releases="\$runner_state/releases"
+runner_current="\$runner_state/releases/current"
+if [ -L "\$runner_current" ]; then
+  target="\$(readlink -f "\$runner_current")"
+  case "\$target" in
+    "\$runner_releases"/release-*) release_contained=true ;;
+    *) release_contained=false ;;
+  esac
+  if \$release_contained && [ -d "\$target/agent_console" ]; then
+    has_xterm=true
+    for asset in node_modules/@xterm/xterm/lib/xterm.mjs node_modules/@xterm/xterm/css/xterm.css node_modules/@xterm/addon-fit/lib/addon-fit.mjs; do
+      if [ ! -f "\$target/\$asset" ]; then has_xterm=false; break; fi
+    done
+    if \$has_xterm; then
+      cd "\$target"
+      PYTHONPATH="\$target" exec "\$runner_state/venv/bin/uvicorn" agent_console.web:app --host "\$runner_bind" --port "\$runner_port" --no-proxy-headers
+    fi
+  fi
+fi
+cd "\$runner_root"
+PYTHONPATH="\$runner_root" exec "\$runner_state/venv/bin/uvicorn" agent_console.web:app --host "\$runner_bind" --port "\$runner_port" --no-proxy-headers
+RUNNEREOF
+chmod 700 "$runner_path"
+
 cat > "$HOME/.config/systemd/user/agent-console-web.service" <<EOF
 [Unit]
 Description=Agent Console web terminal
@@ -122,10 +194,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=$root
-Environment=PYTHONPATH=$root
 EnvironmentFile=$config_dir/runtime.env
-ExecStart=$state/venv/bin/uvicorn agent_console.web:app --host $bind_host --port $port --no-proxy-headers
+ExecStart=$runner_path
 Restart=on-failure
 RestartSec=3
 KillMode=process
@@ -135,8 +205,6 @@ UMask=0077
 [Install]
 WantedBy=default.target
 EOF
-
-tunnel_host="${AGENT_CONSOLE_TUNNEL_HOST:-localhost}"
 
 cat > "$HOME/.config/systemd/user/agent-console-tailscale-tunnel.service" <<EOF
 [Unit]

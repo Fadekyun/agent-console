@@ -97,9 +97,12 @@ class SessionManager:
         except ValueError:
             mode = DeploymentMode.DISABLED
         runner = ProductionServiceRunner(ServiceConfig(
-            user_service_name=getattr(self.settings, 'user_service_name', 'agent-console-web.service'),
-            canary_bind=getattr(self.settings, 'canary_bind', '127.0.0.1'),
-            user_service_port=getattr(self.settings, 'user_service_port', 3210),
+            user_service_name=self.settings.user_service_name,
+            uvicorn_bin=str(self.settings.state_dir / "venv" / "bin" / "uvicorn"),
+            service_bind=self.settings.service_bind,
+            service_port=self.settings.service_port,
+            canary_bind=self.settings.canary_bind,
+            canary_port=self.settings.canary_port,
             deployment_mode=mode,
         ))
         return Deployer(
@@ -497,6 +500,7 @@ class SessionManager:
             rows = conn.execute(
                 "SELECT * FROM session_groups ORDER BY created_at DESC"
             ).fetchall()
+            live = self._live_sessions()
             groups = []
             for row in rows:
                 g = dict(row)
@@ -506,7 +510,6 @@ class SessionManager:
                     "WHERE gm.group_id=? ORDER BY gm.added_at",
                     (g["id"],),
                 ).fetchall()
-                live = self._live_sessions()
                 session_list = []
                 for m in members:
                     member = dict(m)
@@ -2385,13 +2388,15 @@ class SessionManager:
                 "plan_id": plan_id,
                 "candidate_sha": candidate_sha,
                 "status": "deploy_planned",
+                "source_root": str(self.settings.source_root),
                 "action": "Run with --yes and confirmation to create immutable release and select canary.",
                 "deployer_note": (
                     "This will: create an immutable release directory, generate a manifest with "
                     f"SHA256 inventory, validate and promote to canary (not user-service). "
                     f"Candidate SHA: {candidate_sha[:12]}. "
+                    "Source: {source_root}. "
                     "Run `agentctl deploy promote-user-service <release>` separately for user-service."
-                ),
+                ).format(source_root=self.settings.source_root),
             }
 
         # Check for existing release matching the candidate SHA
@@ -2404,7 +2409,7 @@ class SessionManager:
             )
 
         release = self.deployer.create_release(
-            self.settings.workspace_root,
+            self.settings.source_root,
             candidate_sha=candidate_sha,
         )
         self.deployer.promote_canary(release["release_name"])
@@ -2426,6 +2431,7 @@ class SessionManager:
                 "plan_id": plan_id,
                 "candidate_sha": candidate_sha,
                 "file_count": release["file_count"],
+                "source_root": str(self.settings.source_root),
             },
         )
         log.info("deploy plan=%s release=%s sha=%s files=%d",
@@ -2437,6 +2443,7 @@ class SessionManager:
             "release_path": release["release_path"],
             "file_count": release["file_count"],
             "status": "canary_selected",
+            "source_root": str(self.settings.source_root),
             "note": "current symlink unchanged; run `agentctl deploy promote-user-service <release>` for user-service",
             "action": (
                 "Run `agentctl deploy promote-user-service <release>` to promote canary to user-service, "

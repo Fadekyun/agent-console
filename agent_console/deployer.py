@@ -34,6 +34,12 @@ EXCLUDED_DIRS = frozenset({
 EXCLUDED_FILE_SUFFIXES = frozenset({".pyc", ".pyo", ".egg-info"})
 EXCLUDED_FILE_NAMES = frozenset({".env", ".env.local", ".env.production"})
 
+RUNTIME_ASSETS = (
+    "node_modules/@xterm/xterm/lib/xterm.mjs",
+    "node_modules/@xterm/xterm/css/xterm.css",
+    "node_modules/@xterm/addon-fit/lib/addon-fit.mjs",
+)
+
 
 def _epoch_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -91,7 +97,13 @@ def validate_manifest_at(release_path: Path) -> dict[str, Any]:
     if not isinstance(files, dict):
         return {"valid": False, "error": "manifest files is not a dict"}
     for filepath, expected_sha in files.items():
-        actual_path = release_path / filepath
+        if not isinstance(filepath, str) or not isinstance(expected_sha, str):
+            return {"valid": False, "error": "manifest file entries must be string pairs"}
+        actual_path = (release_path / filepath).resolve()
+        try:
+            actual_path.relative_to(release_path.resolve())
+        except ValueError:
+            return {"valid": False, "error": f"manifest path escapes release: {filepath}"}
         if not actual_path.is_file():
             return {"valid": False, "error": f"file missing: {filepath}"}
         try:
@@ -120,14 +132,55 @@ def _current_git_sha(repo_path: Path) -> str:
         return "unknown"
 
 
+def _git_release_files(repo_path: Path, candidate_sha: str | None) -> tuple[str, list[Path]]:
+    actual_sha = _current_git_sha(repo_path)
+    if actual_sha == "unknown":
+        raise ValueError(f"deployment source is not a readable Git checkout: {repo_path}")
+    if candidate_sha and candidate_sha != actual_sha:
+        raise ValueError(
+            f"candidate SHA {candidate_sha[:12]} does not match source HEAD {actual_sha[:12]}"
+        )
+    status = subprocess.run(
+        ["git", "-C", str(repo_path), "status", "--porcelain", "--untracked-files=all"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    if status.stdout.strip():
+        raise ValueError("deployment source must be clean, including untracked files")
+    tracked = subprocess.run(
+        ["git", "-C", str(repo_path), "ls-files", "-z"],
+        capture_output=True,
+        check=True,
+        timeout=30,
+    ).stdout
+    files: list[Path] = []
+    for raw in tracked.split(b"\0"):
+        if not raw:
+            continue
+        path = repo_path / raw.decode("utf-8")
+        if not path.is_file():
+            continue
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(repo_path)
+        except ValueError as exc:
+            raise ValueError(f"tracked file escapes deployment source: {path}") from exc
+        files.append(path)
+    return actual_sha, files
+
+
 # --- Service runner contract ---
 
 @dataclass
 class ServiceConfig:
     user_service_name: str = "agent-console-web.service"
+    uvicorn_bin: str = "uvicorn"
+    service_bind: str = "127.0.0.1"
+    service_port: int = 3210
     canary_bind: str = "127.0.0.1"
-    canary_port_range: tuple[int, int] = (33100, 33199)
-    user_service_port: int = 3210
+    canary_port: int = 33100
     deployment_mode: DeploymentMode = DeploymentMode.DISABLED
 
 
@@ -167,7 +220,7 @@ class ProductionServiceRunner(ServiceRunner):
         log.info("canary start release=%s bind=%s port=%d", release_path.name, bind, port)
         try:
             self._canary_process = subprocess.Popen(
-                ["uvicorn", "agent_console.web:app",
+                [self.config.uvicorn_bin, "agent_console.web:app",
                  "--host", bind, "--port", str(port),
                  "--app-dir", str(release_path)],
                 cwd=str(release_path),
@@ -196,10 +249,17 @@ class ProductionServiceRunner(ServiceRunner):
 
     def check_health(self, *, port: int | None = None) -> bool:
         self._check_mode()
-        target_port = port or self.config.user_service_port
+        target_port = port or self.config.service_port
+        target_host = (
+            self.config.canary_bind
+            if target_port == self.config.canary_port
+            else self.config.service_bind
+        )
+        if target_host in {"0.0.0.0", "::"}:
+            target_host = "127.0.0.1"
         try:
             import httpx
-            resp = httpx.get(f"http://127.0.0.1:{target_port}/healthz", timeout=5)
+            resp = httpx.get(f"http://{target_host}:{target_port}/healthz", timeout=5)
             return resp.status_code == 200
         except Exception:
             return False
@@ -276,6 +336,17 @@ class Deployer:
         tmp.symlink_to(release_name)
         tmp.rename(link)
 
+    def _clear_link(self, link_name: str) -> None:
+        link = self.releases_root / link_name
+        if link.is_symlink():
+            link.unlink()
+
+    def _restore_current(self, previous: str | None) -> None:
+        if previous:
+            self._set_link(CURRENT_LINK, previous)
+        else:
+            self._clear_link(CURRENT_LINK)
+
     # --- core operations ---
 
     def create_release(
@@ -287,7 +358,11 @@ class Deployer:
         source = source_dir.resolve()
         if not source.is_dir():
             raise ValueError(f"source directory does not exist: {source}")
-        sha = candidate_sha or (_current_git_sha(source) if self.source_tracker else "nosha")
+        if self.source_tracker:
+            sha, source_files = _git_release_files(source, candidate_sha)
+        else:
+            sha = candidate_sha or "nosha"
+            source_files = [entry for entry in source.rglob("*") if entry.is_file()]
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         release_name = f"release-{timestamp}-{sha[:12]}"
         release_path = self._release_path(release_name)
@@ -295,15 +370,28 @@ class Deployer:
             raise FileExistsError(f"release already exists: {release_name}")
         release_path.mkdir(parents=True, mode=0o755)
         try:
-            for entry in source.rglob("*"):
-                if not entry.is_file():
-                    continue
+            for entry in source_files:
                 rel = str(entry.relative_to(source))
                 if _is_excluded(rel):
                     continue
                 dest = release_path / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(entry, dest)
+
+            has_app_dir = (source / "agent_console").is_dir()
+            if has_app_dir:
+                missing = [r for r in RUNTIME_ASSETS if not (source / r).is_file()]
+                if missing:
+                    raise RuntimeError(
+                        f"missing required runtime assets: {missing}; "
+                        "run `npm install` in the project root first"
+                    )
+                for asset_rel in RUNTIME_ASSETS:
+                    asset_src = source / asset_rel
+                    asset_dest = release_path / asset_rel
+                    asset_dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(asset_src, asset_dest)
+
             manifest = _write_manifest(release_path, source_sha=sha[:12])
             log.info(
                 "release=%s files=%d source=%s sha=%s",
@@ -361,8 +449,9 @@ class Deployer:
             raise ValueError(
                 f"release validation failed for {release_name}: {validation['error']}"
             )
-        actual_bind = bind or "127.0.0.1"
-        actual_port = port or 33100
+        config = getattr(self.runner, "config", None)
+        actual_bind = bind or (config.canary_bind if config else "127.0.0.1")
+        actual_port = port or (config.canary_port if config else 33100)
         if not self.runner.start_canary(release_path, actual_bind, actual_port):
             self.runner.stop_canary()
             raise RuntimeError(
@@ -384,6 +473,12 @@ class Deployer:
             "release_path": str(release_path),
             "previous_canary": previous,
         }
+
+    def _runner_service_port(self) -> int:
+        cfg = getattr(self.runner, "config", None)
+        if cfg is not None:
+            return cfg.service_port
+        return 3210
 
     def promote_user_service(
         self,
@@ -415,28 +510,66 @@ class Deployer:
 
         if not self.runner.restart(service_name=service_name):
             log.error("release=%s restart failed, rolling back to %s", release_name, previous or "(none)")
+            self._restore_current(previous if previous_path else None)
+            restored_healthy = True
             if previous and previous_path:
-                self._set_link(CURRENT_LINK, previous)
-                self.runner.restart(service_name=service_name)
+                restored_healthy = self.runner.restart(service_name=service_name)
+                if restored_healthy:
+                    restored_healthy = self.runner.check_health(port=self._runner_service_port())
             return {
                 "release_name": release_name,
                 "release_path": str(release_path),
                 "previous_release": previous,
-                "status": "restart_failed_rolled_back",
-                "error": "service restart failed; rolled back to previous release",
+                "status": (
+                    "restart_failed_unselected"
+                    if previous is None
+                    else (
+                        "restart_failed_rolled_back"
+                        if restored_healthy
+                        else "restart_failed_rollback_unhealthy"
+                    )
+                ),
+                "error": (
+                    "service restart failed; no release remains selected"
+                    if previous is None
+                    else (
+                        "service restart failed; rolled back to previous release"
+                        if restored_healthy
+                        else "service restart failed and restored release is unhealthy"
+                    )
+                ),
             }
 
-        if not self.runner.check_health(port=health_port or 3210):
+        health_check_port = health_port or self._runner_service_port()
+        if not self.runner.check_health(port=health_check_port):
             log.error("release=%s health check failed, rolling back to %s", release_name, previous or "(none)")
+            self._restore_current(previous if previous_path else None)
+            restored_healthy = True
             if previous and previous_path:
-                self._set_link(CURRENT_LINK, previous)
                 self.runner.restart(service_name=service_name)
+                restored_healthy = self.runner.check_health(port=health_check_port)
             return {
                 "release_name": release_name,
                 "release_path": str(release_path),
                 "previous_release": previous,
-                "status": "health_failed_rolled_back",
-                "error": "service health check failed; rolled back to previous release",
+                "status": (
+                    "health_failed_unselected"
+                    if previous is None
+                    else (
+                        "health_failed_rolled_back"
+                        if restored_healthy
+                        else "health_failed_rollback_unhealthy"
+                    )
+                ),
+                "error": (
+                    "service health check failed; no release remains selected"
+                    if previous is None
+                    else (
+                        "service health check failed; rolled back to previous release"
+                        if restored_healthy
+                        else "service health check failed and restored release is unhealthy"
+                    )
+                ),
             }
 
         return {
@@ -486,13 +619,46 @@ class Deployer:
         if not self.runner.restart(service_name=service_name):
             log.error("release=%s restart after rollback failed, restoring %s", target_name, current_name)
             self._set_link(CURRENT_LINK, current_name)
-            self.runner.restart(service_name=service_name)
+            restored_healthy = self.runner.restart(service_name=service_name)
+            if restored_healthy:
+                restored_healthy = self.runner.check_health(port=self._runner_service_port())
             return {
                 "release_name": target_name,
                 "release_path": str(target_path),
-                "status": "rollback_restart_failed_restored",
-                "error": f"service restart after rollback failed; restored {current_name}",
+                "status": (
+                    "rollback_restart_failed_restored"
+                    if restored_healthy
+                    else "rollback_restart_failed_restore_unhealthy"
+                ),
+                "error": (
+                    f"service restart after rollback failed; restored {current_name}"
+                    if restored_healthy
+                    else f"service restart after rollback failed and restored {current_name} is unhealthy"
+                ),
             }
+
+        health_port = self._runner_service_port()
+        if not self.runner.check_health(port=health_port):
+            log.error("release=%s health check after rollback failed, restoring %s", target_name, current_name)
+            self._set_link(CURRENT_LINK, current_name)
+            self.runner.restart(service_name=service_name)
+            restored_healthy = self.runner.check_health(port=health_port)
+            return {
+                "release_name": target_name,
+                "release_path": str(target_path),
+                "previous_release": current_name,
+                "status": (
+                    "rollback_health_failed_restored"
+                    if restored_healthy
+                    else "rollback_health_failed_restore_unhealthy"
+                ),
+                "error": (
+                    f"health check failed after rollback; restored {current_name}"
+                    if restored_healthy
+                    else f"health check failed after rollback and restored {current_name} is unhealthy"
+                ),
+            }
+
         return {
             "release_name": target_name,
             "release_path": str(target_path),

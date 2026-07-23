@@ -67,6 +67,7 @@ async function mockApi(page) {
       const selected = url.searchParams.get('state') === 'active' ? sessions.filter((item) => item.running) : sessions;
       return fulfill(selected);
     }
+    if (url.pathname === '/api/profiles' && method === 'GET') return fulfill(identity.profiles);
     if (url.pathname === '/api/plans' && method === 'GET') return fulfill([plan]);
     if (url.pathname === '/api/delegations') return fulfill({ roots: [{ ...active, children: [child] }, stopped], delegations: [], max_children_per_parent: 3 });
     if (url.pathname === '/api/plans/plan-1' && method === 'GET') return fulfill(plan);
@@ -133,6 +134,10 @@ test('responsive shell, theme persistence, and no horizontal overflow', async ({
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBeTruthy();
+  if (mobile) {
+    await page.goto('/desktop');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBeTruthy();
+  }
 });
 
 test('guided orchestration keeps delegation and plan execution explicit', async ({ page }) => {
@@ -199,6 +204,7 @@ test('brief preload, alternate-screen paging, and Text View never auto-send the 
   await installFakeWebSocket(page); await mockApi(page);
   await page.goto('/terminal?session=codex-root');
   await expect(page.locator('#composer')).toHaveValue('Coordinate work');
+  await expect(page.locator('#connection')).toHaveText('Connected');
   expect(await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length)).toBe(0);
   await page.locator('#text-view').click();
   await expect(page.locator('#text-dialog')).toBeVisible();
@@ -356,10 +362,10 @@ test('profiles view shows profile cards with metadata', async ({ page }, testInf
 
 test('skills view renders skill cards from catalog with assignments and approval info', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop skills coverage.');
+  await mockApi(page);
   await page.route('**/api/skills', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(SKILLS_RESPONSE) });
   });
-  await mockApi(page);
   await page.goto('/desktop#skills');
   await expect(page.locator('#skills-list')).toBeVisible();
   await expect(page.locator('.skill-card')).not.toHaveCount(0);
@@ -369,16 +375,51 @@ test('skills view renders skill cards from catalog with assignments and approval
   await expect(firstCard).toContainText('Standard skill · no approval gate');
   await expect(firstCard).toContainText('Assigned to:');
   await expect(firstCard).toContainText('coder');
-  await expect(firstCard.locator('button')).toContainText('Assign to profile');
-  await expect(firstCard.locator('button')).toContainText('Remove from coder');
+  await expect(firstCard.getByRole('button', { name: 'Assign to profile', exact: true })).toBeVisible();
+  await expect(firstCard.getByRole('button', { name: 'Remove from coder', exact: true })).toBeVisible();
   const superCard = page.locator('.skill-card').nth(1);
   await expect(superCard).toContainText('super-skill');
   await expect(superCard).toContainText('superpower');
   await expect(superCard).toContainText('Superpower · approval required');
 });
 
+test('skill card DOM order: header, description, tools before approval, assigned, actions', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop skills coverage.');
+  await mockApi(page);
+  await page.route('**/api/skills', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(SKILLS_RESPONSE) });
+  });
+  await page.goto('/desktop#skills');
+  await expect(page.locator('#skills-list')).toBeVisible();
+  const order = await page.evaluate(() => {
+    const card = document.querySelector('.skill-card');
+    const children = Array.from(card.children);
+    const classNames = children.map((el) => el.className);
+    const tagNames = children.map((el) => el.tagName);
+    const headerIdx = classNames.indexOf('skill-card-header');
+    const descIdx = tagNames.indexOf('P');
+    const toolsIdx = classNames.indexOf('skill-tools');
+    const approvalIdx = classNames.indexOf('skill-approval-info');
+    const assignedIdx = classNames.indexOf('skill-assigned-list');
+    const actionsIdx = classNames.indexOf('dialog-actions');
+    return { headerIdx, descIdx, toolsIdx, approvalIdx, assignedIdx, actionsIdx };
+  });
+  expect(order.headerIdx).not.toBe(-1);
+  expect(order.descIdx).not.toBe(-1);
+  expect(order.toolsIdx).not.toBe(-1);
+  expect(order.approvalIdx).not.toBe(-1);
+  expect(order.assignedIdx).not.toBe(-1);
+  expect(order.actionsIdx).not.toBe(-1);
+  expect(order.headerIdx).toBeLessThan(order.descIdx);
+  expect(order.descIdx).toBeLessThan(order.toolsIdx);
+  expect(order.toolsIdx).toBeLessThan(order.approvalIdx);
+  expect(order.approvalIdx).toBeLessThan(order.assignedIdx);
+  expect(order.assignedIdx).toBeLessThan(order.actionsIdx);
+});
+
 test('skill assign dialog opens and dispatches assign API call', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop skills coverage.');
+  await mockApi(page);
   await page.route('**/api/skills', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(SKILLS_RESPONSE) });
   });
@@ -386,7 +427,6 @@ test('skill assign dialog opens and dispatches assign API call', async ({ page }
   await page.route('**/api/skills/assign', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ profile: 'planner', skill_name: 'super-skill' }) });
   });
-  await mockApi(page);
   await page.goto('/desktop#skills');
   await page.locator('.skill-card').nth(1).getByRole('button', { name: 'Assign to profile' }).click();
   await expect(page.locator('#assign-skill-dialog')).toBeVisible();
@@ -398,6 +438,7 @@ test('skill assign dialog opens and dispatches assign API call', async ({ page }
 
 test('skill unassign button dispatches unassign API call', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop skills coverage.');
+  await mockApi(page);
   await page.route('**/api/skills', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(SKILLS_RESPONSE) });
   });
@@ -405,7 +446,6 @@ test('skill unassign button dispatches unassign API call', async ({ page }, test
   await page.route('**/api/skills/unassign', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ profile: 'coder', skill_name: 'test-skill' }) });
   });
-  await mockApi(page);
   await page.goto('/desktop#skills');
   await page.locator('.skill-card').first().getByRole('button', { name: 'Remove from coder' }).click();
   await unassignRequest;
@@ -413,7 +453,8 @@ test('skill unassign button dispatches unassign API call', async ({ page }, test
 
 test('orchestration view shows session groups with interactive controls', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop orchestration coverage.');
-  await page.route('**/api/session-groups', async (route) => {
+  await mockApi(page);
+  await page.route('**/api/session-groups**', async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
     if (method === 'GET') {
@@ -429,7 +470,6 @@ test('orchestration view shows session groups with interactive controls', async 
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'grp-1', name: 'test-group', member_count: 1, sessions: [{ tmux_name: 'child-1', profile: 'planner', tool: 'codex', status: 'detached', attention_state: 'normal', running: true }] }) });
     }
   });
-  await mockApi(page);
   await page.goto('/desktop#orchestration');
   await expect(page.locator('#session-tree')).toBeVisible();
   await expect(page.locator('#session-tree')).toContainText('test-group');
@@ -441,26 +481,26 @@ test('orchestration view shows session groups with interactive controls', async 
 
 test('orchestration view shows session groups', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop orchestration coverage.');
+  await mockApi(page);
   await page.route('**/api/session-groups', async (route) => {
     await route.fulfill({
       status: 200, contentType: 'application/json',
       body: JSON.stringify([{ id: 'grp-1', name: 'test-group', purpose: 'coordinate work', status: 'active', sessions: [{ tmux_name: 'child-1', profile: 'planner', tool: 'codex', status: 'detached', attention_state: 'normal' }] }]),
     });
   });
-  await mockApi(page);
   await page.goto('/desktop#orchestration');
   await expect(page.locator('#session-tree')).toBeVisible();
 });
 
 test('projects view shows project cards', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop projects coverage.');
+  await mockApi(page);
   await page.route('**/api/projects', async (route) => {
     await route.fulfill({
       status: 200, contentType: 'application/json',
       body: JSON.stringify([{ id: 'proj-1', name: 'test-project', repository: '/workspace/repo', description: 'A test project', status: 'active', session_count: 2 }]),
     });
   });
-  await mockApi(page);
   await page.goto('/desktop#projects');
   await expect(page.locator('#projects-list')).toBeVisible();
   await expect(page.locator('.profile-card').first()).toContainText('test-project');
@@ -485,6 +525,13 @@ test('terminal displays session name in header, page title, and aria-label', asy
 
 test('project detail dialog shows sessions with unassign', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop project detail coverage.');
+  await mockApi(page);
+  await page.route('**/api/projects', async (route) => {
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([{ id: 'proj-1', name: 'detail-project', repository: '/workspace/repo', status: 'active', session_count: 1 }]),
+    });
+  });
   await page.route('**/api/projects/proj-1', async (route) => {
     await route.fulfill({
       status: 200, contentType: 'application/json',
@@ -495,13 +542,6 @@ test('project detail dialog shows sessions with unassign', async ({ page }, test
       }),
     });
   });
-  await page.route('**/api/projects', async (route) => {
-    await route.fulfill({
-      status: 200, contentType: 'application/json',
-      body: JSON.stringify([{ id: 'proj-1', name: 'detail-project', repository: '/workspace/repo', status: 'active', session_count: 1 }]),
-    });
-  });
-  await mockApi(page);
   await page.goto('/desktop#projects');
   await page.locator('button:has-text("View sessions")').click();
   await expect(page.locator('#project-detail-dialog')).toBeVisible();
@@ -511,13 +551,13 @@ test('project detail dialog shows sessions with unassign', async ({ page }, test
 
 test('new session form includes project selector', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop new session coverage.');
+  await mockApi(page);
   await page.route('**/api/projects', async (route) => {
     await route.fulfill({
       status: 200, contentType: 'application/json',
       body: JSON.stringify([{ id: 'proj-1', name: 'selector-project', repository: '/repo', status: 'active', session_count: 0 }]),
     });
   });
-  await mockApi(page);
   await page.goto('/desktop#new');
   const select = page.locator('select[name="project_id"]');
   await expect(select).toBeVisible();

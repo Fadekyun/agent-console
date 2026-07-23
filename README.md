@@ -53,6 +53,10 @@ All settings are controlled via environment variables. The installer uses sensib
 | `AGENT_CONSOLE_PROFILE_DIR` | `<checkout>/agent-profiles` | Agent profile directory (always relative to checkout, not workspace) |
 | `AGENT_CONSOLE_PORT` | `3210` | Web service listen port |
 | `AGENT_CONSOLE_BIND_HOST` | `127.0.0.1` | Web service bind address |
+| `AGENT_CONSOLE_SOURCE_ROOT` | checkout root | Source root for deployment releases |
+| `AGENT_CONSOLE_CANARY_BIND` | `127.0.0.1` | Canary server bind address |
+| `AGENT_CONSOLE_CANARY_PORT` | `33100` | Canary server listen port |
+| `AGENT_CONSOLE_DEPLOYMENT_MODE` | `disabled` | Deployment mode (`disabled` or `staging`) |
 | `AGENT_CONSOLE_TUNNEL_PORT` | `13210` | Reverse tunnel remote port |
 | `AGENT_CONSOLE_TUNNEL_HOST` | `localhost` | SSH tunnel jump host |
 | `AGENT_CONSOLE_TMUX_SOCKET` | (system default) | tmux socket name |
@@ -177,6 +181,8 @@ The venv, npm dependencies, and state directories are prepared **before** profil
 
 Existing systemd units are **replaced** on reinstall. Running sessions survive because `KillMode=process` (preserved in generated units) kills only the agent process on stop, leaving tmux sessions intact.
 
+The installer generates a stable runner at `$AGENT_CONSOLE_STATE_DIR/runner.sh` (mode 0700). The systemd unit executes this runner instead of referencing the checkout directly. The runner selects a contained release from `$AGENT_CONSOLE_STATE_DIR/releases/current` only when all required `@xterm` assets are present, otherwise it falls back to the bootstrap checkout root. Promotion still restarts the web service; tmux sessions remain running and browser terminals use bounded reconnect.
+
 When upgrading an existing installation:
 
 1. The installer runs `systemctl daemon-reload`, `enable`, then `restart` — this picks up changed code and unit settings even when the service is already active.
@@ -184,6 +190,8 @@ When upgrading an existing installation:
 3. Agent CLIs that have been removed or whose provider IDs have changed remain attachable while running but may not restart after a CLI upgrade. To replace a launcher for a still-running legacy session: first stop the agent gracefully (or let it complete), back up the launcher script, then recreate after the session has exited. Do not delete a launcher while its session is still running — preserve and recreate after stopping.
 4. The `runtime.env` file is rewritten — any customizations added after the last install are lost. Keep a backup or re-apply overrides on reinstall.
 5. Profile directory is validated **early** in the install flow (before unit writes and systemctl calls) but after directory/venv/dependency preparation. If `AGENT_CONSOLE_PROFILE_DIR` points to a nonexistent or empty directory, the installer fails before modifying units or calling systemctl, preventing silent zero-profile deployments.
+
+For a Git-based installation, `scripts/update.sh <approved-main-sha>` provides the guarded update path. It accepts only the exact current `origin/main` SHA, creates a clean detached checkout, takes an online database and runtime/unit/runner/launcher backup, runs the installer, checks service health and session inventory parity, and restores the prior unit/runtime/runner on failure. It does not bypass protected-branch review and does not copy credentials.
 
 ## CLI Usage
 

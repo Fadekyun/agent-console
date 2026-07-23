@@ -9,6 +9,7 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = REPO_ROOT / "scripts" / "install.sh"
+UPDATER = REPO_ROOT / "scripts" / "update.sh"
 
 
 class InstallerTests(unittest.TestCase):
@@ -92,6 +93,14 @@ exit 0
     def _tunnel_unit_path(self) -> Path:
         return self.temp_home / ".config" / "systemd" / "user" / "agent-console-tailscale-tunnel.service"
 
+    def _runner_path(self) -> Path:
+        return self.temp_home / ".local" / "share" / "agent-console" / "runner.sh"
+
+    def _stub_runner_uvicorn(self) -> None:
+        uvicorn = self.temp_home / ".local" / "share" / "agent-console" / "venv" / "bin" / "uvicorn"
+        uvicorn.write_text('#!/bin/bash\nprintf "%s|%s|%s\\n" "$PWD" "$PYTHONPATH" "$*"\n')
+        uvicorn.chmod(0o755)
+
     # -- success cases --
 
     def test_custom_port(self):
@@ -106,8 +115,9 @@ exit 0
         self.assertIn("AGENT_CONSOLE_PORT=8080", env)
         self.assertIn("AGENT_CONSOLE_TUNNEL_PORT=9090", env)
 
-        web = self._web_unit_path().read_text()
-        self.assertIn("--port 8080", web)
+        runner = self.temp_home / ".local" / "share" / "agent-console" / "runner.sh"
+        content = runner.read_text()
+        self.assertIn("runner_port=\"8080\"", content)
 
         tun = self._tunnel_unit_path().read_text()
         self.assertIn("9090:", tun)
@@ -122,8 +132,9 @@ exit 0
         self.assertIn("AGENT_CONSOLE_PORT=3210", env)
         self.assertIn("AGENT_CONSOLE_TUNNEL_PORT=13210", env)
 
-        web = self._web_unit_path().read_text()
-        self.assertIn("--port 3210", web)
+        runner = self.temp_home / ".local" / "share" / "agent-console" / "runner.sh"
+        content = runner.read_text()
+        self.assertIn("runner_port=\"3210\"", content)
 
     def test_discovered_absolute_paths(self):
         codex_path = self._create_tool("codex")
@@ -299,6 +310,217 @@ exit 0
         env_path = self._env_path()
         mode = oct(env_path.stat().st_mode)[-3:]
         self.assertEqual(mode, "600", f"expected mode 600, got {mode}")
+
+    # -- Pass 2 deployer/runner tests --
+
+    def test_source_root_persisted(self):
+        self._create_tool("codex")
+        custom_source = self.temp_home / "custom-source"
+        custom_source.mkdir()
+        result = self._run({"AGENT_CONSOLE_SOURCE_ROOT": str(custom_source)})
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        env = self._env_path().read_text()
+        self.assertIn(f"AGENT_CONSOLE_SOURCE_ROOT={custom_source}", env)
+
+    def test_relative_source_root_fails(self):
+        result = self._run({"AGENT_CONSOLE_SOURCE_ROOT": "relative/source"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be an absolute path", result.stderr)
+
+    def test_source_root_defaults_to_checkout(self):
+        self._create_tool("codex")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        env = self._env_path().read_text()
+        self.assertIn("AGENT_CONSOLE_SOURCE_ROOT=", env)
+
+    def test_bind_host_persisted(self):
+        self._create_tool("codex")
+        result = self._run({"AGENT_CONSOLE_BIND_HOST": "0.0.0.0"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        env = self._env_path().read_text()
+        self.assertIn("AGENT_CONSOLE_BIND_HOST=0.0.0.0", env)
+
+    def test_canary_bind_and_port_persisted(self):
+        self._create_tool("codex")
+        result = self._run({
+            "AGENT_CONSOLE_CANARY_BIND": "192.168.1.1",
+            "AGENT_CONSOLE_CANARY_PORT": "9999",
+        })
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        env = self._env_path().read_text()
+        self.assertIn("AGENT_CONSOLE_CANARY_BIND=192.168.1.1", env)
+        self.assertIn("AGENT_CONSOLE_CANARY_PORT=9999", env)
+
+    def test_tunnel_host_persisted(self):
+        self._create_tool("codex")
+        result = self._run({"AGENT_CONSOLE_TUNNEL_HOST": "jump.example"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        env = self._env_path().read_text()
+        self.assertIn("AGENT_CONSOLE_TUNNEL_HOST=jump.example", env)
+
+    def test_deployment_mode_persisted(self):
+        self._create_tool("codex")
+        result = self._run({"AGENT_CONSOLE_DEPLOYMENT_MODE": "staging"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        env = self._env_path().read_text()
+        self.assertIn("AGENT_CONSOLE_DEPLOYMENT_MODE=staging", env)
+
+    def test_deployment_mode_default_disabled(self):
+        self._create_tool("codex")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        env = self._env_path().read_text()
+        self.assertIn("AGENT_CONSOLE_DEPLOYMENT_MODE=disabled", env)
+
+    def test_invalid_deployment_mode_fails(self):
+        result = self._run({"AGENT_CONSOLE_DEPLOYMENT_MODE": "invalid"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FATAL", result.stderr)
+        self.assertIn("DEPLOYMENT_MODE", result.stderr)
+
+    def test_custom_port_3220(self):
+        self._create_tool("codex")
+        result = self._run({"AGENT_CONSOLE_PORT": "3220"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        env = self._env_path().read_text()
+        self.assertIn("AGENT_CONSOLE_PORT=3220", env)
+
+    def test_runner_script_generated(self):
+        self._create_tool("codex")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        runner = self.temp_home / ".local" / "share" / "agent-console" / "runner.sh"
+        self.assertTrue(runner.is_file(), "runner.sh must exist")
+        mode = oct(runner.stat().st_mode)[-3:]
+        self.assertEqual(mode, "700", f"expected mode 700, got {mode}")
+        content = runner.read_text()
+        self.assertIn("PYTHONPATH", content)
+        self.assertIn("uvicorn", content)
+        self.assertIn("runner_root", content)
+        self.assertIn("runner_bind", content)
+        self.assertIn("runner_port", content)
+
+    def test_runner_falls_back_to_bootstrap(self):
+        self._create_tool("codex")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        runner = self.temp_home / ".local" / "share" / "agent-console" / "runner.sh"
+        content = runner.read_text()
+        # When releases/current does not exist, runner falls back to bootstrap root
+        self.assertIn("runner_root", content)
+        self.assertIn('PYTHONPATH="$runner_root"', content)
+
+    def test_runner_executes_bootstrap_without_current_release(self):
+        self._create_tool("codex")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        self._stub_runner_uvicorn()
+        executed = subprocess.run(
+            [str(self._runner_path())], capture_output=True, text=True, env=self.base_env,
+        )
+        self.assertEqual(executed.returncode, 0, msg=executed.stderr)
+        self.assertTrue(executed.stdout.startswith(f"{REPO_ROOT}|{REPO_ROOT}|"))
+
+    def test_runner_selects_only_complete_contained_release(self):
+        self._create_tool("codex")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        self._stub_runner_uvicorn()
+        releases = self.temp_home / ".local" / "share" / "agent-console" / "releases"
+        release = releases / "release-test"
+        (release / "agent_console").mkdir(parents=True)
+        for relative in (
+            "node_modules/@xterm/xterm/lib/xterm.mjs",
+            "node_modules/@xterm/xterm/css/xterm.css",
+            "node_modules/@xterm/addon-fit/lib/addon-fit.mjs",
+        ):
+            path = release / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fixture\n")
+        (releases / "current").symlink_to("release-test")
+        executed = subprocess.run(
+            [str(self._runner_path())], capture_output=True, text=True, env=self.base_env,
+        )
+        self.assertEqual(executed.returncode, 0, msg=executed.stderr)
+        self.assertTrue(executed.stdout.startswith(f"{release}|{release}|"))
+
+        (release / "node_modules/@xterm/addon-fit/lib/addon-fit.mjs").unlink()
+        fallback = subprocess.run(
+            [str(self._runner_path())], capture_output=True, text=True, env=self.base_env,
+        )
+        self.assertEqual(fallback.returncode, 0, msg=fallback.stderr)
+        self.assertTrue(fallback.stdout.startswith(f"{REPO_ROOT}|{REPO_ROOT}|"))
+
+    def test_web_unit_uses_runner(self):
+        self._create_tool("codex")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        web = self._web_unit_path().read_text()
+        runner_path = str(self.temp_home / ".local" / "share" / "agent-console" / "runner.sh")
+        self.assertIn(runner_path, web)
+        self.assertNotIn("WorkingDirectory=", web,
+                         "unit must not set WorkingDirectory directly")
+        self.assertNotIn("--host ", web,
+                         "unit must not pass host directly to uvicorn")
+        self.assertIn("KillMode=process", web)
+
+    def test_canary_port_invalid_fails(self):
+        result = self._run({"AGENT_CONSOLE_CANARY_PORT": "abc"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FATAL", result.stderr)
+        self.assertIn("CANARY_PORT", result.stderr)
+
+    def test_canary_port_out_of_range_fails(self):
+        result = self._run({"AGENT_CONSOLE_CANARY_PORT": "65536"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FATAL", result.stderr)
+        self.assertIn("65536", result.stderr)
+
+    def test_reinstall_restart_systemctl_sequence(self):
+        self._create_tool("codex")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        # Simulate reinstall: rerun installer
+        result2 = self._run()
+        self.assertEqual(result2.returncode, 0, msg=result2.stderr + result2.stdout)
+        calls = [line for line in result2.stderr.splitlines() if line.startswith("SYSTEMCTL:")]
+        self.assertGreaterEqual(len(calls), 3, f"expected >=3 systemctl calls on reinstall, got {calls}")
+        self.assertIn("daemon-reload", calls[0])
+        self.assertIn("enable", calls[1])
+        self.assertIn("restart", calls[2])
+
+
+class UpdateScriptTests(unittest.TestCase):
+    def test_updater_is_executable_and_valid_bash(self):
+        self.assertTrue(os.access(UPDATER, os.X_OK))
+        result = subprocess.run(["bash", "-n", str(UPDATER)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+    def test_updater_rejects_missing_or_invalid_sha(self):
+        for args in ([], ["not-a-sha"]):
+            result = subprocess.run(
+                [str(UPDATER), *args],
+                capture_output=True,
+                text=True,
+                env={"HOME": tempfile.mkdtemp(), "PATH": os.defpath},
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("40-character-approved-main-sha", result.stderr)
+
+    def test_updater_contains_required_safety_gates(self):
+        text = UPDATER.read_text(encoding="utf-8")
+        for expected in (
+            "flock -n",
+            "fetch --quiet origin main",
+            "requested SHA",
+            "source.backup(target)",
+            "sessions-before.json",
+            "sessions-after.json",
+            "rollback()",
+            "systemctl --user restart agent-console-web.service",
+        ):
+            self.assertIn(expected, text)
 
 
 if __name__ == "__main__":

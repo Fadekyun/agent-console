@@ -1349,6 +1349,32 @@ class SessionGroupTests(unittest.TestCase):
         match = next(g for g in groups if g["id"] == group["id"])
         self.assertEqual(match["member_count"], 1)
 
+    def test_list_groups_multi_group_calls_live_sessions_once(self) -> None:
+        s1 = self.manager.create(
+            tool="shell", profile="general", name="multi-grp-s1",
+            repository=str(self.workspace),
+        )
+        s2 = self.manager.create(
+            tool="shell", profile="general", name="multi-grp-s2",
+            repository=str(self.workspace),
+        )
+        self.manager.kill("multi-grp-s2")
+        g1 = self.manager.create_group("multi-group-a")
+        self.manager.add_group_session(g1["id"], "multi-grp-s1")
+        g2 = self.manager.create_group("multi-group-b")
+        self.manager.add_group_session(g2["id"], "multi-grp-s2")
+        with patch.object(self.manager, "_live_sessions",
+                          wraps=self.manager._live_sessions) as spy:
+            groups = self.manager.list_groups()
+            spy.assert_called_once()
+        self.assertEqual(len(groups), 2)
+        for g in groups:
+            self.assertEqual(g["member_count"], 1)
+        s1_group = next(g for g in groups if any(m["tmux_name"] == "multi-grp-s1" for m in g["sessions"]))
+        self.assertTrue(s1_group["sessions"][0]["running"])
+        s2_group = next(g for g in groups if any(m["tmux_name"] == "multi-grp-s2" for m in g["sessions"]))
+        self.assertFalse(s2_group["sessions"][0]["running"])
+
     def test_open_group_returns_running_and_stopped(self) -> None:
         s1 = self.manager.create(
             tool="shell", profile="general", name="open-group-s1",

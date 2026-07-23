@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-from agent_console.config import Settings
+from agent_console.config import Settings, safe_parse_port
 from agent_console.manager import SessionManager
 from agent_console.deployer import (
     DeploymentMode,
@@ -837,6 +837,11 @@ class DeployerManagerFailClosedTests(unittest.TestCase):
         src = self.workspace / "src"
         src.mkdir()
         (src / "app.py").write_text("print('ok')\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(src), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(src), "config", "user.email", "test@example.invalid"], check=True)
+        subprocess.run(["git", "-C", str(src), "config", "user.name", "Test"], check=True)
+        subprocess.run(["git", "-C", str(src), "add", "app.py"], check=True)
+        subprocess.run(["git", "-C", str(src), "commit", "-qm", "fixture"], check=True)
         return src
 
     def _assert_manager_fail_closed(self, deployment_mode: str) -> None:
@@ -860,7 +865,11 @@ class DeployerManagerFailClosedTests(unittest.TestCase):
         runner = deployer.runner
         self.assertIsInstance(runner, ProductionServiceRunner)
         src = self._make_source()
-        rel = deployer.create_release(src, candidate_sha="deadbeef0001")
+        sha = subprocess.run(
+            ["git", "-C", str(src), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        rel = deployer.create_release(src, candidate_sha=sha)
         self.assertTrue(deployer.validate_release(rel["release_name"])["valid"])
         with self.assertRaises(RuntimeError) as ctx:
             deployer.promote_canary(rel["release_name"])
@@ -937,6 +946,331 @@ class CanaryHealthCheckRegressionTests(unittest.TestCase):
         self.assertIn("health check failed", str(ctx.exception))
         self.assertEqual(d.canary_release()["release_name"], rel1["release_name"],
                          "existing canary must be preserved on failure")
+
+
+class DeployConfigWireTests(unittest.TestCase):
+    class SequenceHealthRunner(FakeServiceRunner):
+        def __init__(self, results: list[bool]):
+            super().__init__(health_ok=True, restart_ok=True, canary_ok=True)
+            self.results = list(results)
+
+        def check_health(self, *, port: int | None = None) -> bool:
+            self.health_calls.append(port)
+            return self.results.pop(0)
+
+    def test_defaults_wired_to_service_config(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        profile_dir = root / "profiles"
+        profile_dir.mkdir()
+        for p in ("general", "planner", "coder", "reviewer", "scout", "release"):
+            (profile_dir / f"{p}.md").write_text(f"# {p}\n", encoding="utf-8")
+        settings = Settings(
+            workspace_root=workspace,
+            state_dir=root / "state",
+            database_path=root / "state" / "test.sqlite3",
+            profile_dir=profile_dir,
+            handoff_dir=root / "handoffs",
+            worktree_root=workspace / "worktrees",
+            tmux_socket=None,
+            user_service_name="test-web.service",
+            service_bind="0.0.0.0",
+            service_port=3220,
+            canary_bind="192.168.1.1",
+            canary_port=9999,
+            source_root=root / "custom-source",
+        )
+        manager = SessionManager(settings)
+        runner = manager.deployer.runner
+        self.assertEqual(runner.config.user_service_name, "test-web.service")
+        self.assertEqual(runner.config.uvicorn_bin, str(settings.state_dir / "venv" / "bin" / "uvicorn"))
+        self.assertEqual(runner.config.service_bind, "0.0.0.0")
+        self.assertEqual(runner.config.service_port, 3220)
+        self.assertEqual(runner.config.canary_bind, "192.168.1.1")
+        self.assertEqual(runner.config.canary_port, 9999)
+
+    def test_source_root_distinct_from_workspace(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        workspace = root / "ws"
+        workspace.mkdir()
+        source = root / "src"
+        source.mkdir()
+        profile_dir = root / "profiles"
+        profile_dir.mkdir()
+        for p in ("general", "planner", "coder", "reviewer", "scout", "release"):
+            (profile_dir / f"{p}.md").write_text(f"# {p}\n", encoding="utf-8")
+        settings = Settings(
+            workspace_root=workspace,
+            state_dir=root / "state",
+            database_path=root / "state" / "test.sqlite3",
+            profile_dir=profile_dir,
+            handoff_dir=root / "handoffs",
+            worktree_root=workspace / "worktrees",
+            tmux_socket=None,
+            source_root=source,
+        )
+        self.assertNotEqual(settings.source_root, settings.workspace_root)
+
+    def test_deploy_apply_uses_source_root(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        workspace = root / "ws"
+        workspace.mkdir()
+        source = workspace / "agent-console-source"
+        source.mkdir()
+        (source / "main.py").write_text("# source\n", encoding="utf-8")
+        profile_dir = root / "profiles"
+        profile_dir.mkdir()
+        for p in ("general", "planner", "coder", "reviewer", "verifier", "scout", "release"):
+            (profile_dir / f"{p}.md").write_text(f"# {p}\n", encoding="utf-8")
+        releases_root = root / "releases"
+        settings = Settings(
+            workspace_root=workspace,
+            state_dir=root / "state",
+            database_path=root / "state" / "test.sqlite3",
+            profile_dir=profile_dir,
+            handoff_dir=root / "handoffs",
+            worktree_root=workspace / "worktrees",
+            releases_root=releases_root,
+            tmux_socket=None,
+            source_root=source,
+        )
+        manager = SessionManager(settings)
+        from agent_console.deployer import Deployer, FakeServiceRunner
+        manager._deployer_override = Deployer(
+            releases_root, runner=FakeServiceRunner(), source_tracker=None,
+        )
+        (workspace / "unrelated.txt").write_text("workspace-only\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(source), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(source), "config", "user.email", "t@t"], check=True)
+        subprocess.run(["git", "-C", str(source), "config", "user.name", "T"], check=True)
+        subprocess.run(["git", "-C", str(source), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(source), "commit", "-qm", "init source"], check=True)
+        sha = subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        plan_id = f"plan-{uuid.uuid4().hex[:8]}"
+        art = manager.settings.handoff_dir / plan_id
+        art.mkdir(parents=True)
+        (art / "plan.md").write_text("# test\n", encoding="utf-8")
+        (art / "metadata.json").write_text(
+            json.dumps({"title": plan_id, "repository": str(source), "repository_revision": sha, "profile": "planner"}),
+            encoding="utf-8",
+        )
+        manager.list_plans()
+        with manager.database.connect() as conn:
+            conn.execute(
+                "INSERT INTO plan_evidence(id, plan_id, candidate_sha, evidence_type, result, session_id, session_name, recorded_at) VALUES(?,?,?,?,?,?,?,?)",
+                (f"ev-{uuid.uuid4().hex}", plan_id, sha, "review", "pass", "sess-m", "mock-r", "2026-01-01T00:00:00"),
+            )
+            conn.execute(
+                "INSERT INTO plan_evidence(id, plan_id, candidate_sha, evidence_type, result, session_id, session_name, recorded_at) VALUES(?,?,?,?,?,?,?,?)",
+                (f"ev-{uuid.uuid4().hex}", plan_id, sha, "scout", "pass", "sess-m", "mock-s", "2026-01-01T00:00:00"),
+            )
+            conn.execute(
+                "INSERT INTO plan_evidence(id, plan_id, candidate_sha, evidence_type, result, session_id, session_name, recorded_at) VALUES(?,?,?,?,?,?,?,?)",
+                (f"ev-{uuid.uuid4().hex}", plan_id, sha, "verification", "pass", "sess-m", "mock-v", "2026-01-01T00:00:00"),
+            )
+        manager.promote_plan(plan_id, candidate_sha=sha)
+        result = manager.deploy_apply(plan_id, confirmed=True)
+        self.assertEqual(result["status"], "canary_selected")
+        self.assertEqual(result["source_root"], str(source))
+
+    def test_custom_port_3220(self) -> None:
+        config = ServiceConfig(service_port=3220)
+        self.assertEqual(config.service_port, 3220)
+
+    def test_invalid_port_fallback(self) -> None:
+        config = ServiceConfig(service_port=0)
+        self.assertEqual(config.service_port, 0)
+        p = safe_parse_port("0", 3210)
+        self.assertEqual(p, 3210)
+        p2 = safe_parse_port("99999", 3210)
+        self.assertEqual(p2, 3210)
+        p3 = safe_parse_port("65536", 3210)
+        self.assertEqual(p3, 3210)
+        p4 = safe_parse_port("abc", 3210)
+        self.assertEqual(p4, 3210)
+        p5 = safe_parse_port("8080", 3210)
+        self.assertEqual(p5, 8080)
+
+    def _make_app_source(self, root: Path, name: str = "app") -> Path:
+        src = root / name
+        src.mkdir()
+        (src / "agent_console").mkdir()
+        (src / "agent_console" / "__init__.py").write_text("", encoding="utf-8")
+        (src / "web" / "static").mkdir(parents=True)
+        (src / "web" / "static" / "index.html").write_text("<!DOCTYPE html>\n", encoding="utf-8")
+        node_modules = src / "node_modules" / "@xterm"
+        (node_modules / "xterm" / "lib").mkdir(parents=True)
+        (node_modules / "xterm" / "css").mkdir(parents=True)
+        (node_modules / "addon-fit" / "lib").mkdir(parents=True)
+        (node_modules / "xterm" / "lib" / "xterm.mjs").write_text("// xterm\n")
+        (node_modules / "xterm" / "css" / "xterm.css").write_text("/* xterm */\n")
+        (node_modules / "addon-fit" / "lib" / "addon-fit.mjs").write_text("// fit\n")
+        return src
+
+    def test_runtime_assets_in_manifest(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        src = self._make_app_source(root, "src")
+        from agent_console.deployer import RUNTIME_ASSETS
+        d = Deployer(root / "releases", runner=FakeServiceRunner(), source_tracker=None)
+        rel = d.create_release(src, candidate_sha="assets001")
+        self.assertIn("release_name", rel)
+        rel_path = Path(rel["release_path"])
+        manifest_path = rel_path / "manifest.json"
+        self.assertTrue(manifest_path.is_file())
+        manifest = json.loads(manifest_path.read_text())
+        for asset_rel in RUNTIME_ASSETS:
+            self.assertIn(asset_rel, manifest["files"],
+                          f"runtime asset {asset_rel} missing from manifest")
+            self.assertTrue((rel_path / asset_rel).is_file(),
+                            f"runtime asset {asset_rel} not copied to release")
+
+    def test_runtime_assets_missing_raises(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        src = root / "src2"
+        src.mkdir()
+        (src / "agent_console").mkdir()
+        (src / "agent_console" / "__init__.py").write_text("", encoding="utf-8")
+        d = Deployer(root / "releases", runner=FakeServiceRunner(), source_tracker=None)
+        with self.assertRaises(RuntimeError) as ctx:
+            d.create_release(src, candidate_sha="missing")
+        self.assertIn("missing required runtime asset", str(ctx.exception))
+
+    def test_git_release_requires_exact_clean_sha_and_tracked_files(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        src = self._make_app_source(root, "git-src")
+        (src / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        (src / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(src), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(src), "config", "user.email", "test@example.invalid"], check=True)
+        subprocess.run(["git", "-C", str(src), "config", "user.name", "Test"], check=True)
+        subprocess.run(["git", "-C", str(src), "add", ".gitignore", "agent_console", "web", "tracked.txt"], check=True)
+        subprocess.run(["git", "-C", str(src), "commit", "-qm", "fixture"], check=True)
+        sha = subprocess.run(
+            ["git", "-C", str(src), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        deployer = Deployer(root / "releases", runner=FakeServiceRunner(), source_tracker="git")
+
+        with self.assertRaisesRegex(ValueError, "does not match source HEAD"):
+            deployer.create_release(src, candidate_sha="0" * 40)
+
+        (src / "untracked.txt").write_text("do not package\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "must be clean"):
+            deployer.create_release(src, candidate_sha=sha)
+        (src / "untracked.txt").unlink()
+
+        release = deployer.create_release(src, candidate_sha=sha)
+        release_path = Path(release["release_path"])
+        self.assertTrue((release_path / "tracked.txt").is_file())
+        self.assertFalse((release_path / ".git").exists())
+
+    def test_canary_uses_configured_bind_and_port(self) -> None:
+        runner = FakeServiceRunner()
+        runner.config = ServiceConfig(
+            canary_bind="127.0.0.2",
+            canary_port=33999,
+            deployment_mode=DeploymentMode.STAGING,
+        )
+        root = Path(tempfile.mkdtemp())
+        deployer = Deployer(root / "releases", runner=runner, source_tracker=None)
+        source = self._make_app_source(root, "canary-src")
+        release = deployer.create_release(source, candidate_sha="canaryconfig")
+        deployer.promote_canary(release["release_name"])
+        self.assertEqual(
+            runner.canary_starts,
+            [(Path(release["release_path"]), "127.0.0.2", 33999)],
+        )
+
+    def test_promotion_port_wired(self) -> None:
+        runner = FakeServiceRunner()
+        config = ServiceConfig(service_port=3220, deployment_mode=DeploymentMode.STAGING)
+        runner.config = config
+        d = Deployer(
+            Path(tempfile.mkdtemp()) / "releases",
+            runner=runner,
+            source_tracker=None,
+        )
+        src_root = Path(tempfile.mkdtemp())
+        src = self._make_app_source(src_root, "src")
+        rel = d.create_release(src, candidate_sha="porttest01")
+        d.promote_canary(rel["release_name"])
+        d.select_release(rel["release_name"])
+        d.promote_user_service(rel["release_name"])
+        self.assertIn(3220, runner.health_calls)
+
+    def test_first_promotion_health_failure_clears_current(self) -> None:
+        runner = self.SequenceHealthRunner([True, False])
+        runner.config = ServiceConfig(
+            service_port=3220,
+            deployment_mode=DeploymentMode.STAGING,
+        )
+        root = Path(tempfile.mkdtemp())
+        deployer = Deployer(root / "releases", runner=runner, source_tracker=None)
+        source = self._make_app_source(root, "first-release")
+        release = deployer.create_release(source, candidate_sha="firstfailure")
+        deployer.promote_canary(release["release_name"])
+        result = deployer.promote_user_service(release["release_name"])
+        self.assertEqual(result["status"], "health_failed_unselected")
+        self.assertIsNone(deployer.current_release())
+
+    def test_rollback_verifies_restored_release_health(self) -> None:
+        runner = self.SequenceHealthRunner([True, False, True])
+        runner.config = ServiceConfig(
+            service_port=3220,
+            deployment_mode=DeploymentMode.STAGING,
+        )
+        root = Path(tempfile.mkdtemp())
+        deployer = Deployer(root / "releases", runner=runner, source_tracker=None)
+        first = deployer.create_release(
+            self._make_app_source(root, "restore-v1"), candidate_sha="restorev1"
+        )
+        deployer.select_release(first["release_name"])
+        second = deployer.create_release(
+            self._make_app_source(root, "restore-v2"), candidate_sha="restorev2"
+        )
+        deployer.promote_canary(second["release_name"])
+        deployer.select_release(second["release_name"])
+        result = deployer.rollback()
+        self.assertEqual(result["status"], "rollback_health_failed_restored")
+        self.assertEqual(deployer.current_release()["release_name"], second["release_name"])
+        self.assertEqual(runner.health_calls, [33100, 3220, 3220])
+
+    def test_rollback_health_failure_restores(self) -> None:
+        runner = FakeServiceRunner(health_ok=True, restart_ok=True)
+        config = ServiceConfig(service_port=3220, deployment_mode=DeploymentMode.STAGING)
+        runner.config = config
+        d = Deployer(
+            Path(tempfile.mkdtemp()) / "releases",
+            runner=runner,
+            source_tracker=None,
+        )
+        src_root = Path(tempfile.mkdtemp())
+        src1 = self._make_app_source(src_root, "v1")
+        (src1 / "a.py").write_text("v1\n", encoding="utf-8")
+        src2 = self._make_app_source(src_root, "v2")
+        (src2 / "a.py").write_text("v2\n", encoding="utf-8")
+        rel1 = d.create_release(src1, candidate_sha="rlv10001")
+        d.select_release(rel1["release_name"])
+        rel2 = d.create_release(src2, candidate_sha="rlv20001")
+        d.promote_canary(rel2["release_name"])
+        d.select_release(rel2["release_name"])
+        runner.health_ok = False
+        result = d.rollback()
+        self.assertEqual(result["status"], "rollback_health_failed_restore_unhealthy")
+        self.assertEqual(result["previous_release"], rel2["release_name"])
+        current_after = d.current_release()
+        self.assertEqual(current_after["release_name"], rel2["release_name"],
+                         "must restore original release after health failure")
 
 
 class TempPathSafetyTests(unittest.TestCase):

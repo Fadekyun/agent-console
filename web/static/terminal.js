@@ -184,7 +184,7 @@ async function loadBrief(silent = false) {
     if (body.brief && (!composer.value || !silent)) {
       if (!composer.value || !silent) insertComposer(body.brief);
       briefLoaded = true;
-      setStatus('Brief loaded into composer; review and send when ready');
+      if (!silent) setStatus('Brief loaded into composer; review and send when ready');
     } else if (!silent) setStatus('This session has no stored brief');
   } catch (error) { if (!silent) setStatus(error.message); }
 }
