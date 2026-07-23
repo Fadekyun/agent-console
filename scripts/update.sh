@@ -59,6 +59,21 @@ backup="$state/update-backups/${timestamp}-${requested_sha:0:12}"
 mkdir -p "$backup"
 chmod 700 "$backup"
 cp -a "$runtime" "$unit" "$tunnel_unit" "$runner" "$backup/"
+mkdir -p "$backup/releases"
+current_link="$state/releases/current"
+if [ -L "$current_link" ]; then
+  current_target="$(readlink -f "$current_link")"
+  case "$current_target" in
+    "$state/releases"/release-*) cp -a "$current_link" "$backup/releases/" ;;
+    *)
+      printf 'FATAL: current release link escapes the releases directory: %s.\n' "$current_target" >&2
+      exit 1
+      ;;
+  esac
+elif [ -e "$current_link" ]; then
+  printf 'FATAL: current release path is not a symlink: %s.\n' "$current_link" >&2
+  exit 1
+fi
 mkdir -p "$backup/bin" "$backup/local-bin"
 for name in agentctl agent-selector agent-console-status agent-console-logs; do
   if [ -L "$HOME/bin/$name" ]; then cp -a "$HOME/bin/$name" "$backup/bin/"; fi
@@ -105,6 +120,10 @@ rollback() {
   cp -a "$backup/agent-console-web.service" "$unit"
   cp -a "$backup/agent-console-tailscale-tunnel.service" "$tunnel_unit"
   cp -a "$backup/runner.sh" "$runner"
+  rm -f "$current_link"
+  if [ -L "$backup/releases/current" ]; then
+    cp -a "$backup/releases/current" "$state/releases/"
+  fi
   for name in agentctl agent-selector agent-console-status agent-console-logs; do
     if [ -L "$backup/bin/$name" ]; then
       rm -f "$HOME/bin/$name"
@@ -128,6 +147,36 @@ export AGENT_CONSOLE_PROFILE_DIR="$checkout/agent-profiles"
 if ! "$checkout/scripts/install.sh"; then
   rollback
   printf 'FATAL: installer failed; previous unit/runtime/runner restored from %s.\n' "$backup" >&2
+  exit 1
+fi
+
+if ! release_name="$(PYTHONPATH="$checkout" "$state/venv/bin/python" - \
+  "$state/releases" "$checkout" "$requested_sha" <<'PY'
+import sys
+import time
+from pathlib import Path
+
+from agent_console.deployer import Deployer
+
+releases_root, source, candidate_sha = map(Path, sys.argv[1:])
+deployer = Deployer(releases_root, object(), source_tracker="git")
+try:
+    release = deployer.create_release(source, candidate_sha=str(candidate_sha))
+except FileExistsError:
+    time.sleep(1.1)
+    release = deployer.create_release(source, candidate_sha=str(candidate_sha))
+deployer.select_release(release["release_name"])
+print(release["release_name"])
+PY
+)"; then
+  rollback
+  printf 'FATAL: exact-SHA release creation failed; previous release restored from %s.\n' "$backup" >&2
+  exit 1
+fi
+
+if ! systemctl --user restart agent-console-web.service; then
+  rollback
+  printf 'FATAL: exact-SHA release restart failed; previous release restored from %s.\n' "$backup" >&2
   exit 1
 fi
 
@@ -158,4 +207,5 @@ then
   exit 1
 fi
 
-printf 'Agent Console updated to %s; rollback snapshot: %s\n' "$requested_sha" "$backup"
+printf 'Agent Console updated to %s as %s; rollback snapshot: %s\n' \
+  "$requested_sha" "$release_name" "$backup"
