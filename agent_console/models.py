@@ -18,6 +18,14 @@ PREFERRED_MODELS = {
 }
 
 
+def lowest_cost_model(models: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return the lowest-cost selectable model using catalogue Token Cost ordering."""
+    selectable = [model for model in models if model.get("selectable")]
+    if not selectable:
+        raise ValueError("model catalogue has no selectable models")
+    return min(selectable, key=model_cost_key)
+
+
 def preferred_model(models: list[dict[str, Any]], provider: str) -> dict[str, Any]:
     """Return the preferred model for a provider, falling back to cheapest flash model."""
     selectable = [model for model in models if model.get("selectable")]
