@@ -253,14 +253,24 @@ class Database:
                 (str(SCHEMA_VERSION),),
             )
 
-            # Fix old sessions with invalid opencode-go provider
-            conn.execute(
-                "UPDATE sessions SET provider = 'opencode' WHERE provider = 'opencode-go'"
-            )
-            conn.execute(
-                "UPDATE sessions SET model = 'opencode/' || SUBSTR(model, 13) "
-                "WHERE model LIKE 'opencode-go/%'"
-            )
+            # Migrate auth contexts: rename opencode-go-default to opencode-zen-default
+            # for sessions that were using the old ZEN provider (provider=opencode)
+            conn.execute("""
+                UPDATE sessions 
+                SET auth_context = 'opencode-zen-default' 
+                WHERE tool = 'opencode' 
+                AND auth_context = 'opencode-go-default' 
+                AND provider = 'opencode'
+            """)
+            
+            # Ensure sessions with opencode-go provider use opencode-go-default context
+            conn.execute("""
+                UPDATE sessions 
+                SET auth_context = 'opencode-go-default' 
+                WHERE tool = 'opencode' 
+                AND provider = 'opencode-go'
+                AND (auth_context IS NULL OR auth_context != 'opencode-go-default')
+            """)
 
     def audit(
         self,

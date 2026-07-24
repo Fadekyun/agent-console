@@ -9,14 +9,34 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-PROVIDERS = {"openrouter", "opencode"}
+PROVIDERS = {"openrouter", "opencode", "opencode-go"}
+
+# Preferred models by provider (fallback to cheapest flash model if not found)
+PREFERRED_MODELS = {
+    "opencode-go": "opencode-go/deepseek-v4-flash",
+    "opencode": "opencode/big-pickle",
+}
 
 
-def lowest_cost_model(models: list[dict[str, Any]]) -> dict[str, Any]:
-    """Return the lowest-cost selectable model using catalogue Token Cost ordering."""
+def preferred_model(models: list[dict[str, Any]], provider: str) -> dict[str, Any]:
+    """Return the preferred model for a provider, falling back to cheapest flash model."""
     selectable = [model for model in models if model.get("selectable")]
     if not selectable:
         raise ValueError("model catalogue has no selectable models")
+    
+    # Try preferred model first
+    preferred_id = PREFERRED_MODELS.get(provider)
+    if preferred_id:
+        for model in selectable:
+            if model["model"] == preferred_id:
+                return model
+    
+    # Fall back to cheapest model with "flash" in the name
+    flash_models = [m for m in selectable if "flash" in m.get("id", "").lower()]
+    if flash_models:
+        return min(flash_models, key=model_cost_key)
+    
+    # Final fallback: cheapest model
     return min(selectable, key=model_cost_key)
 
 

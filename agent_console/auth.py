@@ -57,12 +57,19 @@ def default_registry() -> dict[str, Any]:
                     "verified": True,
                 },
                 "opencode-go-default": {
+                    "provider": "opencode-go",
+                    "kind": "oauth-native",
+                    "source_ref": "opencode/provider-native",
+                    "enabled": True,
+                    "verified": True,
+                },
+                "opencode-zen-default": {
                     "provider": "opencode",
                     "kind": "oauth-native",
                     "source_ref": "opencode/provider-native",
                     "enabled": True,
                     "verified": True,
-                }
+                },
             },
             "hermes": {
                 "openrouter-main": {
@@ -104,13 +111,29 @@ class AuthRegistry:
         data = self._read()
         contexts = data.setdefault("contexts", {}).setdefault("opencode", {})
         dirty = False
-        entry = contexts.get("opencode-go-default")
-        if entry is not None:
-            if entry.get("provider") == "opencode-go" and entry.get("source_ref") == "opencode/provider-native":
-                entry["provider"] = "opencode"
-                dirty = True
-        else:
+        
+        # Migrate old opencode-go-default (was mapping to opencode/ZEN)
+        old_entry = contexts.get("opencode-go-default")
+        if old_entry and old_entry.get("provider") == "opencode":
+            # Rename to opencode-zen-default
+            contexts["opencode-zen-default"] = old_entry.copy()
+            del contexts["opencode-go-default"]
+            dirty = True
+        
+        # Ensure opencode-go-default exists (GO, paid)
+        if "opencode-go-default" not in contexts:
             contexts["opencode-go-default"] = {
+                "provider": "opencode-go",
+                "kind": "oauth-native",
+                "source_ref": "opencode/provider-native",
+                "enabled": True,
+                "verified": True,
+            }
+            dirty = True
+        
+        # Ensure opencode-zen-default exists (ZEN, free)
+        if "opencode-zen-default" not in contexts:
+            contexts["opencode-zen-default"] = {
                 "provider": "opencode",
                 "kind": "oauth-native",
                 "source_ref": "opencode/provider-native",
@@ -118,6 +141,13 @@ class AuthRegistry:
                 "verified": True,
             }
             dirty = True
+        
+        # Update default to opencode-go-default
+        defaults = data.setdefault("defaults", {})
+        if defaults.get("opencode") != "opencode-go-default":
+            defaults["opencode"] = "opencode-go-default"
+            dirty = True
+        
         if dirty:
             self._write(data)
 

@@ -26,7 +26,7 @@ EVIDENCE_TYPE_TO_PROFILE: dict[str, str] = {
     "scout": "scout",
 }
 from .logging_config import configure_logging
-from .models import ModelCatalogue, estimate_models, lowest_cost_model
+from .models import ModelCatalogue, estimate_models, lowest_cost_model, preferred_model
 from .profiles import PROFILE_SCHEMA, profile_text, validate_profile_capability, validate_profile_schema
 from .skills import (
     _resolve_canonical_root,
@@ -1152,8 +1152,8 @@ class SessionManager:
         context_path.chmod(0o600)
         context = self.auth.get_context(tool, auth_context)
         if tool == "opencode" and not model:
-            provider = context.get("provider") or "opencode"
-            model = lowest_cost_model(self.models.list(provider)["models"])["model"]
+            provider = context.get("provider") or "opencode-go"
+            model = preferred_model(self.models.list(provider)["models"], provider)["model"]
         adapter = provider_adapter(tool, self.auth)
         if not adapter.binary.is_file():
             raise FileNotFoundError(f"tool launcher is missing: {adapter.binary}")
@@ -1342,13 +1342,13 @@ class SessionManager:
             agent_mode = agent_mode or "plan"
             if agent_mode not in {"plan", "build"}:
                 raise ValueError("OpenCode agent mode must be plan or build")
-            provider = provider or context.get("provider") or "opencode"
-            if provider not in {"openrouter", "opencode"}:
-                raise ValueError("OpenCode provider must be openrouter or opencode")
-            if context.get("provider") not in {provider, "opencode"}:
+            provider = provider or context.get("provider") or "opencode-go"
+            if provider not in {"openrouter", "opencode", "opencode-go"}:
+                raise ValueError("OpenCode provider must be openrouter, opencode, or opencode-go")
+            if context.get("provider") not in {provider, "opencode", "opencode-go"}:
                 raise ValueError("selected authentication context does not match provider")
             catalogue = self.models.list(provider)
-            model = model or lowest_cost_model(catalogue["models"])["model"]
+            model = model or preferred_model(catalogue["models"], provider)["model"]
             if not model.startswith(provider + "/"):
                 raise ValueError("OpenCode model must match the selected provider")
             selected_model = next(
