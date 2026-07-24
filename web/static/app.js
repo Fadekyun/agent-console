@@ -39,7 +39,13 @@ const attentionPriority = { blocked: 0, needs_input: 1, ready_for_review: 2, nor
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.detail || `${response.status} ${response.statusText}`);
+  if (!response.ok) {
+    const detail = body.detail;
+    const message = Array.isArray(detail)
+      ? detail.map(e => e.msg || JSON.stringify(e)).join('; ')
+      : detail || `${response.status} ${response.statusText}`;
+    throw new Error(message);
+  }
   return body;
 }
 

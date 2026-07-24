@@ -253,6 +253,15 @@ class Database:
                 (str(SCHEMA_VERSION),),
             )
 
+            # Fix old sessions with invalid opencode-go provider
+            conn.execute(
+                "UPDATE sessions SET provider = 'opencode' WHERE provider = 'opencode-go'"
+            )
+            conn.execute(
+                "UPDATE sessions SET model = 'opencode/' || SUBSTR(model, 13) "
+                "WHERE model LIKE 'opencode-go/%'"
+            )
+
     def audit(
         self,
         action: str,
