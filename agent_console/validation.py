@@ -19,7 +19,7 @@ PROFILES = frozenset(
         "bugfix",
         "researcher",
         "release",
-        "operator",
+        "orchestrator",
     }
 )
 
