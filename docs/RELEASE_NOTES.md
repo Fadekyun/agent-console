@@ -2,7 +2,23 @@
 
 All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
-## 0.1.1 (Unreleased)
+## 0.1.2 (Unreleased)
+
+- **Date**: 2026-07-28
+- **Issue/PR**: [#39](https://github.com/Fadekyun/agent-console/issues/39) / [#42](https://github.com/Fadekyun/agent-console/pull/42)
+- **Impact**: Project metadata can now reference a not-yet-created repository beneath the configured workspace. Sessions, worktrees, and plans still require the repository path to exist on disk.
+- **Configuration/Migration**: None.
+- **Verification**: `python -m pytest tests/test_core.py tests/test_web.py tests/test_version.py`
+- **Rollback**: Revert the commit. No data or config changes persist.
+
+Changes:
+- `_canonical_project_repo` accepts `must_exist` parameter (`True` by default).
+- `create_project` and `update_project` call with `must_exist=False`.
+- Session creation, worktree creation, and plan execution retain their existing strict path validation.
+- Manager and API regression tests added.
+- Bump 0.1.1 → 0.1.2.
+
+## 0.1.1
 
 - **Date**: 2026-07-28
 - **Issue/PR**: [#40](https://github.com/Fadekyun/agent-console/issues/40) / [#41](https://github.com/Fadekyun/agent-console/pull/41)
