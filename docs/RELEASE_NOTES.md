@@ -1,6 +1,6 @@
 # Release Notes
 
-All release-note entries include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance.
+All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
 ## 0.1.1 (Unreleased)
 
@@ -22,8 +22,10 @@ Changes:
 ## 0.1.0
 
 - **Date**: (Unreleased — no GitHub tag or release published)
+- **Issue/PR**: Unavailable (historic unpublished baseline)
 - **Impact**: Initial foundation.
 - **Configuration/Migration**: See scripts/install.sh and docs/ for setup.
 - **Verification**: `agentctl doctor`
+- **Rollback**: Unavailable (historic unpublished baseline)
 
 Initial capabilities: multi-tool orchestration, web terminal, session delegation, auth contexts, plan management, audit logging, SSH client installer, canary/staging deployment mode.
