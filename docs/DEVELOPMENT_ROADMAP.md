@@ -10,7 +10,7 @@ This document tracks the planned and completed development work for Agent Consol
 - [x] Multi-tool orchestration (Codex, Claude, OpenCode, Hermes, Shell)
 - [x] Web terminal with xterm.js PTY
 - [x] Session delegation (parent/child trees, read-only peer review)
-- [x] Auth contexts and credential isolation
+- [x] Auth contexts (per-tool credential isolation via filesystem; sessions remain mutually trusted under one Unix user)
 - [x] Plan management (Discord-integrated planning with execution handoff)
 - [x] Audit logging (SQLite-backed)
 - [x] SSH client installer
@@ -22,7 +22,7 @@ This document tracks the planned and completed development work for Agent Consol
 
 - [ ] CI pipeline (lint, typecheck, test on PR)
 - [ ] Automated release workflow
-- [ ] Database migration system
+- [ ] Concurrency-safe, versioned migration handling
 - [ ] Session search and filtering
 
 ### Future

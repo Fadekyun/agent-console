@@ -1,5 +1,6 @@
 """Test that pyproject.toml and agent_console/__init__.py declare the same version."""
 
+import ast
 import re
 from pathlib import Path
 
@@ -15,19 +16,27 @@ def _pyproject_version() -> str:
 
 
 def _init_version() -> str:
-    init_text = (REPO_ROOT / "agent_console" / "__init__.py").read_text()
-    m = re.search(r'__version__\s*=\s*"([^"]+)"', init_text)
-    assert m, "Could not find __version__ in agent_console/__init__.py"
-    return m.group(1)
+    init_path = REPO_ROOT / "agent_console" / "__init__.py"
+    tree = ast.parse(init_path.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "__version__" for t in node.targets
+        ):
+            if isinstance(node.value, ast.Constant):
+                return node.value.value
+    raise AssertionError("Could not find __version__ assignment in agent_console/__init__.py")
 
 
 def test_versions_match() -> None:
     assert _pyproject_version() == _init_version()
 
 
-def test_version_format() -> None:
+# Regex for strict X.Y.Z release versions (no prerelease/build, no leading zeros).
+_RELEASE_VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+
+
+def test_version_is_strict_release_semver() -> None:
     v = _pyproject_version()
-    parts = v.split(".")
-    assert len(parts) == 3, f"Expected semver (X.Y.Z), got {v}"
-    for p in parts:
-        assert p.isdigit(), f"Version part {p!r} is not numeric"
+    assert _RELEASE_VERSION_RE.match(v), (
+        f"Version {v!r} must be strict X.Y.Z with no leading zeros"
+    )
