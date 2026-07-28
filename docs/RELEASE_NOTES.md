@@ -5,7 +5,7 @@ All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/mig
 ## 0.1.2 (Unreleased)
 
 - **Date**: 2026-07-28
-- **Issue/PR**: [#39](https://github.com/Fadekyun/agent-console/issues/39)
+- **Issue/PR**: [#39](https://github.com/Fadekyun/agent-console/issues/39) / [#42](https://github.com/Fadekyun/agent-console/pull/42)
 - **Impact**: Project metadata can now reference a not-yet-created repository beneath the configured workspace. Sessions, worktrees, and plans still require the repository path to exist on disk.
 - **Configuration/Migration**: None.
 - **Verification**: `python -m pytest tests/test_core.py tests/test_web.py tests/test_version.py`

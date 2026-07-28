@@ -1498,7 +1498,7 @@ class ProjectTests(unittest.TestCase):
         )
         self.assertEqual(proj["repository"], nonexistent)
         self.assertFalse(Path(nonexistent).exists())
-        with self.assertRaises((ValueError, FileNotFoundError)):
+        with self.assertRaises(FileNotFoundError):
             self.manager.create(
                 tool="shell", profile="general", name="deferred-valid-sess",
                 repository=nonexistent, project_id=proj["id"],
