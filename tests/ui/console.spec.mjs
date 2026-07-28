@@ -330,21 +330,25 @@ test('delayed catalogue response does not overwrite newer provider selection', a
   await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('opencode-zen-default');
   await expect(form.locator('select[name="provider"]')).toHaveValue('opencode');
   await expect(form.locator('select[name="tool"]')).toHaveValue('opencode');
-  // 5. Register waitForResponse for stale GO catalogue
-  const goRes = page.waitForResponse(res => { try { return sameCat(new URL(res.url()), 'opencode-go'); } catch { return false; } });
-  // 6. Release stale route
-  goHold();
-  // 7. Await response directly
-  await goRes;
-  await flushFrames(page);
-  // 9. Assert ZEN state unchanged
-  await expect(form.locator('input[name="model"]')).toHaveValue('opencode/deepseek-v4-flash');
-  await expect(datalist.locator('option')).toHaveCount(1);
-  await expect(datalist.locator('option').first()).toHaveValue('opencode/deepseek-v4-flash');
-  await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
-  await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('opencode-zen-default');
-  await expect(form.locator('select[name="provider"]')).toHaveValue('opencode');
-  await expect(form.locator('select[name="tool"]')).toHaveValue('opencode');
+  try {
+    // 5. Register waitForResponse for stale GO catalogue
+    const goRes = page.waitForResponse(res => { try { return sameCat(new URL(res.url()), 'opencode-go'); } catch { return false; } });
+    // 6. Release stale route
+    goHold();
+    // 7. Await response directly
+    await goRes;
+    await flushFrames(page);
+    // 9. Assert ZEN state unchanged
+    await expect(form.locator('input[name="model"]')).toHaveValue('opencode/deepseek-v4-flash');
+    await expect(datalist.locator('option')).toHaveCount(1);
+    await expect(datalist.locator('option').first()).toHaveValue('opencode/deepseek-v4-flash');
+    await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+    await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('opencode-zen-default');
+    await expect(form.locator('select[name="provider"]')).toHaveValue('opencode');
+    await expect(form.locator('select[name="tool"]')).toHaveValue('opencode');
+  } finally {
+    goHold();
+  }
 });
 
 test('stale GO estimate does not overwrite ZEN catalogue selection', async ({ page }, testInfo) => {
@@ -394,20 +398,24 @@ test('stale GO estimate does not overwrite ZEN catalogue selection', async ({ pa
   await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
   await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('opencode-zen-default');
   await expect(form.locator('select[name="provider"]')).toHaveValue('opencode');
-  // 5. Register waitForResponse for stale GO estimate
-  const goEstRes = page.waitForResponse(res => { try { const u = new URL(res.url()); return u.pathname === '/api/models/estimate' && res.request().postDataJSON().provider === 'opencode-go'; } catch { return false; } });
-  // 6. Release stale route
-  goEstHold();
-  // 7. Await response
-  await goEstRes;
-  await flushFrames(page);
-  // 9. Assert ZEN state unchanged
-  await expect(form.locator('input[name="model"]')).toHaveValue('opencode/deepseek-v4-flash');
-  await expect(datalist.locator('option')).toHaveCount(1);
-  await expect(datalist.locator('option').first()).toHaveValue('opencode/deepseek-v4-flash');
-  await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
-  await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('opencode-zen-default');
-  await expect(form.locator('select[name="provider"]')).toHaveValue('opencode');
+  try {
+    // 5. Register waitForResponse for stale GO estimate
+    const goEstRes = page.waitForResponse(res => { try { const u = new URL(res.url()); return u.pathname === '/api/models/estimate' && res.request().postDataJSON().provider === 'opencode-go'; } catch { return false; } });
+    // 6. Release stale route
+    goEstHold();
+    // 7. Await response
+    await goEstRes;
+    await flushFrames(page);
+    // 9. Assert ZEN state unchanged
+    await expect(form.locator('input[name="model"]')).toHaveValue('opencode/deepseek-v4-flash');
+    await expect(datalist.locator('option')).toHaveCount(1);
+    await expect(datalist.locator('option').first()).toHaveValue('opencode/deepseek-v4-flash');
+    await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+    await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('opencode-zen-default');
+    await expect(form.locator('select[name="provider"]')).toHaveValue('opencode');
+  } finally {
+    goEstHold();
+  }
 });
 
 test('stale GO estimate failure while leaving opencode does not show error', async ({ page }, testInfo) => {
@@ -462,24 +470,28 @@ test('stale GO estimate failure while leaving opencode does not show error', asy
     const controls = form.locator('.mobile-opencode');
     for (let i = 0; i < await controls.count(); i++) await expect(controls.nth(i)).toBeHidden();
   }
-  // Register response wait, release stale, await response
-  const estRes = page.waitForResponse(res => { try { const u = new URL(res.url()); return u.pathname === '/api/models/estimate' && res.request().postDataJSON().provider === 'opencode-go'; } catch { return false; } });
-  goEstHold();
-  await estRes;
-  await flushFrames(page);
-  // State unchanged
-  await expect(form.locator('select[name="tool"]')).toHaveValue('codex');
-  await expect(statusEl).not.toContainText('stale failure');
-  await expect(form.locator('input[name="model"]')).toHaveValue('');
-  await expect(datalist.locator('option')).toHaveCount(0);
-  await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
-  await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('default');
-  if (testInfo.project.name === 'desktop') {
-    await expect(page.locator('#provider-field')).toBeHidden();
-    await expect(page.locator('#model-field')).toBeHidden();
-  } else {
-    const controls = form.locator('.mobile-opencode');
-    for (let i = 0; i < await controls.count(); i++) await expect(controls.nth(i)).toBeHidden();
+  try {
+    // Register response wait, release stale, await response
+    const estRes = page.waitForResponse(res => { try { const u = new URL(res.url()); return u.pathname === '/api/models/estimate' && res.request().postDataJSON().provider === 'opencode-go'; } catch { return false; } });
+    goEstHold();
+    await estRes;
+    await flushFrames(page);
+    // State unchanged
+    await expect(form.locator('select[name="tool"]')).toHaveValue('codex');
+    await expect(statusEl).not.toContainText('stale failure');
+    await expect(form.locator('input[name="model"]')).toHaveValue('');
+    await expect(datalist.locator('option')).toHaveCount(0);
+    await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+    await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('default');
+    if (testInfo.project.name === 'desktop') {
+      await expect(page.locator('#provider-field')).toBeHidden();
+      await expect(page.locator('#model-field')).toBeHidden();
+    } else {
+      const controls = form.locator('.mobile-opencode');
+      for (let i = 0; i < await controls.count(); i++) await expect(controls.nth(i)).toBeHidden();
+    }
+  } finally {
+    goEstHold();
   }
 });
 
@@ -546,24 +558,28 @@ test('leaving OpenCode while catalogue request is pending clears stale state', a
     const controls = form.locator('.mobile-opencode');
     for (let i = 0; i < await controls.count(); i++) await expect(controls.nth(i)).toBeHidden();
   }
-  // Register response wait, release stale, await response
-  const goRes = page.waitForResponse(res => { try { const u = new URL(res.url()); return u.pathname === '/api/models' && u.searchParams.get('provider') === 'opencode-go'; } catch { return false; } });
-  goHold();
-  await goRes;
-  await flushFrames(page);
-  // State remains unchanged after stale response arrives
-  await expect(form.locator('select[name="tool"]')).toHaveValue('codex');
-  await expect(form.locator('input[name="model"]')).toHaveValue('');
-  await expect(datalist.locator('option')).toHaveCount(0);
-  await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
-  await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('default');
-  await expect(form.locator('select[name="auth_context"]')).not.toContainText('opencode');
-  if (testInfo.project.name === 'desktop') {
-    await expect(page.locator('#provider-field')).toBeHidden();
-    await expect(page.locator('#model-field')).toBeHidden();
-  } else {
-    const controls = form.locator('.mobile-opencode');
-    for (let i = 0; i < await controls.count(); i++) await expect(controls.nth(i)).toBeHidden();
+  try {
+    // Register response wait, release stale, await response
+    const goRes = page.waitForResponse(res => { try { const u = new URL(res.url()); return u.pathname === '/api/models' && u.searchParams.get('provider') === 'opencode-go'; } catch { return false; } });
+    goHold();
+    await goRes;
+    await flushFrames(page);
+    // State remains unchanged after stale response arrives
+    await expect(form.locator('select[name="tool"]')).toHaveValue('codex');
+    await expect(form.locator('input[name="model"]')).toHaveValue('');
+    await expect(datalist.locator('option')).toHaveCount(0);
+    await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+    await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('default');
+    await expect(form.locator('select[name="auth_context"]')).not.toContainText('opencode');
+    if (testInfo.project.name === 'desktop') {
+      await expect(page.locator('#provider-field')).toBeHidden();
+      await expect(page.locator('#model-field')).toBeHidden();
+    } else {
+      const controls = form.locator('.mobile-opencode');
+      for (let i = 0; i < await controls.count(); i++) await expect(controls.nth(i)).toBeHidden();
+    }
+  } finally {
+    goHold();
   }
 });
 
