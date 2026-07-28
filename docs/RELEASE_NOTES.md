@@ -5,7 +5,7 @@ All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/mig
 ## 0.1.3 (Unreleased)
 
 - **Date**: 2026-07-28
-- **Issue/PR**: [#37](https://github.com/Fadekyun/agent-console/issues/37) / #PR
+- **Issue/PR**: [#37](https://github.com/Fadekyun/agent-console/issues/37) / [#43](https://github.com/Fadekyun/agent-console/pull/43)
 - **Impact**: Desktop and mobile provider dropdowns now show identical labels, order, defaults, and context filtering. Backend now strictly enforces provider/context pair matching. Race conditions from rapid provider switching are handled.
 - **Configuration/Migration**: None.
 - **Verification**: `python -m pytest tests/test_auth_contexts.py tests/test_core.py tests/test_models.py` — all provider/context validation tests pass. Playwright UI tests across desktop and mobile.
