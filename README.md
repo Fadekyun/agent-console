@@ -218,6 +218,12 @@ The `SessionManager` is the authoritative application layer. tmux owns live term
 
 See [docs/architecture.md](docs/architecture.md) for details.
 
+## Development
+
+See [docs/DEVELOPMENT_ROADMAP.md](docs/DEVELOPMENT_ROADMAP.md) for planned and completed work.
+See [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md) for version history.
+See [AGENTS.md](AGENTS.md) for contribution and PR governance rules.
+
 ## Security
 
 - Tailscale identity or trusted LAN required for access
