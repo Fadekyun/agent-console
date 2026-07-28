@@ -1491,6 +1491,19 @@ class ProjectTests(unittest.TestCase):
                 "outside-future-proj", repository="/tmp/nonexistent-outside",
             )
 
+    def test_deferred_repo_validation_on_session_create(self) -> None:
+        nonexistent = str(self.workspace / "not-yet-cloned")
+        proj = self.manager.create_project(
+            "deferred-valid-proj", repository=nonexistent,
+        )
+        self.assertEqual(proj["repository"], nonexistent)
+        self.assertFalse(Path(nonexistent).exists())
+        with self.assertRaises((ValueError, FileNotFoundError)):
+            self.manager.create(
+                tool="shell", profile="general", name="deferred-valid-sess",
+                repository=nonexistent, project_id=proj["id"],
+            )
+
     def test_list_projects(self) -> None:
         repo_b = str(self.workspace / "repo-b")
         (self.workspace / "repo-b").mkdir(exist_ok=True)

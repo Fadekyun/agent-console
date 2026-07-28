@@ -14,7 +14,7 @@ All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/mig
 Changes:
 - `_canonical_project_repo` accepts `must_exist` parameter (`True` by default).
 - `create_project` and `update_project` call with `must_exist=False`.
-- Session initialization (create, assign) still enforces `must_exist=True`.
+- Session creation, worktree creation, and plan execution retain their existing strict path validation.
 - Manager and API regression tests added.
 - Bump 0.1.1 → 0.1.2.
 
