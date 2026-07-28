@@ -48,7 +48,9 @@ async function mockApi(page) {
     auth_contexts: [
       { tool: 'codex', name: 'default', status: 'ready', enabled: true, default: true },
       { tool: 'opencode', name: 'openrouter-main', provider: 'openrouter', status: 'ready', enabled: true, default: false },
-      { tool: 'opencode', name: 'opencode-go-default', provider: 'opencode', status: 'ready', enabled: true, default: true },
+      { tool: 'opencode', name: 'opencode-go-default', provider: 'opencode-go', status: 'ready', enabled: true, default: true },
+      { tool: 'opencode', name: 'opencode-zen-default', provider: 'opencode', status: 'ready', enabled: true, default: false },
+      { tool: 'opencode', name: 'opencode-go-disabled', provider: 'opencode-go', status: 'disabled', enabled: false, default: false },
       { tool: 'shell', name: 'default', status: 'ready', enabled: true, default: true },
     ],
   };
@@ -229,7 +231,7 @@ test('OpenCode model picker estimates the cheapest model on desktop and mobile',
     await page.locator('#model-cost-details').evaluate((details) => { details.open = true; });
     await page.locator('#estimate-output').fill('1500');
     await page.locator('#estimate-models').click();
-    await expect(page.locator('#new-session select[name="provider"]')).toHaveValue('opencode');
+    await expect(page.locator('#new-session select[name="provider"]')).toHaveValue('opencode-go');
     await expect(page.locator('.estimate-field')).toHaveCount(4);
     await expect(page.locator('#model-status')).toContainText('Selected cheapest for this token mix');
   } else {
@@ -239,8 +241,321 @@ test('OpenCode model picker estimates the cheapest model on desktop and mobile',
     await page.getByText('Estimate cheapest model').click();
     await page.locator('#mobile-output').fill('1500');
     await page.locator('#mobile-estimate').click();
-    await expect(page.locator('#mobile-new select[name="provider"]')).toHaveValue('opencode');
+    await expect(page.locator('#mobile-new select[name="provider"]')).toHaveValue('opencode-go');
     await expect(page.locator('#mobile-model-status')).toContainText('Selected cheapest:');
+  }
+});
+
+test('provider dropdown shows identical GO / ZEN / OpenRouter options on desktop and mobile', async ({ page }, testInfo) => {
+  await mockApi(page);
+  const form = testInfo.project.name === 'desktop' ? page.locator('#new-session') : page.locator('#mobile-new');
+  const providerSelect = form.locator('select[name="provider"]');
+  if (testInfo.project.name !== 'desktop') {
+    await page.goto('/mobile');
+    await page.locator('[data-mobile-tab="new"]').click();
+  } else {
+    await page.goto('/desktop#new');
+  }
+  await form.locator('select[name="tool"]').selectOption('opencode');
+  const options = await providerSelect.locator('option').evaluateAll((opts) => opts.map((o) => ({ value: o.value, label: o.label, selected: o.selected })));
+  expect(options).toEqual([
+    { value: 'opencode-go', label: 'OpenCode GO (default, paid)', selected: true },
+    { value: 'opencode', label: 'OpenCode ZEN (free)', selected: false },
+    { value: 'openrouter', label: 'OpenRouter', selected: false },
+  ]);
+});
+
+test('provider switching filters auth contexts and excludes disabled contexts', async ({ page }, testInfo) => {
+  await mockApi(page);
+  const form = testInfo.project.name === 'desktop' ? page.locator('#new-session') : page.locator('#mobile-new');
+  if (testInfo.project.name !== 'desktop') {
+    await page.goto('/mobile');
+    await page.locator('[data-mobile-tab="new"]').click();
+  } else {
+    await page.goto('/desktop#new');
+  }
+  await form.locator('select[name="tool"]').selectOption('opencode');
+  // GO provider shows GO contexts only, excluding disabled ones
+  await form.locator('select[name="provider"]').selectOption('opencode-go');
+  await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+  await expect(form.locator('select[name="auth_context"]')).toContainText('opencode-go-default');
+  // ZEN provider shows ZEN context only
+  await form.locator('select[name="provider"]').selectOption('opencode');
+  await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+  await expect(form.locator('select[name="auth_context"]')).toContainText('opencode-zen-default');
+  // OpenRouter provider shows OpenRouter context
+  await form.locator('select[name="provider"]').selectOption('openrouter');
+  await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+  await expect(form.locator('select[name="auth_context"]')).toContainText('openrouter-main');
+});
+
+const catURL = (u, prov) => u.pathname === '/api/models' && u.searchParams.get('provider') === prov;
+const isCatRes = (res, prov) => { try { return catURL(new URL(res.url()), prov); } catch { return false; } };
+const flushFrames = (p) => p.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+test('delayed catalogue response does not overwrite newer provider selection', async ({ page }, testInfo) => {
+  await mockApi(page);
+  const form = testInfo.project.name === 'desktop' ? page.locator('#new-session') : page.locator('#mobile-new');
+  if (testInfo.project.name !== 'desktop') {
+    await page.goto('/mobile');
+    await page.locator('[data-mobile-tab="new"]').click();
+  } else {
+    await page.goto('/desktop#new');
+  }
+  await form.locator('select[name="tool"]').selectOption('opencode');
+  let goHold;
+  const goHoldP = new Promise(r => { goHold = r; });
+  let zenHold;
+  const zenHoldP = new Promise(r => { zenHold = r; });
+  await page.route('**/api/models**', async (route) => {
+    const provider = new URL(route.request().url()).searchParams.get('provider');
+    if (provider === 'opencode-go') { await goHoldP; return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ provider, stale: false, models: [{ id: 'go-model', model: `${provider}/go-model`, name: 'GO Model', status: 'active', selectable: true, cost: { input: 1, output: 2, cache_read: null, reasoning: null }, limits: { context: 1000, output: 100 }, capabilities: { reasoning: false, attachment: false, toolcall: true } }] }) }); }
+    if (provider === 'opencode') { await zenHoldP; return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ provider, stale: false, models: [{ id: 'zen-model', model: `${provider}/zen-model`, name: 'ZEN Model', status: 'active', selectable: true, cost: { input: 1, output: 2, cache_read: null, reasoning: null }, limits: { context: 1000, output: 100 }, capabilities: { reasoning: false, attachment: false, toolcall: true } }] }) }); }
+    return route.fallback();
+  });
+  const goCatRes = page.waitForResponse(res => isCatRes(res, 'opencode-go'));
+  const zenCatRes = page.waitForResponse(res => isCatRes(res, 'opencode'));
+  await form.locator('select[name="provider"]').selectOption('opencode-go');
+  await goCatRes;
+  await flushFrames(page);
+  await form.locator('select[name="provider"]').selectOption('opencode');
+  await zenCatRes;
+  await flushFrames(page);
+  try {
+    await expect(form.locator('input[name="model"]')).toHaveValue('opencode/zen-model');
+    const datalist = testInfo.project.name === 'desktop' ? page.locator('#model-options') : page.locator('#mobile-models');
+    await expect(datalist.locator('option')).toHaveCount(1);
+    await expect(datalist.locator('option').first()).toHaveValue('opencode/zen-model');
+    await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+    await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('opencode-zen-default');
+    await expect(form.locator('select[name="provider"]')).toHaveValue('opencode');
+    await expect(form.locator('select[name="tool"]')).toHaveValue('opencode');
+    if (testInfo.project.name === 'desktop') {
+      await expect(page.locator('#provider-field')).toBeVisible();
+    } else {
+      const controls = form.locator('.mobile-opencode');
+      for (let i = 0; i < await controls.count(); i++) await expect(controls.nth(i)).toBeVisible();
+    }
+  } finally {
+    // Release stale GO catalogue response even if assertions fail
+    goHold();
+    await expect(page.waitForResponse(res => isCatRes(res, 'opencode-go'))).toBeTruthy();
+    await flushFrames(page);
+  }
+  await expect(form.locator('input[name="model"]')).toHaveValue('opencode/zen-model');
+  const datalist = testInfo.project.name === 'desktop' ? page.locator('#model-options') : page.locator('#mobile-models');
+  await expect(datalist.locator('option')).toHaveCount(1);
+  await expect(datalist.locator('option').first()).toHaveValue('opencode/zen-model');
+  await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+  await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('opencode-zen-default');
+  await expect(form.locator('select[name="provider"]')).toHaveValue('opencode');
+  await expect(form.locator('select[name="tool"]')).toHaveValue('opencode');
+});
+
+test('stale GO estimate does not overwrite ZEN catalogue selection', async ({ page }, testInfo) => {
+  await mockApi(page);
+  const form = testInfo.project.name === 'desktop' ? page.locator('#new-session') : page.locator('#mobile-new');
+  if (testInfo.project.name !== 'desktop') {
+    await page.goto('/mobile');
+    await page.locator('[data-mobile-tab="new"]').click();
+  } else {
+    await page.goto('/desktop#new');
+  }
+  await form.locator('select[name="tool"]').selectOption('opencode');
+  await form.locator('select[name="provider"]').selectOption('opencode-go');
+  let goEstHold;
+  const goEstHoldP = new Promise(r => { goEstHold = r; });
+  await page.route('**/api/models/estimate**', async (route) => {
+    const provider = route.request().postDataJSON().provider;
+    if (provider === 'opencode-go') { await goEstHoldP; return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ provider, stale: false, models: [{ id: 'go-model', model: `${provider}/go-model`, name: 'GO Model', status: 'active', selectable: true, estimated_usd: 0.5, cheapest: true, cost: { input: 1, output: 2, cache_read: null, reasoning: null }, limits: { context: 1000, output: 100 }, capabilities: { reasoning: false, attachment: false, toolcall: true } }] }) }); }
+    return route.fallback();
+  });
+  const goEstRes = page.waitForResponse(res => { try { return new URL(res.url()).pathname === '/api/models/estimate'; } catch { return false; } });
+  if (testInfo.project.name === 'desktop') {
+    await page.locator('#model-cost-details').evaluate(d => d.open = true);
+    await page.locator('#estimate-output').fill('500');
+    await page.locator('#estimate-models').click();
+  } else {
+    await page.getByText('Estimate cheapest model').click();
+    await page.locator('#mobile-output').fill('500');
+    await page.locator('#mobile-estimate').click();
+  }
+  await goEstRes;
+  await flushFrames(page);
+  const zenCatRes = page.waitForResponse(res => isCatRes(res, 'opencode'));
+  await form.locator('select[name="provider"]').selectOption('opencode');
+  await zenCatRes;
+  await flushFrames(page);
+  try {
+    await expect(form.locator('input[name="model"]')).toHaveValue('opencode/deepseek-v4-flash');
+    const datalist = testInfo.project.name === 'desktop' ? page.locator('#model-options') : page.locator('#mobile-models');
+    await expect(datalist.locator('option')).toHaveCount(1);
+    await expect(datalist.locator('option').first()).toHaveValue('opencode/deepseek-v4-flash');
+    await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+    await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('opencode-zen-default');
+    await expect(form.locator('select[name="provider"]')).toHaveValue('opencode');
+  } finally {
+    goEstHold();
+    await expect(page.waitForResponse(res => { try { return new URL(res.url()).pathname === '/api/models/estimate'; } catch { return false; } })).toBeTruthy();
+    await flushFrames(page);
+  }
+  await expect(form.locator('input[name="model"]')).toHaveValue('opencode/deepseek-v4-flash');
+  const datalist = testInfo.project.name === 'desktop' ? page.locator('#model-options') : page.locator('#mobile-models');
+  await expect(datalist.locator('option')).toHaveCount(1);
+  await expect(datalist.locator('option').first()).toHaveValue('opencode/deepseek-v4-flash');
+  await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+  await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('opencode-zen-default');
+  await expect(form.locator('select[name="provider"]')).toHaveValue('opencode');
+});
+
+test('stale GO estimate failure while leaving opencode does not show error', async ({ page }, testInfo) => {
+  await mockApi(page);
+  const form = testInfo.project.name === 'desktop' ? page.locator('#new-session') : page.locator('#mobile-new');
+  if (testInfo.project.name !== 'desktop') {
+    await page.goto('/mobile');
+    await page.locator('[data-mobile-tab="new"]').click();
+  } else {
+    await page.goto('/desktop#new');
+  }
+  await form.locator('select[name="tool"]').selectOption('opencode');
+  await form.locator('select[name="provider"]').selectOption('opencode-go');
+  let goEstHold;
+  const goEstHoldP = new Promise(r => { goEstHold = r; });
+  await page.route('**/api/models/estimate**', async (route) => {
+    const provider = route.request().postDataJSON().provider;
+    if (provider === 'opencode-go') { await goEstHoldP; return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'stale failure' }) }); }
+    return route.fallback();
+  });
+  const estRes = page.waitForResponse(res => { try { return new URL(res.url()).pathname === '/api/models/estimate'; } catch { return false; } });
+  if (testInfo.project.name === 'desktop') {
+    await page.locator('#model-cost-details').evaluate(d => d.open = true);
+    await page.locator('#estimate-output').fill('500');
+    await page.locator('#estimate-models').click();
+  } else {
+    await page.getByText('Estimate cheapest model').click();
+    await page.locator('#mobile-output').fill('500');
+    await page.locator('#mobile-estimate').click();
+  }
+  await estRes;
+  await flushFrames(page);
+  await form.locator('select[name="tool"]').selectOption('codex');
+  await flushFrames(page);
+  try {
+    await expect(form.locator('select[name="tool"]')).toHaveValue('codex');
+    const statusEl = testInfo.project.name === 'desktop' ? page.locator('#model-status') : page.locator('#mobile-model-status');
+    await expect(statusEl).not.toContainText('stale failure');
+    await expect(form.locator('input[name="model"]')).toHaveValue('');
+    const datalist = testInfo.project.name === 'desktop' ? page.locator('#model-options') : page.locator('#mobile-models');
+    await expect(datalist.locator('option')).toHaveCount(0);
+    await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+    await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('default');
+    if (testInfo.project.name === 'desktop') {
+      await expect(page.locator('#provider-field')).toBeHidden();
+      await expect(page.locator('#model-field')).toBeHidden();
+    } else {
+      const controls = form.locator('.mobile-opencode');
+      for (let i = 0; i < await controls.count(); i++) await expect(controls.nth(i)).toBeHidden();
+    }
+  } finally {
+    goEstHold();
+    await expect(page.waitForResponse(res => { try { return new URL(res.url()).pathname === '/api/models/estimate'; } catch { return false; } })).toBeTruthy();
+    await flushFrames(page);
+  }
+  const statusEl = testInfo.project.name === 'desktop' ? page.locator('#model-status') : page.locator('#mobile-model-status');
+  await expect(statusEl).not.toContainText('stale failure');
+  await expect(form.locator('select[name="tool"]')).toHaveValue('codex');
+  await expect(form.locator('input[name="model"]')).toHaveValue('');
+  const datalist = testInfo.project.name === 'desktop' ? page.locator('#model-options') : page.locator('#mobile-models');
+  await expect(datalist.locator('option')).toHaveCount(0);
+  await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+  await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('default');
+  if (testInfo.project.name === 'desktop') {
+    await expect(page.locator('#provider-field')).toBeHidden();
+    await expect(page.locator('#model-field')).toBeHidden();
+  } else {
+    const controls = form.locator('.mobile-opencode');
+    for (let i = 0; i < await controls.count(); i++) await expect(controls.nth(i)).toBeHidden();
+  }
+});
+
+test('catalogue failure clears model value, datalist, and context options', async ({ page }, testInfo) => {
+  await mockApi(page);
+  await page.route('**/api/models**', async (route) => {
+    await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'catalogue error' }) });
+  });
+  const form = testInfo.project.name === 'desktop' ? page.locator('#new-session') : page.locator('#mobile-new');
+  if (testInfo.project.name !== 'desktop') {
+    await page.goto('/mobile');
+    await page.locator('[data-mobile-tab="new"]').click();
+  } else {
+    await page.goto('/desktop#new');
+  }
+  const catRes = page.waitForResponse(res => { try { return new URL(res.url()).pathname === '/api/models'; } catch { return false; } });
+  await form.locator('select[name="tool"]').selectOption('opencode');
+  await catRes;
+  await flushFrames(page);
+  await expect(form.locator('select[name="auth_context"] option')).toHaveCount(0);
+  await expect(form.locator('input[name="model"]')).toHaveValue('');
+  const datalist = testInfo.project.name === 'desktop' ? page.locator('#model-options') : page.locator('#mobile-models');
+  await expect(datalist.locator('option')).toHaveCount(0);
+  const statusEl = testInfo.project.name === 'desktop' ? page.locator('#model-status') : page.locator('#mobile-model-status');
+  await expect(statusEl).toContainText('catalogue error');
+});
+
+test('leaving OpenCode while catalogue request is pending clears stale state', async ({ page }, testInfo) => {
+  await mockApi(page);
+  const form = testInfo.project.name === 'desktop' ? page.locator('#new-session') : page.locator('#mobile-new');
+  if (testInfo.project.name !== 'desktop') {
+    await page.goto('/mobile');
+    await page.locator('[data-mobile-tab="new"]').click();
+  } else {
+    await page.goto('/desktop#new');
+  }
+  let goHold;
+  const goHoldP = new Promise(r => { goHold = r; });
+  await page.route('**/api/models**', async (route) => {
+    await goHoldP;
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ provider: 'opencode-go', stale: false, models: [{ id: 'go-model', model: 'opencode-go/go-model', name: 'GO Model', status: 'active', selectable: true, cost: { input: 1, output: 2, cache_read: null, reasoning: null }, limits: { context: 1000, output: 100 }, capabilities: { reasoning: false, attachment: false, toolcall: true } }] }) });
+  });
+  const catRes = page.waitForResponse(res => { try { return new URL(res.url()).pathname === '/api/models'; } catch { return false; } });
+  await form.locator('select[name="tool"]').selectOption('opencode');
+  await catRes;
+  await flushFrames(page);
+  await form.locator('select[name="tool"]').selectOption('codex');
+  await flushFrames(page);
+  try {
+    await expect(form.locator('select[name="tool"]')).toHaveValue('codex');
+    await expect(form.locator('input[name="model"]')).toHaveValue('');
+    const datalist = testInfo.project.name === 'desktop' ? page.locator('#model-options') : page.locator('#mobile-models');
+    await expect(datalist.locator('option')).toHaveCount(0);
+    await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+    await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('default');
+    await expect(form.locator('select[name="auth_context"]')).not.toContainText('opencode');
+    if (testInfo.project.name === 'desktop') {
+      await expect(page.locator('#provider-field')).toBeHidden();
+      await expect(page.locator('#model-field')).toBeHidden();
+    } else {
+      const controls = form.locator('.mobile-opencode');
+      for (let i = 0; i < await controls.count(); i++) await expect(controls.nth(i)).toBeHidden();
+    }
+  } finally {
+    goHold();
+    await expect(page.waitForResponse(res => { try { return new URL(res.url()).pathname === '/api/models'; } catch { return false; } })).toBeTruthy();
+    await flushFrames(page);
+  }
+  await expect(form.locator('select[name="tool"]')).toHaveValue('codex');
+  await expect(form.locator('input[name="model"]')).toHaveValue('');
+  const datalist = testInfo.project.name === 'desktop' ? page.locator('#model-options') : page.locator('#mobile-models');
+  await expect(datalist.locator('option')).toHaveCount(0);
+  await expect(form.locator('select[name="auth_context"] option')).toHaveCount(1);
+  await expect(form.locator('select[name="auth_context"] option').first()).toHaveValue('default');
+  await expect(form.locator('select[name="auth_context"]')).not.toContainText('opencode');
+  if (testInfo.project.name === 'desktop') {
+    await expect(page.locator('#provider-field')).toBeHidden();
+    await expect(page.locator('#model-field')).toBeHidden();
+  } else {
+    const controls = form.locator('.mobile-opencode');
+    for (let i = 0; i < await controls.count(); i++) await expect(controls.nth(i)).toBeHidden();
   }
 });
 

@@ -11,6 +11,7 @@ const plansEl = $('#plans');
 const treeEl = $('#session-tree');
 const newForm = $('#new-session');
 let currentModels = [];
+let loadModelsReq = 0;
 const formStatus = $('#form-status');
 const noticeEl = $('#notice');
 const killDialog = $('#confirm-dialog');
@@ -856,6 +857,7 @@ function updateAgentModeField() {
 function updateNewToolFields() {
   const tool = newForm.elements.tool.value;
   const catalog = state.identity.tool_status.find((item) => item.name === tool);
+  if (tool !== 'opencode') { loadModelsReq++; currentModels = []; $('#model-options').replaceChildren(); newForm.elements.model.value = ''; newForm.elements.auth_context.replaceChildren(); }
   updateContextSelect(newForm.elements.tool, newForm.elements.auth_context);
   updateAgentModeField();
   $('#provider-field').hidden = tool !== 'opencode'; newForm.elements.provider.disabled = tool !== 'opencode';
@@ -864,19 +866,36 @@ function updateNewToolFields() {
   formStatus.textContent = catalog?.status === 'ready' ? '' : `${catalog?.status || 'unknown'}: ${catalog?.reason || 'configuration required'}`;
 }
 
+function renderProviderContexts() {
+  const provider = newForm.elements.provider.value;
+  if (!provider) { newForm.elements.auth_context.replaceChildren(); return; }
+  const contexts = state.identity.auth_contexts.filter((item) => item.tool === 'opencode' && item.provider === provider && item.enabled !== false);
+  newForm.elements.auth_context.replaceChildren(...contexts.map((item) => new Option(`${item.name} · ${item.status}`, item.name, false, item.default)));
+}
+
+function isValidGeneration(req, provider) {
+  return req === loadModelsReq && newForm.elements.tool.value === 'opencode' && newForm.elements.provider.value === provider;
+}
+
 async function loadModels() {
   const provider = newForm.elements.provider.value || 'opencode-go';
+  const req = ++loadModelsReq;
+  renderProviderContexts();
+  newForm.elements.model.value = '';
+  currentModels = [];
+  renderModelOptions([]);
+  $('#model-options').replaceChildren();
   $('#model-status').textContent = 'Loading current catalogue…';
   try {
     const catalogue = await api(`/api/models?provider=${encodeURIComponent(provider)}`);
+    if (!isValidGeneration(req, provider)) return;
     currentModels = catalogue.models; renderModelOptions(currentModels);
     const preferred = catalogue.models.find((model) => model.selectable)?.model || '';
     const current = catalogue.models.find((model) => model.model === newForm.elements.model.value && model.selectable);
     if (!current) newForm.elements.model.value = preferred;
-    const contexts = state.identity.auth_contexts.filter((item) => item.tool === 'opencode' && item.provider === provider);
-    newForm.elements.auth_context.replaceChildren(...contexts.map((item) => new Option(`${item.name} · ${item.status}`, item.name, false, item.default)));
+    renderProviderContexts();
     $('#model-status').textContent = `${catalogue.models.length} models, lowest output-token cost first${catalogue.stale ? ' · cached catalogue' : ''}. Default: ${preferred || 'none available'}.`;
-  } catch (error) { $('#model-status').textContent = error.message; }
+  } catch (error) { if (isValidGeneration(req, provider)) { newForm.elements.model.value = ''; currentModels = []; renderModelOptions([]); $('#model-options').replaceChildren(); newForm.elements.auth_context.replaceChildren(); $('#model-status').textContent = error.message; } }
 }
 
 function renderModelOptions(models) {
@@ -890,8 +909,10 @@ function renderModelOptions(models) {
 }
 
 async function estimateModelUsage() {
+  const provider = newForm.elements.provider.value;
+  const req = ++loadModelsReq;
   const payload = {
-    provider: newForm.elements.provider.value,
+    provider,
     uncached_input_tokens: Number($('#estimate-uncached').value || 0),
     cached_input_tokens: Number($('#estimate-cached').value || 0),
     output_tokens: Number($('#estimate-output').value || 0),
@@ -899,11 +920,12 @@ async function estimateModelUsage() {
   };
   try {
     const result = await api('/api/models/estimate', { method: 'POST', body: JSON.stringify(payload) });
+    if (!isValidGeneration(req, provider)) return;
     currentModels = result.models; renderModelOptions(currentModels);
     const cheapest = currentModels.find((model) => model.cheapest);
     if (cheapest) newForm.elements.model.value = cheapest.model;
     $('#model-status').textContent = cheapest ? `Selected cheapest for this token mix: ${cheapest.model} · estimated $${cheapest.estimated_usd.toFixed(6)}. Actual session usage varies.` : 'No priced selectable model can be estimated for this token mix.';
-  } catch (error) { $('#model-status').textContent = error.message; }
+  } catch (error) { if (isValidGeneration(req, provider)) $('#model-status').textContent = error.message; }
 }
 
 async function refresh() {

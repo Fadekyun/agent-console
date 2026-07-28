@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-console"
-version = "0.1.2"
+version = "0.1.3"
 description = "Unified tmux session manager for AI coding agent orchestration"
 license = "MIT"
 authors = [{name = "Fadekyun"}]

@@ -78,9 +78,9 @@ class AuthContextTests(unittest.TestCase):
         )
         self.assertEqual(after["status"], "ready")
 
-    def test_fresh_registry_has_opencode_go_default_with_provider_opencode(self) -> None:
+    def test_fresh_registry_has_opencode_go_default_with_provider_opencode_go(self) -> None:
         ctx = self.registry.get_context("opencode", "opencode-go-default")
-        self.assertEqual(ctx["provider"], "opencode")
+        self.assertEqual(ctx["provider"], "opencode-go")
         self.assertEqual(ctx["kind"], "oauth-native")
         self.assertEqual(ctx["source_ref"], "opencode/provider-native")
         self.assertTrue(ctx["enabled"])
@@ -103,8 +103,41 @@ class AuthContextTests(unittest.TestCase):
         self.registry._ensure_builtin_contexts()
         migrated = json.loads(self.registry.registry_path.read_text(encoding="utf-8"))
         entry = migrated["contexts"]["opencode"]["opencode-go-default"]
-        self.assertEqual(entry["provider"], "opencode")
+        self.assertEqual(entry["provider"], "opencode-go")
         self.assertEqual(entry["source_ref"], "opencode/provider-native")
+
+    def test_migration_recognizes_legacy_opencode_provider(self) -> None:
+        old = {
+            "provider": "opencode",
+            "kind": "oauth-native",
+            "source_ref": "opencode/provider-native",
+            "enabled": True,
+            "verified": True,
+            "legacy_marker": "was-opencode-go-default",
+        }
+        data = {
+            "version": 1,
+            "defaults": {"opencode": "opencode-go-default"},
+            "contexts": {"opencode": {"opencode-go-default": old}},
+        }
+        self.registry.registry_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        self.registry._ensure_builtin_contexts()
+        migrated = json.loads(self.registry.registry_path.read_text(encoding="utf-8"))
+        contexts = migrated["contexts"]["opencode"]
+        # Old entry preserved as opencode-zen-default with opencode provider AND distinctive property
+        self.assertIn("opencode-zen-default", contexts)
+        zen = contexts["opencode-zen-default"]
+        self.assertEqual(zen["provider"], "opencode")
+        self.assertEqual(zen["source_ref"], "opencode/provider-native")
+        self.assertEqual(zen.get("legacy_marker"), "was-opencode-go-default")
+        # New GO context created with opencode-go provider (no legacy marker)
+        self.assertIn("opencode-go-default", contexts)
+        go = contexts["opencode-go-default"]
+        self.assertEqual(go["provider"], "opencode-go")
+        self.assertEqual(go["source_ref"], "opencode/provider-native")
+        self.assertNotIn("legacy_marker", go)
+        # GO remains default
+        self.assertEqual(migrated["defaults"]["opencode"], "opencode-go-default")
 
     def test_builtin_key_with_custom_source_ref_not_migrated(self) -> None:
         entry = {

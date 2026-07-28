@@ -2,6 +2,25 @@
 
 All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
+## 0.1.3 (Unreleased)
+
+- **Date**: 2026-07-28
+- **Issue/PR**: [#37](https://github.com/Fadekyun/agent-console/issues/37) / #PR
+- **Impact**: Desktop and mobile provider dropdowns now show identical labels, order, defaults, and context filtering. Backend now strictly enforces provider/context pair matching. Race conditions from rapid provider switching are handled.
+- **Configuration/Migration**: None.
+- **Verification**: `python -m pytest tests/test_auth_contexts.py tests/test_core.py tests/test_models.py` — all provider/context validation tests pass. Playwright UI tests across desktop and mobile.
+- **Rollback**: Revert the commit. No data or config changes persist.
+
+Changes:
+- Provider dropdown labels aligned: `OpenCode GO (default, paid)`, `OpenCode ZEN (free)`, `OpenRouter` in both HTML views.
+- Backend `manager.create()` now requires exact provider/context match instead of loose set.
+- Desktop `loadModels()` and mobile `models()` clear stale models and contexts immediately on provider change; shared generation guard discards out-of-order catalogue and estimate responses.
+- Auth context migration expectations corrected and verified: legacy `"opencode"` entries are renamed to `opencode-zen-default` while creating a proper `opencode-go-default`.
+- Provider valid-pair matrix tested: `opencode-go-default`→GO, `opencode-zen-default`→ZEN, `openrouter-main`→OpenRouter.
+- Mismatch rejection and disabled-context filtering tested.
+- Version 0.1.2 → 0.1.3.
+- Cache keys bumped (`v=9`).
+
 ## 0.1.2 (Unreleased)
 
 - **Date**: 2026-07-28
