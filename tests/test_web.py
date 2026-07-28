@@ -784,6 +784,27 @@ class WebTests(unittest.TestCase):
         found = next(p for p in projects if p["name"] == "web-proj")
         self.assertEqual(found["repository"], repo)
 
+    def test_project_create_with_nonexistent_repo_api(self) -> None:
+        nonexistent = str(self.workspace / "web-future-repo")
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-future-proj", "repository": nonexistent},
+        ).json()
+        self.assertEqual(proj["name"], "web-future-proj")
+        self.assertEqual(proj["repository"], nonexistent)
+
+    def test_project_update_repo_to_nonexistent_path_api(self) -> None:
+        proj = self.client.post(
+            "/api/projects", headers=self.headers,
+            json={"name": "web-upd-nonexist"},
+        ).json()
+        nonexistent = str(self.workspace / "web-future-upd")
+        updated = self.client.put(
+            f"/api/projects/{proj['id']}", headers=self.headers,
+            json={"repository": nonexistent},
+        ).json()
+        self.assertEqual(updated["repository"], nonexistent)
+
     def test_project_get_api(self) -> None:
         proj = self.client.post(
             "/api/projects", headers=self.headers,

@@ -1476,6 +1476,21 @@ class ProjectTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.manager.create_project("outside-proj", repository="/etc")
 
+    def test_create_project_without_existing_repo(self) -> None:
+        p = self.manager.create_project(
+            "future-proj", repository=str(self.workspace / "not-yet-cloned"),
+            description="Repo does not exist yet",
+        )
+        expected_repo = str((self.workspace / "not-yet-cloned").resolve())
+        self.assertEqual(p["repository"], expected_repo)
+        self.assertEqual(p["status"], "active")
+
+    def test_create_project_rejects_outside_repo_without_existing_path(self) -> None:
+        with self.assertRaises(ValueError):
+            self.manager.create_project(
+                "outside-future-proj", repository="/tmp/nonexistent-outside",
+            )
+
     def test_list_projects(self) -> None:
         repo_b = str(self.workspace / "repo-b")
         (self.workspace / "repo-b").mkdir(exist_ok=True)
@@ -1515,6 +1530,14 @@ class ProjectTests(unittest.TestCase):
         p = self.manager.create_project("upd-can-proj")
         updated = self.manager.update_project(p["id"], repository="new-repo")
         self.assertEqual(updated["repository"], str((self.workspace / "new-repo").resolve()))
+
+    def test_update_project_repo_to_nonexistent_path(self) -> None:
+        p = self.manager.create_project("upd-nonexist-proj")
+        updated = self.manager.update_project(
+            p["id"], repository=str(self.workspace / "future-clone"),
+        )
+        self.assertEqual(updated["repository"], str((self.workspace / "future-clone").resolve()))
+        self.assertEqual(updated["name"], "upd-nonexist-proj")
 
     def test_update_project_rejects_repo_change_with_assigned_sessions(self) -> None:
         repo = str(self.workspace)

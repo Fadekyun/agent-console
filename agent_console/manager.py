@@ -698,21 +698,21 @@ class SessionManager:
                 projects.append(p)
             return projects
 
-    def _canonical_project_repo(self, repository: str | None) -> str | None:
+    def _canonical_project_repo(self, repository: str | None, *, must_exist: bool = True) -> str | None:
         if repository is None:
             return None
         candidate = Path(repository)
         if not candidate.is_absolute():
             candidate = self.settings.workspace_root / candidate
         return str(contained_path(
-            candidate, self.settings.workspace_root,
+            candidate, self.settings.workspace_root, must_exist=must_exist,
         ))
 
     def create_project(
         self, name: str, repository: str | None = None, description: str | None = None,
         *, actor: str = "system", surface: str = "CLI",
     ) -> dict[str, Any]:
-        canonical_repo = self._canonical_project_repo(repository)
+        canonical_repo = self._canonical_project_repo(repository, must_exist=False)
         project_id = f"proj-{uuid.uuid4().hex}"
         now = utc_now()
         with self.database.connect() as conn:
@@ -765,7 +765,7 @@ class SessionManager:
             if name is not None:
                 updates["name"] = name
             if repository is not None:
-                canonical_repo = self._canonical_project_repo(repository)
+                canonical_repo = self._canonical_project_repo(repository, must_exist=False)
                 if canonical_repo != row["repository"]:
                     assigned = conn.execute(
                         "SELECT COUNT(*) FROM sessions WHERE project_id=?", (project_id,)
