@@ -42,6 +42,7 @@ let autoReconnectEnabled = true;
 function setStatus(message) { connection.textContent = message; }
 
 window.addEventListener('message', (event) => {
+  if (!isEmbedded) return;
   if (event.origin !== window.location.origin) return;
   if (event.source !== window.parent) return;
   if (event.data?.type !== 'agent-console:focus-terminal') return;

@@ -116,13 +116,16 @@ function activateTerminal(name) {
     frame.hidden = !active;
   });
   updateDockLayout();
-  requestAnimationFrame(() => {
-    const active = terminalTabs.get(name);
-    if (!active) return;
-    try {
-      active.frame.contentWindow?.postMessage({ type: 'agent-console:focus-terminal' }, '*');
-    } catch { /* same-origin, unreachable */ }
-  });
+  requestAnimationFrame(() => { requestTerminalFocus(name); });
+}
+
+function requestTerminalFocus(name) {
+  const item = terminalTabs.get(name);
+  if (!item) return;
+  if (activeTerminal !== name || item.frame.hidden) return;
+  try {
+    item.frame.contentWindow?.postMessage({ type: 'agent-console:focus-terminal' }, window.location.origin);
+  } catch { /* same-origin, unreachable */ }
 }
 
 function closeTerminal(name) {
@@ -156,10 +159,7 @@ function openTerminal(name) {
   frame.className = 'terminal-embed'; frame.title = `Terminal ${name}`;
   frame.src = `/terminal?session=${encodeURIComponent(name)}&embed=1`; frame.hidden = true;
   frame.addEventListener('load', () => {
-    if (activeTerminal !== name || frame.hidden) return;
-    try {
-      frame.contentWindow?.postMessage({ type: 'agent-console:focus-terminal' }, '*');
-    } catch { /* same-origin */ }
+    requestTerminalFocus(name);
   });
   $('#terminal-tabs').append(tab); $('#terminal-frames').append(frame);
   terminalTabs.set(name, { tab, frame }); activateTerminal(name);
