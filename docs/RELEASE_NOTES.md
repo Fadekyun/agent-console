@@ -5,7 +5,7 @@ All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/mig
 ## 0.1.4 (Unreleased)
 
 - **Date**: 2026-07-29
-- **Issue/PR**: [#46](https://github.com/Fadekyun/agent-console/issues/46)
+- **Issue/PR**: [#47](https://github.com/Fadekyun/agent-console/issues/46)
 - **Impact**: Profile markdown files and PROFILE_SCHEMA descriptions are now aligned. Orchestrator is a session coordinator (not infrastructure); operator is a legacy alias. All profiles have correct lifecycle rules, boundaries, and constraints. docs/agent-profiles.md matches PROFILE_SCHEMA. Lifecycle rule tests added.
 - **Configuration/Migration**: None.
 - **Verification**: `python -m pytest tests/test_profile_schema.py tests/test_version.py` — all lifecycle, schema, and version tests pass.
