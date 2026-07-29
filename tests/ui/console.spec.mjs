@@ -97,6 +97,7 @@ async function mockApi(page) {
 async function installFakeWebSocket(page) {
   await page.addInitScript(() => {
     window.__wsSent = [];
+    window.__wsBytes = [];
     window.__fakeWs = null;
     Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true });
     Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
@@ -112,7 +113,14 @@ async function installFakeWebSocket(page) {
           this.onmessage?.({ data: new TextEncoder().encode(output).buffer });
         });
       }
-      send(value) { window.__wsSent.push(typeof value === 'string' ? value : 'terminal-bytes'); }
+      send(value) {
+        if (typeof value === 'string') {
+          window.__wsSent.push(value);
+        } else {
+          window.__wsSent.push('terminal-bytes');
+          window.__wsBytes.push(new Uint8Array(value));
+        }
+      }
       close() { this.readyState = 3; this.onclose?.({ code: 1000, reason: '' }); }
     }
     window.WebSocket = FakeWebSocket;
@@ -973,4 +981,161 @@ test('terminal scroll-follow: connect, scroll-away, unread, manual-jump, resize'
     const buf = window.__terminal?.buffer.active;
     return buf ? buf.viewportY === buf.baseY : false;
   })).toBe(true);
+});
+function xtermFocus() {
+  return document.activeElement?.closest('.xterm') !== null
+    && document.querySelector('.xterm-helper-textarea') === document.activeElement;
+}
+async function switchToType(page) {
+  const body = page.locator('body');
+  const current = await body.getAttribute('data-terminal-mode');
+  if (current !== 'type') {
+    await page.locator('[data-mode="type"]').click();
+    await expect(body).toHaveAttribute('data-terminal-mode', 'type');
+  }
+}
+
+test('dedicated terminal with stored brief keeps terminal focus, composer not focused', async ({ page }) => {
+  await installFakeWebSocket(page); await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await expect(page.locator('#composer')).toHaveValue('Coordinate work');
+  await switchToType(page);
+  await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
+});
+test('dedicated terminal without stored brief gets terminal focus', async ({ page }) => {
+  await installFakeWebSocket(page); await mockApi(page);
+  await page.route('**/api/sessions/codex-root/brief', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ session: 'codex-root', brief: null, stored_only: true }) });
+  });
+  await page.goto('/terminal?session=codex-root');
+  await expect(page.locator('#composer')).toHaveValue('');
+  await switchToType(page);
+  await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
+});
+test('printable input and Esc byte observed by FakeWebSocket', async ({ page }) => {
+  await installFakeWebSocket(page); await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await expect(page.locator('#connection')).toHaveText('Connected');
+  await switchToType(page);
+  await page.evaluate(() => { window.__wsBytes = []; });
+  await page.keyboard.press('a');
+  await page.keyboard.press('b');
+  await page.keyboard.press('Escape');
+  await expect.poll(() => page.evaluate(() => {
+    const b = window.__wsBytes || [];
+    return b.length >= 1 ? Array.from(b[0]) : null;
+  })).toEqual([97]);
+  await expect.poll(() => page.evaluate(() => {
+    const b = window.__wsBytes || [];
+    return b.length >= 2 ? Array.from(b[1]) : null;
+  })).toEqual([98]);
+  const escBytes = await page.evaluate(() => {
+    const b = window.__wsBytes || [];
+    if (b.length < 3) return null;
+    return Array.from(b[2]);
+  });
+  expect(escBytes).toEqual([27]);
+});
+test('composer submission restores xterm focus in Type mode', async ({ page }) => {
+  await installFakeWebSocket(page); await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await switchToType(page);
+  await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
+  await page.locator('#composer').focus();
+  await page.locator('#composer').fill('printf hello');
+  await page.locator('#send-enter').click();
+  await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
+});
+test('Scroll and Select modes remain intentionally non-focus', async ({ page }) => {
+  await installFakeWebSocket(page); await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await page.locator('[data-mode="scroll"]').click();
+  await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'scroll');
+  expect(await page.evaluate(xtermFocus)).toBeFalsy();
+  await page.locator('[data-mode="select"]').click();
+  await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'select');
+  expect(await page.evaluate(xtermFocus)).toBeFalsy();
+  await page.locator('[data-mode="type"]').click();
+  await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'type');
+  await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
+});
+async function focusedIframeSrc(page) {
+  return page.evaluate(() => {
+    const el = document.activeElement;
+    if (!el || el.tagName !== 'IFRAME') return '';
+    return el.getAttribute('src') || '';
+  });
+}
+
+test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Select mode does not force focus', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop dock coverage.');
+  await installFakeWebSocket(page); await mockApi(page); await page.goto('/desktop');
+
+  // Open first dock terminal — verify it receives focus
+  await page.locator('#active-sessions .session-row').filter({ hasText: 'codex-root' }).locator('[data-attach]').click();
+  await expect(page.locator('.terminal-embed')).toHaveCount(1);
+  const iframe1 = await page.locator('.terminal-embed').first().elementHandle().then((el) => el.contentFrame());
+  await expect.poll(async () => iframe1.evaluate(() => {
+    const ta = document.querySelector('.xterm-helper-textarea');
+    return ta === document.activeElement && ta?.closest('.xterm') !== null;
+  })).toBeTruthy();
+  // Parent frame reflects focus on the iframe element
+  await expect.poll(() => focusedIframeSrc(page)).toContain('session=codex-root');
+
+  // Open second dock terminal — verify it receives focus
+  await page.locator('#active-sessions .session-row').filter({ hasText: 'opencode-scout' }).locator('[data-attach]').click();
+  await expect(page.locator('.terminal-embed')).toHaveCount(2);
+  const iframe2 = await page.locator('.terminal-embed').nth(1).elementHandle().then((el) => el.contentFrame());
+  await expect.poll(async () => iframe2.evaluate(() => {
+    const ta = document.querySelector('.xterm-helper-textarea');
+    return ta === document.activeElement && ta?.closest('.xterm') !== null;
+  })).toBeTruthy();
+  // Parent frame reflects focus on the second iframe
+  await expect.poll(() => focusedIframeSrc(page)).toContain('session=opencode-scout');
+  // First iframe should NOT have focus after second opened
+  expect(await iframe1.evaluate(() => {
+    const ta = document.querySelector('.xterm-helper-textarea');
+    return ta === document.activeElement;
+  })).toBeFalsy();
+
+  // Switch back to first tab — first iframe receives focus, second does not
+  await page.locator('.terminal-tab').first().click();
+  await expect.poll(async () => iframe1.evaluate(() => {
+    const ta = document.querySelector('.xterm-helper-textarea');
+    return ta === document.activeElement && ta?.closest('.xterm') !== null;
+  })).toBeTruthy();
+  // Parent frame reflects focus on the first iframe
+  await expect.poll(() => focusedIframeSrc(page)).toContain('session=codex-root');
+  expect(await iframe2.evaluate(() => {
+    const ta = document.querySelector('.xterm-helper-textarea');
+    return ta === document.activeElement;
+  })).toBeFalsy();
+
+  // Switch to Scroll mode in first terminal — focus must NOT be forced
+  await iframe1.locator('[data-mode="scroll"]').click();
+  await expect(iframe1.locator('body')).toHaveAttribute('data-terminal-mode', 'scroll');
+  // Tab-switch to second and back — postMessage must not force focus on Scroll mode
+  await page.locator('.terminal-tab').nth(1).click();
+  await page.locator('.terminal-tab').first().click();
+  await iframe1.waitForTimeout(100);
+  expect(await iframe1.evaluate(() => {
+    const ta = document.querySelector('.xterm-helper-textarea');
+    return ta === document.activeElement;
+  })).toBeFalsy();
+  // Parent frame reflects no iframe focus (Scroll mode blurred the terminal)
+  expect(await page.evaluate(() => {
+    const el = document.activeElement;
+    return el && el.tagName === 'IFRAME' ? el.getAttribute('src') : null;
+  })).toBeNull();
+
+  // Switch back to Type mode — focus should be restored on tab switch
+  await iframe1.locator('[data-mode="type"]').click();
+  await page.locator('.terminal-tab').nth(1).click();
+  await page.locator('.terminal-tab').first().click();
+  await expect.poll(async () => iframe1.evaluate(() => {
+    const ta = document.querySelector('.xterm-helper-textarea');
+    return ta === document.activeElement && ta?.closest('.xterm') !== null;
+  })).toBeTruthy();
+  // Parent frame reflects focus restored on the first iframe
+  await expect.poll(() => focusedIframeSrc(page)).toContain('session=codex-root');
 });

@@ -2,10 +2,26 @@
 
 All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
+## 0.1.5 (Unreleased)
+
+- **Date**: 2026-07-29
+- **Issue/PR**: [#44](https://github.com/Fadekyun/agent-console/issues/44) / [#53](https://github.com/Fadekyun/agent-console/pull/53)
+- **Impact**: Terminal keyboard focus is reliably restored across dedicated-terminal page load, silent brief loading (no composer focus theft), docked terminal open/tab-switch, composer submission, and background-output scenarios. Scroll and Select modes remain intentionally non-typing.
+- **Configuration/Migration**: None.
+- **Verification**: `node --input-type=module --check < web/static/terminal.js` (pass), `node --input-type=module --check < web/static/app.js` (pass), `python3 -m pytest tests/test_version.py` (2/2 pass), `python3 -m pytest tests/test_web.py` (53/54 pass, 1 pre-existing Claude-status environment failure), `npx playwright test tests/ui/console.spec.mjs --project=desktop --project=samsung --project=iphone` (78/78 pass, 30 skipped)
+- **Rollback**: Revert the commit. No data or config changes persist.
+
+Changes:
+- `insertComposer()` accepts optional `focus` parameter to avoid stealing terminal focus during silent brief loading.
+- Silent (`loadBrief(true)`) no longer focuses the composer.
+- Docked terminal iframes focus xterm on `load` and on `activateTerminal` tab switch.
+- Terminal focus is restored after composer submission in Type mode (unchanged behavior preserved).
+- Version 0.1.4 → 0.1.5.
+
 ## 0.1.4 (Unreleased)
 
 - **Date**: 2026-07-29
-- **Issue/PR**: [#47](https://github.com/Fadekyun/agent-console/issues/46)
+- **Issue/PR**: [#46](https://github.com/Fadekyun/agent-console/issues/46) / [#47](https://github.com/Fadekyun/agent-console/pull/47)
 - **Impact**: Profile markdown files and PROFILE_SCHEMA descriptions are now aligned. Orchestrator is a session coordinator (not infrastructure); operator is a legacy alias. All profiles have correct lifecycle rules, boundaries, and constraints. docs/agent-profiles.md matches PROFILE_SCHEMA. Lifecycle rule tests added.
 - **Configuration/Migration**: None.
 - **Verification**: `python -m pytest tests/test_profile_schema.py tests/test_version.py` — all lifecycle, schema, and version tests pass.
