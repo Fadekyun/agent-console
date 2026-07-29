@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 
+from pathlib import Path
+
 from agent_console.profiles import (
     CAPABILITY_ENFORCEMENTS,
     PROFILE_SCHEMA,
@@ -12,6 +14,8 @@ from agent_console.profiles import (
     validate_profile_schema,
 )
 from agent_console.validation import PROFILES
+
+PROFILE_DIR = Path(__file__).resolve().parent.parent / "agent-profiles"
 
 
 class ProfileSchemaTests(unittest.TestCase):
@@ -236,6 +240,63 @@ class ProfiledValidationFailureTests(unittest.TestCase):
         finally:
             PROFILE_SCHEMA.clear()
             PROFILE_SCHEMA.update(saved)
+
+
+class ProfileFileAlignmentTests(unittest.TestCase):
+    """Tests that every profile in PROFILE_SCHEMA has a matching markdown file."""
+
+    def test_every_profile_has_markdown_file(self) -> None:
+        for name in PROFILE_SCHEMA:
+            path = PROFILE_DIR / f"{name}.md"
+            self.assertTrue(
+                path.is_file(),
+                f"profile {name!r} has no markdown file at {path}",
+            )
+
+    def test_every_markdown_file_corresponds_to_schema_profile(self) -> None:
+        md_files = {p.stem for p in PROFILE_DIR.glob("*.md")}
+        schema_profiles = set(PROFILE_SCHEMA.keys())
+        # operator.md is legacy alias, not in schema — expected
+        extra = md_files - schema_profiles
+        self.assertEqual(
+            extra, {"operator"},
+            "unexpected markdown files not in PROFILE_SCHEMA",
+        )
+
+    def test_markdown_title_contains_display_name(self) -> None:
+        for name, meta in PROFILE_SCHEMA.items():
+            path = PROFILE_DIR / f"{name}.md"
+            content = path.read_text(encoding="utf-8")
+            first_line = content.splitlines()[0]
+            self.assertIn(
+                meta["display_name"],
+                first_line,
+                f"{name}.md title {first_line!r} should contain display_name {meta['display_name']!r}",
+            )
+
+    def test_read_only_files_have_read_only_label(self) -> None:
+        for name in READ_ONLY_PROFILES:
+            path = PROFILE_DIR / f"{name}.md"
+            first_line = path.read_text(encoding="utf-8").splitlines()[0]
+            self.assertIn(
+                "Read Only",
+                first_line,
+                f"{name}.md title should indicate read-only capability",
+            )
+
+    def test_release_file_has_approval_label(self) -> None:
+        path = PROFILE_DIR / "release.md"
+        first_line = path.read_text(encoding="utf-8").splitlines()[0]
+        self.assertIn("Approval", first_line)
+
+    def test_orchestrator_distinguishes_inspect_from_review(self) -> None:
+        desc = PROFILE_SCHEMA["orchestrator"]["description"]
+        self.assertIn("inspect to read attention/live state", desc)
+        self.assertIn("review to read bounded terminal output", desc)
+
+    def test_orchestrator_clarifies_attention_notes_no_parentage(self) -> None:
+        desc = PROFILE_SCHEMA["orchestrator"]["description"]
+        self.assertIn("do not establish parentage", desc)
 
 
 class CapabilityValidationTests(unittest.TestCase):
