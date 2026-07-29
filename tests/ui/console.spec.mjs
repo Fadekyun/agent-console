@@ -116,7 +116,6 @@ async function installFakeWebSocket(page) {
       send(value) {
         if (typeof value === 'string') {
           window.__wsSent.push(value);
-          window.__wsBytes.push(new TextEncoder().encode(value));
         } else {
           window.__wsSent.push('terminal-bytes');
           window.__wsBytes.push(new Uint8Array(value));
@@ -987,10 +986,20 @@ function xtermFocus() {
   return document.activeElement?.closest('.xterm') !== null
     && document.querySelector('.xterm-helper-textarea') === document.activeElement;
 }
+async function switchToType(page) {
+  const body = page.locator('body');
+  const current = await body.getAttribute('data-terminal-mode');
+  if (current !== 'type') {
+    await page.locator('[data-mode="type"]').click();
+    await expect(body).toHaveAttribute('data-terminal-mode', 'type');
+  }
+}
+
 test('dedicated terminal with stored brief keeps terminal focus, composer not focused', async ({ page }) => {
   await installFakeWebSocket(page); await mockApi(page);
   await page.goto('/terminal?session=codex-root');
   await expect(page.locator('#composer')).toHaveValue('Coordinate work');
+  await switchToType(page);
   await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
 });
 test('dedicated terminal without stored brief gets terminal focus', async ({ page }) => {
@@ -1000,12 +1009,14 @@ test('dedicated terminal without stored brief gets terminal focus', async ({ pag
   });
   await page.goto('/terminal?session=codex-root');
   await expect(page.locator('#composer')).toHaveValue('');
+  await switchToType(page);
   await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
 });
 test('printable input and Esc byte observed by FakeWebSocket', async ({ page }) => {
   await installFakeWebSocket(page); await mockApi(page);
   await page.goto('/terminal?session=codex-root');
   await expect(page.locator('#connection')).toHaveText('Connected');
+  await switchToType(page);
   await page.evaluate(() => { window.__wsBytes = []; });
   await page.keyboard.press('a');
   await page.keyboard.press('b');
@@ -1028,6 +1039,7 @@ test('printable input and Esc byte observed by FakeWebSocket', async ({ page }) 
 test('composer submission restores xterm focus in Type mode', async ({ page }) => {
   await installFakeWebSocket(page); await mockApi(page);
   await page.goto('/terminal?session=codex-root');
+  await switchToType(page);
   await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
   await page.locator('#composer').focus();
   await page.locator('#composer').fill('printf hello');
@@ -1047,6 +1059,14 @@ test('Scroll and Select modes remain intentionally non-focus', async ({ page }) 
   await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'type');
   await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
 });
+async function focusedIframeSrc(page) {
+  return page.evaluate(() => {
+    const el = document.activeElement;
+    if (!el || el.tagName !== 'IFRAME') return '';
+    return el.getAttribute('src') || '';
+  });
+}
+
 test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Select mode does not force focus', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop dock coverage.');
   await installFakeWebSocket(page); await mockApi(page); await page.goto('/desktop');
@@ -1059,6 +1079,8 @@ test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Sele
     const ta = document.querySelector('.xterm-helper-textarea');
     return ta === document.activeElement && ta?.closest('.xterm') !== null;
   })).toBeTruthy();
+  // Parent frame reflects focus on the iframe element
+  await expect.poll(() => focusedIframeSrc(page)).toContain('session=codex-root');
 
   // Open second dock terminal — verify it receives focus
   await page.locator('#active-sessions .session-row').filter({ hasText: 'opencode-scout' }).locator('[data-attach]').click();
@@ -1068,6 +1090,8 @@ test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Sele
     const ta = document.querySelector('.xterm-helper-textarea');
     return ta === document.activeElement && ta?.closest('.xterm') !== null;
   })).toBeTruthy();
+  // Parent frame reflects focus on the second iframe
+  await expect.poll(() => focusedIframeSrc(page)).toContain('session=opencode-scout');
   // First iframe should NOT have focus after second opened
   expect(await iframe1.evaluate(() => {
     const ta = document.querySelector('.xterm-helper-textarea');
@@ -1080,6 +1104,8 @@ test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Sele
     const ta = document.querySelector('.xterm-helper-textarea');
     return ta === document.activeElement && ta?.closest('.xterm') !== null;
   })).toBeTruthy();
+  // Parent frame reflects focus on the first iframe
+  await expect.poll(() => focusedIframeSrc(page)).toContain('session=codex-root');
   expect(await iframe2.evaluate(() => {
     const ta = document.querySelector('.xterm-helper-textarea');
     return ta === document.activeElement;
@@ -1096,6 +1122,11 @@ test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Sele
     const ta = document.querySelector('.xterm-helper-textarea');
     return ta === document.activeElement;
   })).toBeFalsy();
+  // Parent frame reflects no iframe focus (Scroll mode blurred the terminal)
+  expect(await page.evaluate(() => {
+    const el = document.activeElement;
+    return el && el.tagName === 'IFRAME' ? el.getAttribute('src') : null;
+  })).toBeNull();
 
   // Switch back to Type mode — focus should be restored on tab switch
   await iframe1.locator('[data-mode="type"]').click();
@@ -1105,4 +1136,6 @@ test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Sele
     const ta = document.querySelector('.xterm-helper-textarea');
     return ta === document.activeElement && ta?.closest('.xterm') !== null;
   })).toBeTruthy();
+  // Parent frame reflects focus restored on the first iframe
+  await expect.poll(() => focusedIframeSrc(page)).toContain('session=codex-root');
 });

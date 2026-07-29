@@ -8,7 +8,7 @@ All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/mig
 - **Issue/PR**: [#44](https://github.com/Fadekyun/agent-console/issues/44)
 - **Impact**: Terminal keyboard focus is reliably restored across dedicated-terminal page load, silent brief loading (no composer focus theft), docked terminal open/tab-switch, composer submission, and background-output scenarios. Scroll and Select modes remain intentionally non-typing.
 - **Configuration/Migration**: None.
-- **Verification**: `node --input-type=module --check < web/static/terminal.js` (pass), `node --input-type=module --check < web/static/app.js` (pass), `python3 -m pytest tests/test_version.py` (2/2 pass), `python3 -m pytest tests/test_web.py` (53/54 pass, 1 pre-existing Claude-status environment failure), `npx playwright test tests/ui/console.spec.mjs --project=desktop` (requires Node 20+; test code validated via syntax check)
+- **Verification**: `node --input-type=module --check < web/static/terminal.js` (pass), `node --input-type=module --check < web/static/app.js` (pass), `python3 -m pytest tests/test_version.py` (2/2 pass), `python3 -m pytest tests/test_web.py` (53/54 pass, 1 pre-existing Claude-status environment failure), `npx playwright test tests/ui/console.spec.mjs --project=desktop --project=samsung --project=iphone` (78/78 pass, 30 skipped)
 - **Rollback**: Revert the commit. No data or config changes persist.
 
 Changes:
