@@ -41,6 +41,13 @@ let autoReconnectEnabled = true;
 
 function setStatus(message) { connection.textContent = message; }
 
+window.addEventListener('message', (event) => {
+  if (event.origin !== window.location.origin) return;
+  if (event.source !== window.parent) return;
+  if (event.data?.type !== 'agent-console:focus-terminal') return;
+  if (mode === 'type') terminal.focus();
+});
+
 function send(value) {
   if (socket?.readyState !== WebSocket.OPEN) throw new Error('Terminal is disconnected');
   socket.send(encoder.encode(value));
@@ -134,11 +141,11 @@ function setMode(selected) {
   else terminal.blur();
 }
 
-function insertComposer(text) {
+function insertComposer(text, focus = true) {
   const start = composer.selectionStart ?? composer.value.length;
   const end = composer.selectionEnd ?? start;
   composer.setRangeText(text, start, end, 'end');
-  autoSizeComposer(); composer.focus();
+  autoSizeComposer(); if (focus) composer.focus();
 }
 
 function autoSizeComposer() {
@@ -182,7 +189,7 @@ async function loadBrief(silent = false) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || response.statusText);
     if (body.brief && (!composer.value || !silent)) {
-      if (!composer.value || !silent) insertComposer(body.brief);
+      if (!composer.value || !silent) insertComposer(body.brief, !silent);
       briefLoaded = true;
       if (!silent) setStatus('Brief loaded into composer; review and send when ready');
     } else if (!silent) setStatus('This session has no stored brief');
