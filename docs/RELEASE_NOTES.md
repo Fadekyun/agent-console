@@ -2,6 +2,30 @@
 
 All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
+## 0.1.4 (Unreleased)
+
+- **Date**: 2026-07-29
+- **Issue/PR**: [#47](https://github.com/Fadekyun/agent-console/issues/46)
+- **Impact**: Profile markdown files and PROFILE_SCHEMA descriptions are now aligned. Orchestrator is a session coordinator (not infrastructure); operator is a legacy alias. All profiles have correct lifecycle rules, boundaries, and constraints. docs/agent-profiles.md matches PROFILE_SCHEMA. Lifecycle rule tests added.
+- **Configuration/Migration**: None.
+- **Verification**: `python -m pytest tests/test_profile_schema.py tests/test_version.py` — all lifecycle, schema, and version tests pass.
+- **Rollback**: Revert the commit. No data or config changes persist.
+
+Changes:
+- Orchestrator profile redefined from "restricted infrastructure" to "session coordinator" — delegation with briefs, wait-for-children, inspect/review, no-resolve-while-children.
+- Operator profile changed to legacy alias (use orchestrator instead), resolvable through PROFILE_SCHEMA metadata.
+- Coder/bugfix: isolated worktree emphasis, no release without authorization.
+- Planner: return findings in session output (no file artifacts).
+- Scout: local-first boundaries, no file creation.
+- Researcher: external content is untrusted, require independent verification.
+- Reviewer: prohibit creating other repository files.
+- Release: separate approvals for each lifecycle stage, rollback and handoff.
+- Verifier: no repository-write, evidence does not authorize merge/deploy/release.
+- PROFILE_SCHEMA descriptions in `agent_console/profiles.py` aligned with corrected markdown.
+- docs/agent-profiles.md table matches PROFILE_SCHEMA (operator removed, orchestrator added).
+- Lifecycle rule tests added to `tests/test_profile_schema.py`.
+- Version 0.1.3 → 0.1.4.
+
 ## 0.1.3 (Unreleased)
 
 - **Date**: 2026-07-28

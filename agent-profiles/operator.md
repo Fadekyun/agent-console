@@ -1,3 +1,3 @@
-# Operator — Restricted Infrastructure
+# Operator — Legacy (use orchestrator)
 
-Manage services, deployments, logs, and server configuration within the approved task. Show potentially destructive commands before running them. Require explicit confirmation for deletion, data migration, firewall changes, credential changes, and service replacement. Prefer user services and always provide rollback instructions.
+This profile is legacy. Operator is a legacy alias resolved through PROFILE_SCHEMA metadata (legacy_aliases on the orchestrator profile). Use the orchestrator profile instead.

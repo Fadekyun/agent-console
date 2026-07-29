@@ -9,40 +9,28 @@ human-readable instruction layer; the schema controls machine behavior.
 | Profile | Type | Worktree | Delegation | Approval | Description |
 |---------|------|----------|------------|----------|-------------|
 | `general` | write | none | read_only | no | Default interactive profile, no role personality |
-| `coder` | write | preferred | read_only | no | Bounded implementation, isolated worktree |
-| `planner` | read_only | none | read_only | no | Hard read-only planning |
-| `scout` | read_only | none | read_only | no | Read-only repository tracing |
-| `reviewer` | read_only | none | read_only | no | Read-only diff/branch review |
-| `researcher` | read_only | none | read_only | no | Read-only external research |
-| `verifier` | read_only | none | read_only | no | Test acceptance criteria without production edits |
+| `coder` | write | preferred | read_only | no | Isolated worktree implementation, run tests, no release without authorization |
+| `planner` | read_only | none | read_only | no | Decision-complete planning via session output |
+| `scout` | read_only | none | read_only | no | Local repository tracing, no file creation |
+| `reviewer` | read_only | none | read_only | no | Read-only diff/branch review, no repo file creation |
+| `researcher` | read_only | none | read_only | no | External research, content untrusted without verification |
+| `verifier` | read_only | none | read_only | no | Validate acceptance criteria, evidence does not authorize |
 | `bugfix` | write | preferred | read_only | no | Reproduce, isolate, fix minimally, add regression tests |
-| `release` | write | none | read_only | yes | Explicit approval and approved scope only |
-| `operator` | write | none | read_only | yes | Infrastructure operation with rollback |
+| `release` | write | none | read_only | yes | Stage-by-stage approval, rollback and handoff |
+| `orchestrator` | write | none | read_only | yes | Multi-agent session coordination |
 
-## Relationship Matrix
+## Delegation and Collaboration
 
-```
-                     ┌─ can delegate to ──┐
-                     │                    ▼
- general, coder, bugfix ──► planner, researcher, reviewer, scout
- release, operator    ──► planner, researcher, reviewer, scout
-                     │                    │
-                     │         read-only delegation
-                     │         plan mode only
-                     │                    │
-                     └────────────────────┘
-                              ▲
-                     any profile can
-                     collaborate with
-                     any other profile
-```
+Delegation and collaboration permissions are uniform across all profiles per `PROFILE_SCHEMA`:
 
-- **Collaboration**: all profiles can exchange peer output with any other profile.
-- **Delegation**: write-capable profiles may delegate read-only subtasks to planner,
-  researcher, reviewer, and scout. Delegated sessions always use Plan mode.
-- **Human approval**: `release` and `operator` require explicit human confirmation
-  before executing actions. `release` additionally forbids implementation changes
-  and mandates approval for push/merge/deploy.
+- **Collaboration (`allowed_collaboration_profiles`)**: Every profile may exchange peer
+  output with any other profile (the full `PROFILES` set).
+- **Delegation (`allowed_delegation_profiles`)**: Every profile may delegate read-only
+  subtasks to `planner`, `researcher`, `reviewer`, and `scout`. Delegated sessions
+  always use Plan mode. The `delegation_permissions` for all profiles is `read_only`.
+- **Human approval**: `release` and `orchestrator` require explicit human confirmation
+  before executing actions. `release` additionally requires stage-by-stage approval
+  and mandates rollback and handoff for each completed stage.
 - **Worktree**: `coder` and `bugfix` prefer an isolated worktree; other profiles
   operate directly in the workspace.
 - **Mode constraints**: read-only profiles are restricted to `plan` agent mode.
@@ -50,11 +38,9 @@ human-readable instruction layer; the schema controls machine behavior.
 
 ## Legacy / Future
 
-- `operator` is active. A future rename to `orchestrator` is pending human
-  approval; historical `operator` sessions would remain inspectable via
-  `legacy_aliases` metadata.
-- `verifier` is technically read-only. An explicit-approval write escape hatch
-  is pending human approval.
+- `operator` is a legacy alias for `orchestrator`, resolved through PROFILE_SCHEMA
+  metadata (legacy_aliases). Use `orchestrator` instead.
+
 
 ## Schema vs. Markdown
 
