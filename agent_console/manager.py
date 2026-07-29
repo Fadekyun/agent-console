@@ -1345,7 +1345,7 @@ class SessionManager:
             provider = provider or context.get("provider") or "opencode-go"
             if provider not in {"openrouter", "opencode", "opencode-go"}:
                 raise ValueError("OpenCode provider must be openrouter, opencode, or opencode-go")
-            if context.get("provider") not in {provider, "opencode", "opencode-go"}:
+            if context.get("provider") != provider:
                 raise ValueError("selected authentication context does not match provider")
             catalogue = self.models.list(provider)
             model = model or preferred_model(catalogue["models"], provider)["model"]

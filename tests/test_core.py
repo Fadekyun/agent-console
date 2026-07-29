@@ -256,7 +256,7 @@ class SessionIntegrationTests(unittest.TestCase):
 
     def test_opencode_launcher_defaults_to_plan(self) -> None:
         models = [{
-            "id": "cheap", "model": "opencode/cheap", "provider": "opencode",
+            "id": "cheap", "model": "opencode-go/cheap", "provider": "opencode-go",
             "name": "Cheap", "status": "active", "selectable": True,
             "cost": {"input": 0.1, "output": 0.2, "cache_read": None, "reasoning": None},
             "limits": {"context": 1000, "output": 100},
@@ -269,7 +269,7 @@ class SessionIntegrationTests(unittest.TestCase):
         self.assertIn("--model", args)
         self.assertIn("--auto", args)
         self.assertNotIn("--prompt", args)
-        self.assertIn("opencode/cheap", args)
+        self.assertIn("opencode-go/cheap", args)
         with patch.object(self.manager.models, "list", return_value={"models": models}):
             build = self.manager._launcher_args(
                 "opencode", "general", self.workspace, None, agent_mode="build"
@@ -440,8 +440,8 @@ class SessionIntegrationTests(unittest.TestCase):
         try:
             models = [{
                 "id": "test-model",
-                "model": "opencode/test-model",
-                "provider": "opencode",
+                "model": "opencode-go/test-model",
+                "provider": "opencode-go",
                 "name": "Test Model",
                 "status": "active",
                 "selectable": True,
@@ -945,13 +945,13 @@ class SessionIntegrationTests(unittest.TestCase):
 
     def test_tool_without_isolation_passes_without_assignments(self) -> None:
         models = [{
-            "id": "cheap", "model": "opencode/cheap", "provider": "opencode",
+            "id": "cheap", "model": "opencode-go/cheap", "provider": "opencode-go",
             "name": "Cheap", "status": "active", "selectable": True,
             "cost": {"input": 0.1, "output": 0.2, "cache_read": None, "reasoning": None},
             "limits": {"context": 1000, "output": 100},
             "capabilities": {"reasoning": False, "attachment": False, "toolcall": True},
         }]
-        with patch.object(self.manager.models, "list", return_value={"provider": "opencode", "models": models}):
+        with patch.object(self.manager.models, "list", return_value={"provider": "opencode-go", "models": models}):
             with patch.object(
                 self.manager,
                 "_launch_spec",
@@ -965,6 +965,65 @@ class SessionIntegrationTests(unittest.TestCase):
                 )
                 self.assertEqual(session["profile"], "general")
                 self.manager.kill("no-assign-opencode-pass")
+
+    def test_opencode_rejects_provider_context_mismatch(self) -> None:
+        models = [{
+            "id": "cheap", "model": "opencode-go/cheap", "provider": "opencode-go",
+            "name": "Cheap", "status": "active", "selectable": True,
+            "cost": {"input": 0.1, "output": 0.2, "cache_read": None, "reasoning": None},
+            "limits": {"context": 1000, "output": 100},
+            "capabilities": {"reasoning": False, "attachment": False, "toolcall": True},
+        }]
+        with patch.object(self.manager.models, "list", return_value={"provider": "opencode-go", "models": models}):
+            with self.assertRaises(ValueError) as cm:
+                self.manager.create(
+                    tool="opencode",
+                    profile="general",
+                    name="mismatch-provider-ctx",
+                    repository=str(self.workspace),
+                    provider="openrouter",
+                    auth_context="opencode-go-default",
+                )
+            self.assertIn("does not match provider", str(cm.exception))
+
+    def provider_valid_pair(self, auth_context: str, provider: str, model_id: str) -> None:
+        models = [{
+            "id": model_id.split("/", 1)[1],
+            "model": model_id,
+            "provider": provider,
+            "name": "Test", "status": "active", "selectable": True,
+            "cost": {"input": 0.1, "output": 0.2, "cache_read": None, "reasoning": None},
+            "limits": {"context": 1000, "output": 100},
+            "capabilities": {"reasoning": False, "attachment": False, "toolcall": True},
+        }]
+        # Ensure openrouter-main context is ready by writing its secret
+        if auth_context == "openrouter-main":
+            secret = self.manager.auth.secret_path("openrouter-main")
+            secret.parent.mkdir(parents=True, exist_ok=True)
+            secret.write_text("export OPENROUTER_API_KEY=test-key\n", encoding="utf-8")
+            secret.chmod(0o600)
+        with patch.object(self.manager.models, "list", return_value={"provider": provider, "models": models}), \
+             patch.object(self.manager, "_launch_spec", return_value=LaunchSpec(["/usr/bin/true"], {}, [])):
+            session = self.manager.create(
+                tool="opencode",
+                profile="general",
+                name=f"pair-{auth_context}-{provider}".replace("_", "-").replace(".", "-"),
+                repository=str(self.workspace),
+                provider=provider,
+                auth_context=auth_context,
+            )
+            self.assertEqual(session["provider"], provider)
+            self.assertEqual(session["auth_context"], auth_context)
+            self.manager.kill(session["tmux_name"])
+
+    def test_opencode_go_default_with_opencode_go(self) -> None:
+        self.provider_valid_pair("opencode-go-default", "opencode-go", "opencode-go/deepseek-v4-flash")
+
+    def test_opencode_zen_default_with_opencode(self) -> None:
+        self.provider_valid_pair("opencode-zen-default", "opencode", "opencode/big-pickle")
+
+    def test_openrouter_main_with_openrouter(self) -> None:
+        self.provider_valid_pair("openrouter-main", "openrouter", "openrouter/anthropic/claude-4")
 
 
 class WaitProtocolTests(unittest.TestCase):
