@@ -13,7 +13,7 @@ from unittest.mock import patch
 from agent_console.config import Settings
 from agent_console.database import Database
 from agent_console.manager import SessionManager
-from agent_console.providers import LaunchSpec
+from agent_console.providers import LaunchSpec, TOOL_BINARIES
 from agent_console.skills import assign_skill
 from agent_console.tmux import Tmux
 from agent_console.validation import contained_path, validate_session_name
@@ -1885,6 +1885,55 @@ class ProjectTests(unittest.TestCase):
         restarted = self.manager.restart("restart-ok-sess")
         self.assertTrue(restarted["running"])
         self.assertEqual(restarted.get("project_id"), proj["id"])
+
+
+class ToolCatalogStatusTests(unittest.TestCase):
+    """tool_catalog() must preserve the explicit registry disabled state even
+    when the corresponding tool launcher binary is missing on disk."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        profile_dir = root / "profiles"
+        profile_dir.mkdir()
+        for profile in ("general", "planner", "coder", "bugfix"):
+            (profile_dir / f"{profile}.md").write_text(f"# {profile}\n", encoding="utf-8")
+        settings = Settings(
+            workspace_root=workspace,
+            state_dir=root / "state",
+            database_path=root / "state" / "test.sqlite3",
+            profile_dir=profile_dir,
+            handoff_dir=root / "handoffs",
+            worktree_root=workspace / "worktrees",
+            tmux_socket=f"agent-console-catalog-test-{os.getpid()}-{id(self)}",
+            max_children_per_parent=2,
+            max_managed_sessions=4,
+        )
+        self.manager = SessionManager(settings)
+        codex_home = self.manager.auth.codex_home("default")
+        (codex_home / "auth.json").write_text("{}\n", encoding="utf-8")
+        self._saved_binaries = dict(TOOL_BINARIES)
+
+    def tearDown(self) -> None:
+        TOOL_BINARIES.clear()
+        TOOL_BINARIES.update(self._saved_binaries)
+        self.temp.cleanup()
+
+    def test_disabled_tool_stays_disabled_when_binary_missing(self) -> None:
+        TOOL_BINARIES["claude"] = Path("/nonexistent/agent-console-claude")
+        catalog = {item["name"]: item for item in self.manager.tool_catalog()}
+        claude = catalog["claude"]
+        self.assertEqual(claude["status"], "disabled")
+        self.assertEqual(claude["reason"], "subscription inactive")
+
+    def test_enabled_tool_missing_binary_still_reports_error(self) -> None:
+        TOOL_BINARIES["codex"] = Path("/nonexistent/agent-console-codex")
+        catalog = {item["name"]: item for item in self.manager.tool_catalog()}
+        codex = catalog["codex"]
+        self.assertEqual(codex["status"], "error")
+        self.assertEqual(codex["reason"], "tool launcher is missing")
 
 
 if __name__ == "__main__":
