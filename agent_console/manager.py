@@ -1784,6 +1784,8 @@ class SessionManager:
     def tool_catalog(self) -> list[dict[str, Any]]:
         catalog = self.auth.catalog()
         for item in catalog:
+            if item["status"] == "disabled":
+                continue
             binary = TOOL_BINARIES.get(item["name"])
             if not binary or not binary.is_file():
                 item["status"] = "error"

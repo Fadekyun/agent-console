@@ -6,32 +6,34 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_console.secrets_store import secret_status, set_openrouter_secret
-from agent_console.skills import RETAINED_SKILLS, doctor_skills, sync_skills
+from agent_console.skills import doctor_skills, sync_skills
 
 
 class SkillAndSecretTests(unittest.TestCase):
     def test_skill_sync_links_all_tool_roots(self) -> None:
+        fixture_skills = ("tailscale-router", "agent-console-ops")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             canonical = root / "canonical"
             home = root / "home"
-            for name in RETAINED_SKILLS:
+            for name in fixture_skills:
                 skill = canonical / name
                 skill.mkdir(parents=True)
                 (skill / "SKILL.md").write_text(
                     f"---\nname: {name}\ndescription: fixture\n---\n# Fixture\n",
                     encoding="utf-8",
                 )
-            result = sync_skills(canonical_root=canonical, home=home)
-            self.assertTrue(result["ok"])
-            self.assertTrue(doctor_skills(canonical_root=canonical, home=home)["ok"])
+            with patch("agent_console.skills.SKILL_CATALOG", []):
+                result = sync_skills(canonical_root=canonical, home=home)
+                self.assertTrue(result["ok"])
+                self.assertTrue(doctor_skills(canonical_root=canonical, home=home)["ok"])
             for relative in (
                 Path(".codex/skills"),
                 Path(".claude/skills"),
                 Path(".hermes/skills/homelab"),
             ):
-                self.assertTrue((home / relative / "tailscale-router").is_symlink())
-                self.assertTrue((home / relative / "agent-console-ops").is_symlink())
+                for name in fixture_skills:
+                    self.assertTrue((home / relative / name).is_symlink())
 
     def test_openrouter_secret_is_hidden_and_mode_600(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

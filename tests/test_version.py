@@ -27,8 +27,20 @@ def _init_version() -> str:
     raise AssertionError("Could not find __version__ assignment in agent_console/__init__.py")
 
 
+def _ui_brand_version() -> str:
+    html = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    match = re.search(r"<small>v(\d+\.\d+\.\d+)</small>", html)
+    if not match:
+        raise AssertionError("Could not find UI brand version in web/static/index.html")
+    return match.group(1)
+
+
 def test_versions_match() -> None:
     assert _pyproject_version() == _init_version()
+
+
+def test_ui_brand_version_matches_package() -> None:
+    assert _ui_brand_version() == _init_version()
 
 
 # Regex for strict X.Y.Z release versions (no prerelease/build, no leading zeros).
