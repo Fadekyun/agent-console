@@ -6,9 +6,9 @@ All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/mig
 
 - **Date**: 2026-07-29
 - **Issue/PR**: [#44](https://github.com/Fadekyun/agent-console/issues/44) / [#53](https://github.com/Fadekyun/agent-console/pull/53)
-- **Impact**: Terminal keyboard focus is reliably restored across dedicated-terminal page load, silent brief loading (no composer focus theft), docked terminal open/tab-switch, composer submission, and background-output scenarios. Scroll and Select modes remain intentionally non-typing.
+- **Impact**: Terminal keyboard focus is reliably restored across dedicated-terminal page load, silent brief loading (no composer focus theft), docked terminal open/tab-switch, composer submission, and background-output scenarios. Scroll and Select modes remain intentionally non-typing. Release blockers resolved: the web UI brand now matches the package version (v0.1.5), explicitly disabled Claude keeps its disabled status when the launcher binary is absent, the skill-sync test is hermetic to ambient `AGCONSOLE_RETAINED_SKILLS`, and `install.sh` tolerates a deliberately disabled/non-executable Claude launcher without weakening required-provider or relative-path validation.
 - **Configuration/Migration**: None.
-- **Verification**: `node --input-type=module --check < web/static/terminal.js` (pass), `node --input-type=module --check < web/static/app.js` (pass), `python3 -m pytest tests/test_version.py` (2/2 pass), `python3 -m pytest tests/test_web.py` (53/54 pass, 1 pre-existing Claude-status environment failure), `npx playwright test tests/ui/console.spec.mjs --project=desktop --project=samsung --project=iphone` (78/78 pass, 30 skipped)
+- **Verification**: `node --input-type=module --check < web/static/terminal.js` (pass), `node --input-type=module --check < web/static/app.js` (pass), `python3 -m pytest tests/test_version.py` (3/3 pass), `python3 -m pytest tests/test_web.py` (52/52 pass), `python3 -m pytest tests/test_skills_secrets.py` (4/4 pass), `python3 -m pytest tests/test_installer.py` (47/47 pass), `npx playwright test tests/ui/console.spec.mjs --project=desktop --project=samsung --project=iphone` (78/78 pass, 30 skipped)
 - **Rollback**: Revert the commit. No data or config changes persist.
 
 Changes:
@@ -16,6 +16,10 @@ Changes:
 - Silent (`loadBrief(true)`) no longer focuses the composer.
 - Docked terminal iframes focus xterm on `load` and on `activateTerminal` tab switch.
 - Terminal focus is restored after composer submission in Type mode (unchanged behavior preserved).
+- `SessionManager.tool_catalog()` preserves an explicitly disabled Claude status instead of overwriting it with a launcher-missing error.
+- The skill-sync test now uses a fixed hermetic fixture list (`tailscale-router`, `agent-console-ops`) instead of import-time ambient `AGCONSOLE_RETAINED_SKILLS`.
+- `install.sh` tolerates a deliberately disabled/non-executable Claude launcher while remaining fatal for required providers and invalid relative paths.
+- UI brand version pinned to v0.1.5; a new test enforces the web UI brand matches `agent_console.__version__`.
 - Version 0.1.4 → 0.1.5.
 
 ## 0.1.4 (Unreleased)
