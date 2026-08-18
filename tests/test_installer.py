@@ -303,6 +303,23 @@ exit 0
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("absolute path", result.stderr)
 
+    def test_claude_bin_missing_is_skipped_when_claude_optional(self):
+        result = self._run({"AGCONSOLE_CLAUDE_BIN": "/nonexistent/claude"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        self.assertNotIn("FATAL", result.stderr)
+        env = self._env_path().read_text()
+        self.assertNotIn("AGCONSOLE_CLAUDE_BIN=", env)
+
+    def test_claude_bin_relative_path_still_rejected(self):
+        result = self._run({"AGCONSOLE_CLAUDE_BIN": "relative/path/claude"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("absolute path", result.stderr)
+
+    def test_required_tool_bin_missing_still_fatal(self):
+        result = self._run({"AGCONSOLE_OPENCODE_BIN": "/nonexistent/opencode"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not an executable file", result.stderr)
+
     def test_env_file_is_mode_600(self):
         self._create_tool("codex")
         result = self._run()

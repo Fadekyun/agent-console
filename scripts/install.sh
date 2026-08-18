@@ -5,7 +5,7 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 
 _resolve_bin() {
-  local var="$1" name="$2"
+  local var="$1" name="$2" required="${3:-1}"
   local val="${!var:-}"
   if [ -n "$val" ]; then
     case "$val" in
@@ -16,8 +16,13 @@ _resolve_bin() {
         ;;
     esac
     if [ ! -x "$val" ]; then
-      printf 'FATAL: %s=%s is not an executable file.\n' "$var" "$val" >&2
-      exit 1
+      if [ "$required" = "1" ]; then
+        printf 'FATAL: %s=%s is not an executable file.\n' "$var" "$val" >&2
+        exit 1
+      fi
+      printf 'WARNING: %s=%s is not an executable file; skipping optional tool %s.\n' "$var" "$val" "$name" >&2
+      printf ''
+      return 0
     fi
     printf '%s' "$val"
     return 0
@@ -33,7 +38,7 @@ python3 -m venv "$state/venv"
 "$state/venv/bin/pip" install -r "$root/web/requirements.txt"
 npm_cmd="$(command -v npm || echo "$HOME/.local/bin/npm")"
 codex_bin=$(_resolve_bin AGCONSOLE_CODEX_BIN codex)
-claude_bin=$(_resolve_bin AGCONSOLE_CLAUDE_BIN claude)
+claude_bin=$(_resolve_bin AGCONSOLE_CLAUDE_BIN claude 0)
 opencode_bin=$(_resolve_bin AGCONSOLE_OPENCODE_BIN opencode)
 hermes_bin=$(_resolve_bin AGCONSOLE_HERMES_BIN hermes)
 (cd "$root" && "$npm_cmd" ci --omit=dev --no-audit --no-fund)
