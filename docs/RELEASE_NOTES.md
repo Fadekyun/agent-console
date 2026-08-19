@@ -5,7 +5,7 @@ All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/mig
 ## 0.1.6 (Unreleased)
 
 - **Date**: 2026-08-19
-- **Issue/PR**: [#74](https://github.com/Fadekyun/agent-console/issues/74) / PR pending
+- **Issue/PR**: [#74](https://github.com/Fadekyun/agent-console/issues/74) / [#75](https://github.com/Fadekyun/agent-console/pull/75)
 - **Impact**: Adds a mandatory repository-local startup protocol for future development agents. `AGENTS.md` now requires reading `docs/START_HERE.md` and verifying the current epic, issue, existing PR/worktree, dependency state, scope, non-goals, and deployment state before implementation. The start-here document records the #72 inference-phase implementation order, identifies #73 as the current future staging gate and #32 as historical, and defines a durable end-of-session handoff format.
 - **Configuration/Migration**: None. Documentation/governance only.
 - **Verification**: Confirm `AGENTS.md` links to `docs/START_HERE.md`; confirm the startup protocol references #72/#73 and current implementation sequence; run version-consistency tests before merge.
