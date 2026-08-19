@@ -6,6 +6,7 @@ This document tracks the planned and completed development work for Agent Consol
 
 ### 0.1.x (Current)
 
+- [x] **Mandatory development-agent startup protocol** (2026-08-19, [#74](https://github.com/Fadekyun/agent-console/issues/74)) — `AGENTS.md` now requires every development agent to read `docs/START_HERE.md` and verify the live epic/issue/PR/dependency state before implementation; the document also records the current #72 implementation sequence and durable end-of-session handoff format.
 - [x] **Provider dropdowns aligned between desktop and mobile** (2026-07-28, [#37](https://github.com/Fadekyun/agent-console/issues/37)) — Identical labels, order, defaults, strict backend validation, race-condition-safe context filtering.
 - [x] **Per-PR release governance** (2026-07-28) — AGENTS.md, roadmap, release notes, version bump policy.
 - [x] **Profile instruction alignment** (2026-07-29, [#46](https://github.com/Fadekyun/agent-console/issues/46)) — Orchestrator is session coordinator (not infrastructure), operator is a legacy alias, all profiles have correct lifecycle rules and boundaries. PROFILE_SCHEMA descriptions match markdown profiles.
