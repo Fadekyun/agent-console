@@ -1,5 +1,15 @@
 # Agent Console — Agent Working Rules
 
+## Mandatory Startup Protocol
+
+**Before inspecting implementation details, creating a worktree, changing files, or starting an issue, every development agent MUST read [`docs/START_HERE.md`](docs/START_HERE.md).**
+
+Then the agent MUST verify the current GitHub state for the intended work: read the relevant master epic and its latest comments, the exact target issue and its latest comments, and any existing PR/branch/worktree for that issue. Do not begin implementation from stale chat history, an old roadmap entry, or an issue title alone.
+
+Before writing code, establish the target issue, issue status, existing PR/worktree, dependency state, documents read, bounded scope, explicit non-goals, and current deployment state as described in `docs/START_HERE.md`.
+
+If repository documentation, GitHub state, and code disagree, do not guess. Surface/reconcile the discrepancy and retain the narrower safe boundary until it is resolved.
+
 ## PR Governance
 
 Every PR targeting `main` MUST:
@@ -18,8 +28,10 @@ Every PR targeting `main` MUST:
 
 ## Workflow
 
+- Read `docs/START_HERE.md` and verify the live tracker state before starting work.
 - Create an issue before starting work.
 - Create a branch and worktree from the base commit.
 - Implement, test, commit.
 - Open a PR for review.
+- Leave the end-of-session handoff described in `docs/START_HERE.md` for meaningful development sessions.
 - Do not merge, deploy, or release without explicit human authorization.
