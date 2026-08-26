@@ -12,6 +12,7 @@ from .validation import PROFILES, TOOLS, validate_session_name, validate_tool
 
 DIRECT_NAMES = {
     "codex": "codex-nocode",
+    "codex-pro": "codex-pro-nocode",
     "claude": "claude",
     "opencode": "opencode",
     "hermes": "hermes",
@@ -64,7 +65,7 @@ def new_session(manager: SessionManager, scoped_tool: str | None) -> None:
     auth_context = choose("Authentication context", available, default_context)
     if tool == "opencode":
         agent_mode = choose("OpenCode mode", ["plan", "build"], "plan")
-    elif tool == "codex":
+    elif tool in {"codex", "codex-pro"}:
         agent_mode = choose("Codex mode", ["auto", "plan"], "auto")
     else:
         agent_mode = None

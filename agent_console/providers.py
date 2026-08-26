@@ -23,6 +23,7 @@ def _resolve_binary(env_var: str, fallback: str) -> Path:
 
 TOOL_BINARIES = {
     "codex": _resolve_binary("AGCONSOLE_CODEX_BIN", "codex"),
+    "codex-pro": Path(os.getenv("AGCONSOLE_CODEX_PRO_BIN", str(_resolve_binary("AGCONSOLE_CODEX_BIN", "codex")))),
     "claude": _resolve_binary("AGCONSOLE_CLAUDE_BIN", "claude"),
     "opencode": _resolve_binary("AGCONSOLE_OPENCODE_BIN", "opencode"),
     "hermes": _resolve_binary("AGCONSOLE_HERMES_BIN", "hermes"),
@@ -114,7 +115,7 @@ class CodexAdapter(ProviderAdapter):
         return True
 
     def build_environment(self, context: dict[str, Any]) -> dict[str, str]:
-        return {"CODEX_HOME": str(self.registry.codex_home(context["name"]))}
+        return {"CODEX_HOME": str(self.registry.codex_home(context["name"], tool=self.tool))}
 
     def build_argv(self, **kwargs: Any) -> list[str]:
         mode = kwargs["agent_mode"] or ("plan" if kwargs["read_only"] else "auto")
@@ -145,6 +146,12 @@ class CodexAdapter(ProviderAdapter):
     def login(self, context: dict[str, Any]) -> int:
         env = {**os.environ, **self.build_environment(context)}
         return subprocess.run([str(self.binary), "login", "--device-auth"], env=env).returncode
+
+
+class CodexProAdapter(CodexAdapter):
+    """A separately configured Codex provider using the same Codex CLI semantics."""
+
+    tool = "codex-pro"
 
 
 class ClaudeAdapter(ProviderAdapter):
@@ -212,6 +219,7 @@ class ShellAdapter(ProviderAdapter):
 
 ADAPTERS = {
     "codex": CodexAdapter,
+    "codex-pro": CodexProAdapter,
     "claude": ClaudeAdapter,
     "opencode": OpenCodeAdapter,
     "hermes": HermesAdapter,

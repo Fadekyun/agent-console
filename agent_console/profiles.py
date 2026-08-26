@@ -230,7 +230,7 @@ def validate_profile_capability(
     # Read-only profiles must use plan mode (checked before generic constraint
     # so error messages match the primary semantic reason)
     if rwc == "read_only":
-        if tool == "codex" and agent_mode not in (None, "plan"):
+        if tool in {"codex", "codex-pro"} and agent_mode not in (None, "plan"):
             return {
                 "allowed": False,
                 "reason": "read-only profiles must use Codex Plan mode",

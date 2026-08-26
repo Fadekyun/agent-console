@@ -849,19 +849,20 @@ function updateAgentModeField() {
   const select = newForm.elements.agent_mode;
   const p = state.identity.profiles.find(x => x.name === profile);
   const readOnly = p ? p.read_write_capability === 'read_only' : false;
-  const visible = tool === 'codex' || tool === 'opencode';
+  const codexLike = tool === 'codex' || tool === 'codex-pro';
+  const visible = codexLike || tool === 'opencode';
   field.hidden = !visible; select.disabled = !visible;
   if (!visible) return;
-  const choices = tool === 'codex'
+  const choices = codexLike
     ? (readOnly ? [['plan', 'Plan']] : [['auto', 'Auto'], ['plan', 'Plan']])
     : (readOnly ? [['plan', 'Plan']] : [['plan', 'Plan'], ['build', 'Build']]);
   const previous = select.value;
   select.replaceChildren(...choices.map(([value, label]) => new Option(label, value)));
-  const fallback = tool === 'codex' && !readOnly ? 'auto' : 'plan';
+  const fallback = codexLike && !readOnly ? 'auto' : 'plan';
   const preserve = field.dataset.tool === tool && choices.some(([value]) => value === previous);
   select.value = preserve ? previous : fallback; field.dataset.tool = tool;
-  $('#agent-mode-label').textContent = `${tool === 'codex' ? 'Codex' : 'OpenCode'} mode`;
-  $('#agent-mode-help').textContent = tool === 'codex'
+  $('#agent-mode-label').textContent = `${codexLike ? (tool === 'codex-pro' ? 'Codex Pro' : 'Codex') : 'OpenCode'} mode`;
+  $('#agent-mode-help').textContent = codexLike
     ? (select.value === 'plan' ? 'Read-only planning; no file or system changes.' : 'Workspace-write with approvals on request; not unrestricted host access.')
     : (select.value === 'plan' ? 'Planning is the default.' : 'Build is explicitly write-capable.');
   select.onchange = updateAgentModeField;

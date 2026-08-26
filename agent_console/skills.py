@@ -11,7 +11,7 @@ from .validation import PROFILES
 
 log = logging.getLogger(__name__)
 
-SUPPORTED_TOOLS = frozenset({"codex", "claude", "hermes"})
+SUPPORTED_TOOLS = frozenset({"codex", "codex-pro", "claude", "hermes"})
 SKILL_KINDS = frozenset({"standard", "superpower"})
 
 
@@ -164,6 +164,7 @@ def _tool_root(tool: str, home: Path | None = None) -> Path:
     h = home or Path.home()
     roots = {
         "codex": h / ".codex" / "skills",
+        "codex-pro": h / ".codex" / "skills",
         "claude": h / ".claude" / "skills",
         "hermes": h / ".hermes" / "skills" / "homelab",
     }
