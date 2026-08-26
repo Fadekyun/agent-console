@@ -2,6 +2,15 @@
 
 All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
+## 0.2.0 (Unreleased)
+
+- **Date**: 2026-08-26
+- **Issue/PR**: [#76](https://github.com/Fadekyun/agent-console/issues/76) / pending
+- **Impact**: Adds `codex-pro` as a distinct selectable provider that mirrors Codex execution, profile enforcement, skill isolation, and plan/auto modes.
+- **Configuration/Migration**: Existing registries gain a separate `codex-pro/default` OAuth-native context at `~/.config/agent-console/codex-pro/default`; it must be logged in independently.
+- **Verification**: Provider and authentication tests; desktop and mobile JavaScript syntax checks.
+- **Rollback**: Revert the commit. The new authentication directory can remain unused and does not affect the existing Codex context.
+
 ## 0.1.5 (Unreleased)
 
 - **Date**: 2026-07-29

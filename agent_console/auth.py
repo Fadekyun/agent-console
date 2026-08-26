@@ -23,6 +23,7 @@ def default_registry() -> dict[str, Any]:
         "version": REGISTRY_VERSION,
         "defaults": {
             "codex": "default",
+            "codex-pro": "default",
             "claude": "default",
             "opencode": "opencode-go-default",
             "hermes": "openrouter-main",
@@ -34,6 +35,15 @@ def default_registry() -> dict[str, Any]:
                     "provider": "openai",
                     "kind": "oauth-native",
                     "source_ref": "codex/default",
+                    "enabled": True,
+                    "verified": False,
+                }
+            },
+            "codex-pro": {
+                "default": {
+                    "provider": "openai",
+                    "kind": "oauth-native",
+                    "source_ref": "codex-pro/default",
                     "enabled": True,
                     "verified": False,
                 }
@@ -109,8 +119,22 @@ class AuthRegistry:
 
     def _ensure_builtin_contexts(self) -> None:
         data = self._read()
-        contexts = data.setdefault("contexts", {}).setdefault("opencode", {})
+        codex_pro_contexts = data.setdefault("contexts", {}).setdefault("codex-pro", {})
         dirty = False
+        if "default" not in codex_pro_contexts:
+            codex_pro_contexts["default"] = {
+                "provider": "openai",
+                "kind": "oauth-native",
+                "source_ref": "codex-pro/default",
+                "enabled": True,
+                "verified": False,
+            }
+            dirty = True
+        defaults = data.setdefault("defaults", {})
+        if not defaults.get("codex-pro"):
+            defaults["codex-pro"] = "default"
+            dirty = True
+        contexts = data.setdefault("contexts", {}).setdefault("opencode", {})
         
         # Migrate old opencode-go-default (was mapping to opencode/ZEN)
         old_entry = contexts.get("opencode-go-default")
@@ -174,9 +198,11 @@ class AuthRegistry:
     def secret_path(self, credential: str) -> Path:
         return self.secrets_dir / f"{validate_context_name(credential)}.env"
 
-    def codex_home(self, context: str) -> Path:
+    def codex_home(self, context: str, *, tool: str = "codex") -> Path:
         context = validate_context_name(context)
-        path = self.config_dir / "codex" / context
+        if tool not in {"codex", "codex-pro"}:
+            raise ValueError(f"{tool} does not use a Codex native store")
+        path = self.config_dir / tool / context
         path.mkdir(parents=True, exist_ok=True, mode=0o700)
         path.chmod(0o700)
         skills = self.home / ".codex" / "skills"
@@ -218,11 +244,11 @@ class AuthRegistry:
     def _status(self, tool: str, name: str, context: dict[str, Any]) -> tuple[str, str | None]:
         if not context.get("enabled", True):
             return "disabled", context.get("disabled_reason") or "context disabled"
-        if tool == "codex":
-            auth_file = self.codex_home(name) / "auth.json"
+        if tool in {"codex", "codex-pro"}:
+            auth_file = self.codex_home(name, tool=tool) / "auth.json"
             return ("ready", None) if auth_file.is_file() else (
                 "setup-required",
-                f"run agentctl auth login codex --context {name}",
+                f"run agentctl auth login {tool} --context {name}",
             )
         secret_ref = context.get("secret_ref")
         if secret_ref:

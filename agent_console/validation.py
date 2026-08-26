@@ -6,7 +6,7 @@ from pathlib import Path
 
 SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 PLAN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-TOOLS = frozenset({"codex", "claude", "opencode", "hermes", "shell"})
+TOOLS = frozenset({"codex", "codex-pro", "claude", "opencode", "hermes", "shell"})
 AGENT_MODES = frozenset({"plan", "build"})
 PROFILES = frozenset(
     {

@@ -1247,9 +1247,9 @@ class SessionManager:
         if base.exists():
             shutil.rmtree(base)
         base.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if tool == "codex":
+        if tool in {"codex", "codex-pro"}:
             context_name = auth_context.get("name", "default")
-            real_home = self.auth.codex_home(context_name)
+            real_home = self.auth.codex_home(context_name, tool=tool)
             overlay = base / "codex-home"
             overlay.mkdir(parents=True, exist_ok=True, mode=0o700)
             auth_json = real_home / "auth.json"
@@ -1359,7 +1359,7 @@ class SessionManager:
             if not selected_model["selectable"]:
                 raise ValueError("selected OpenCode model is deprecated or unavailable")
             permission_mode = "auto"
-        elif tool == "codex":
+        elif tool in {"codex", "codex-pro"}:
             profile_read_only = PROFILE_SCHEMA[profile]["read_write_capability"] == "read_only"
             agent_mode = agent_mode or ("plan" if profile_read_only else "auto")
             if agent_mode not in {"plan", "auto"}:
