@@ -79,6 +79,8 @@ class ProviderAdapter:
         agent_mode: str | None,
         model: str | None,
         read_only: bool,
+        reasoning_effort: str | None = None,
+        plan_reasoning_effort: str | None = None,
     ) -> list[str]:
         raise NotImplementedError
 
@@ -107,6 +109,23 @@ class ProviderAdapter:
         return {"ok": context["status"] == "ready", "context": context}
 
 
+def _codex_pin_args(
+    *,
+    model: str | None,
+    reasoning_effort: str | None,
+    plan_reasoning_effort: str | None,
+) -> list[str]:
+    """Build `-c` override args for a Codex model/effort pin."""
+    args: list[str] = []
+    if model:
+        args += ["-c", f'model="{model}"']
+    if reasoning_effort:
+        args += ["-c", f'model_reasoning_effort="{reasoning_effort}"']
+    if plan_reasoning_effort:
+        args += ["-c", f'plan_mode_reasoning_effort="{plan_reasoning_effort}"']
+    return args
+
+
 class CodexAdapter(ProviderAdapter):
     tool = "codex"
 
@@ -131,7 +150,7 @@ class CodexAdapter(ProviderAdapter):
                 "\n\nThis Codex session is in Plan mode. Inspect and reason, but do not modify "
                 "files or system state. Return an actionable plan for the user to approve."
             )
-        return [
+        argv = [
             str(self.binary),
             "--sandbox",
             sandbox,
@@ -142,6 +161,12 @@ class CodexAdapter(ProviderAdapter):
             "-c",
             f"developer_instructions={role}",
         ]
+        argv += _codex_pin_args(
+            model=kwargs.get("model"),
+            reasoning_effort=kwargs.get("reasoning_effort"),
+            plan_reasoning_effort=kwargs.get("plan_reasoning_effort"),
+        )
+        return argv
 
     def login(self, context: dict[str, Any]) -> int:
         env = {**os.environ, **self.build_environment(context)}

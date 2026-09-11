@@ -96,6 +96,12 @@ class CreateSessionRequest(BaseModel):
     agent_mode: str | None = Field(default=None, pattern="^(plan|build|auto)$")
     provider: str | None = Field(default=None, pattern="^[a-z0-9-]+$")
     model: str | None = Field(default=None, max_length=240)
+    reasoning_effort: str | None = Field(
+        default=None, pattern="^(low|medium|high|xhigh|max|ultra)$"
+    )
+    plan_reasoning_effort: str | None = Field(
+        default=None, pattern="^(low|medium|high|xhigh|max|ultra)$"
+    )
     project_id: str | None = Field(default=None, max_length=80)
 
 
@@ -128,6 +134,13 @@ class DelegationRequest(BaseModel):
     tool: str = "codex"
     auth_context: str | None = Field(default=None, max_length=64)
     agent_mode: str | None = Field(default=None, pattern="^(plan|build|auto)$")
+    model: str | None = Field(default=None, max_length=240)
+    reasoning_effort: str | None = Field(
+        default=None, pattern="^(low|medium|high|xhigh|max|ultra)$"
+    )
+    plan_reasoning_effort: str | None = Field(
+        default=None, pattern="^(low|medium|high|xhigh|max|ultra)$"
+    )
     task: str = Field(min_length=1, max_length=12000)
     repository: str | None = None
     name: str | None = Field(default=None, max_length=80)
@@ -529,6 +542,8 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             agent_mode=payload.agent_mode,
             provider=payload.provider,
             model=payload.model,
+            reasoning_effort=payload.reasoning_effort,
+            plan_reasoning_effort=payload.plan_reasoning_effort,
             creator_surface="web",
             project_id=payload.project_id,
         )
@@ -548,6 +563,9 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             name=payload.name,
             auth_context=payload.auth_context,
             agent_mode=payload.agent_mode,
+            model=payload.model,
+            reasoning_effort=payload.reasoning_effort,
+            plan_reasoning_effort=payload.plan_reasoning_effort,
             creator_surface="web",
         )
 

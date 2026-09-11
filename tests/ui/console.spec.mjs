@@ -1139,3 +1139,25 @@ test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Sele
   // Parent frame reflects focus restored on the first iframe
   await expect.poll(() => focusedIframeSrc(page)).toContain('session=codex-root');
 });
+
+
+test('Codex model and effort controls send overrides and clear them for other tools', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop session form controls');
+  const { requests } = await mockApi(page);
+  await page.goto('/desktop#new');
+  const form = page.locator('#new-session');
+  await form.locator('[name="codex_model"]').fill('gpt-5.6-terra');
+  await form.locator('[name="codex_effort"]').selectOption('medium');
+  await form.locator('[name="codex_plan_effort"]').selectOption('high');
+  await form.locator('button[type="submit"]').click();
+  await expect.poll(() => requests.filter(r => r.path === '/api/sessions').length).toBe(1);
+  const first = requests.find(r => r.path === '/api/sessions').body;
+  expect(first).toMatchObject({ tool: 'codex', model: 'gpt-5.6-terra', reasoning_effort: 'medium', plan_reasoning_effort: 'high' });
+  expect(first).not.toHaveProperty('codex_model');
+  await form.locator('[name="tool"]').selectOption('shell');
+  await expect(form.locator('[name="codex_model"]')).toBeDisabled();
+  await form.locator('button[type="submit"]').click();
+  await expect.poll(() => requests.filter(r => r.path === '/api/sessions').length).toBe(2);
+  const second = requests.filter(r => r.path === '/api/sessions')[1].body;
+  expect(second).toMatchObject({ tool: 'shell', model: null, reasoning_effort: null, plan_reasoning_effort: null });
+});

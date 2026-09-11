@@ -872,6 +872,105 @@ class SessionIntegrationTests(unittest.TestCase):
             else:
                 os.environ.pop("AGCONSOLE_CODEX_BIN", None)
 
+    def test_codex_launch_spec_pins_model_and_effort(self) -> None:
+        from agent_console.providers import TOOL_BINARIES
+        stub = Path(self.temp.name) / "codex-pin-stub"
+        stub.write_text("#!/usr/bin/env bash\necho stub\n", encoding="utf-8")
+        stub.chmod(0o755)
+        original = TOOL_BINARIES.get("codex")
+        TOOL_BINARIES["codex"] = stub
+        try:
+            spec = self.manager._launch_spec(
+                "codex",
+                "coder",
+                self.workspace,
+                "pin test",
+                agent_mode="auto",
+                model="gpt-5.6-sol",
+                reasoning_effort="high",
+                plan_reasoning_effort="xhigh",
+                session_name="pin-spec-test",
+                session_id="sess-pin-spec-test",
+            )
+            self.assertIn('model="gpt-5.6-sol"', spec.argv)
+            self.assertIn('model_reasoning_effort="high"', spec.argv)
+            self.assertIn('plan_mode_reasoning_effort="xhigh"', spec.argv)
+        finally:
+            if original is not None:
+                TOOL_BINARIES["codex"] = original
+
+    def test_create_codex_model_pin_persists(self) -> None:
+        from agent_console.providers import TOOL_BINARIES
+        stub = Path(self.temp.name) / "codex-create-stub"
+        stub.write_text("#!/usr/bin/env bash\necho stub\n", encoding="utf-8")
+        stub.chmod(0o755)
+        original = TOOL_BINARIES.get("codex")
+        TOOL_BINARIES["codex"] = stub
+        try:
+            session = self.manager.create(
+                tool="codex",
+                profile="coder",
+                name="pin-create-test",
+                repository=str(self.workspace),
+                model="gpt-5.6-luna",
+                reasoning_effort="low",
+                plan_reasoning_effort="low",
+            )
+            self.assertEqual(session["model"], "gpt-5.6-luna")
+            launcher = Path(self.manager.settings.state_dir) / "launchers" / "pin-create-test.sh"
+            text = launcher.read_text(encoding="utf-8")
+            self.assertIn('model="gpt-5.6-luna"', text)
+            self.assertIn('model_reasoning_effort="low"', text)
+            self.manager.kill("pin-create-test")
+        finally:
+            if original is not None:
+                TOOL_BINARIES["codex"] = original
+
+    def test_delegated_codex_pin_survives_restart(self) -> None:
+        stub = Path(self.temp.name) / "codex-delegate-stub"
+        stub.write_text("#!/usr/bin/env bash\nsleep 60\n", encoding="utf-8")
+        stub.chmod(0o755)
+        parent = self.manager.create(tool="shell", profile="general", name="pin-parent",
+                                     repository=str(self.workspace))
+        with patch.dict(TOOL_BINARIES, {"codex": stub}):
+            child = self.manager.delegate(
+                profile="planner", parent=parent["id"], task="inspect only", tool="codex",
+                name="pin-child", model="gpt-5.6-terra", reasoning_effort="medium",
+                plan_reasoning_effort="high",
+            )["session"]
+            self.assertEqual(child["parent_session_id"], parent["id"])
+            self.assertEqual(child["model"], "gpt-5.6-terra")
+            launcher = Path(child["launcher_path"])
+            before = launcher.read_text()
+            self.manager.restart("pin-child")
+            after = launcher.read_text()
+            for value in ('model="gpt-5.6-terra"', 'model_reasoning_effort="medium"',
+                          'plan_mode_reasoning_effort="high"'):
+                self.assertIn(value, before)
+                self.assertIn(value, after)
+            self.assertEqual(self.manager.inspect("pin-child")["agent_mode"], "plan")
+            self.manager.kill("pin-child")
+
+    def test_create_rejects_invalid_codex_pin(self) -> None:
+        with self.assertRaises(ValueError):
+            self.manager.create(
+                tool="codex", profile="coder", name="bad-effort-test",
+                repository=str(self.workspace), reasoning_effort="turbo",
+            )
+        with self.assertRaises(ValueError):
+            self.manager.create(
+                tool="codex", profile="coder", name="bad-model-test",
+                repository=str(self.workspace), model="gpt 5.6",
+            )
+
+    def test_create_rejects_effort_for_non_codex(self) -> None:
+        with self.assertRaises(ValueError):
+            self.manager.create(
+                tool="opencode", profile="coder", name="opencode-effort-test",
+                repository=str(self.workspace), model="opencode-go/gpt-5.6-luna",
+                reasoning_effort="high",
+            )
+
     def test_empty_assignments_creates_empty_overlay(self) -> None:
         with patch.object(
             self.manager,
