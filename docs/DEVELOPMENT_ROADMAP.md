@@ -4,6 +4,7 @@ This document tracks the planned and completed development work for Agent Consol
 
 ## Completed
 
+- [x] **Codex Plan network access restored** (2026-09-12, [#83](https://github.com/Fadekyun/agent-console/issues/83)) — `AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS` again switches Codex Plan sessions to `workspace-write` with sandbox network access while keeping the read-only approval policy; unset keeps strict read-only.
 - [x] **Native session model and effort selection** (2026-09-11, [#78](https://github.com/Fadekyun/agent-console/issues/78)) — Create/delegate accept Codex model, reasoning effort and Plan effort; launchers preserve overrides across restart. Desktop creation exposes optional controls. The orchestrator skill uses native flags when available.
 
 ### 0.1.x (Current)

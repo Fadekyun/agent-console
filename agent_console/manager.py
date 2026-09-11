@@ -1405,7 +1405,16 @@ class SessionManager:
                 plan_reasoning_effort=plan_reasoning_effort,
             )
             provider = context.get("provider")
-            permission_mode = "read-only" if agent_mode == "plan" else "workspace-write"
+            plan_network = os.getenv("AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS", "").lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            permission_mode = (
+                "plan-network"
+                if agent_mode == "plan" and plan_network
+                else "read-only" if agent_mode == "plan" else "workspace-write"
+            )
         else:
             if reasoning_effort is not None or plan_reasoning_effort is not None:
                 raise ValueError(

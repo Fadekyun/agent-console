@@ -2,6 +2,15 @@
 
 All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
+## 0.3.1 (Unreleased)
+
+- **Date**: 2026-09-12
+- **Issue/PR**: [#83](https://github.com/Fadekyun/agent-console/issues/83) / pending
+- **Impact**: Restores the documented `AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS` behavior for Codex/Codex Pro Plan sessions. When the variable is enabled, Plan mode keeps its read-only approval policy but runs with `--sandbox workspace-write` plus `sandbox_workspace_write.network_access=true`, so planning sessions can inspect other hosts over the network (for example SSH to N100/LXC nodes). Permission mode is reported as `plan-network`; with the variable unset, Plan mode stays strictly read-only as before.
+- **Configuration/Migration**: No database migration. Set `AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS=1` in the service environment to enable network access for Plan sessions. Apply the change through the supported update flow so the flag reaches the service environment.
+- **Verification**: New core tests cover the env-enabled sandbox/network flags and `plan-network` permission mode, plus the strict read-only default when the variable is absent; existing core/web/skill/version suites pass.
+- **Rollback**: Unset `AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS` (immediate return to read-only Plan) or restore the previous console release through the update flow; running launchers are unaffected.
+
 ## 0.3.0 (Unreleased)
 
 - **Date**: 2026-09-11
