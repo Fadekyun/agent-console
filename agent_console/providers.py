@@ -142,7 +142,14 @@ class CodexAdapter(ProviderAdapter):
             raise ValueError("Codex mode must be plan or auto")
         if kwargs["read_only"] and mode != "plan":
             raise ValueError("read-only profiles must use Codex Plan mode")
-        sandbox = "read-only" if mode == "plan" else "workspace-write"
+        plan_network = os.getenv("AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        sandbox = "workspace-write" if mode == "plan" and plan_network else (
+            "read-only" if mode == "plan" else "workspace-write"
+        )
         approval = "never" if mode == "plan" else "on-request"
         role = kwargs["role"]
         if mode == "plan":
@@ -156,6 +163,10 @@ class CodexAdapter(ProviderAdapter):
             sandbox,
             "--ask-for-approval",
             approval,
+        ]
+        if mode == "plan" and plan_network:
+            argv += ["-c", "sandbox_workspace_write.network_access=true"]
+        argv += [
             "-C",
             str(kwargs["cwd"]),
             "-c",

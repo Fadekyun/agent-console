@@ -278,23 +278,24 @@ class SessionIntegrationTests(unittest.TestCase):
         self.assertIn("--auto", build)
 
     def test_codex_plan_and_auto_launch_modes(self) -> None:
-        auto = self.manager._launcher_args(
-            "codex", "general", self.workspace, None, agent_mode="auto"
-        )
-        self.assertIn("workspace-write", auto)
-        self.assertIn("on-request", auto)
-        self.assertNotIn("danger-full-access", auto)
-        plan = self.manager._launcher_args(
-            "codex", "general", self.workspace, None, agent_mode="plan"
-        )
-        self.assertIn("read-only", plan)
-        self.assertIn("never", plan)
-        self.assertIn("Plan mode", plan[-1])
-        with self.assertRaisesRegex(ValueError, "Plan mode"):
-            self.manager.create(
-                tool="codex", profile="planner", name="bad-codex-auto",
-                repository=str(self.workspace), agent_mode="auto",
+        with patch.dict(os.environ, {"AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS": ""}):
+            auto = self.manager._launcher_args(
+                "codex", "general", self.workspace, None, agent_mode="auto"
             )
+            self.assertIn("workspace-write", auto)
+            self.assertIn("on-request", auto)
+            self.assertNotIn("danger-full-access", auto)
+            plan = self.manager._launcher_args(
+                "codex", "general", self.workspace, None, agent_mode="plan"
+            )
+            self.assertIn("read-only", plan)
+            self.assertIn("never", plan)
+            self.assertIn("Plan mode", plan[-1])
+            with self.assertRaisesRegex(ValueError, "Plan mode"):
+                self.manager.create(
+                    tool="codex", profile="planner", name="bad-codex-auto",
+                    repository=str(self.workspace), agent_mode="auto",
+                )
 
     def test_claude_creation_is_disabled_but_not_removed(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "subscription inactive"):
@@ -950,6 +951,50 @@ class SessionIntegrationTests(unittest.TestCase):
                 self.assertIn(value, after)
             self.assertEqual(self.manager.inspect("pin-child")["agent_mode"], "plan")
             self.manager.kill("pin-child")
+
+    def test_codex_plan_network_env_enables_network_sandbox(self) -> None:
+        from agent_console.providers import TOOL_BINARIES
+        stub = Path(self.temp.name) / "codex-net-stub"
+        stub.write_text("#!/usr/bin/env bash\nsleep 60\n", encoding="utf-8")
+        stub.chmod(0o755)
+        previous = os.environ.get("AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS")
+        os.environ["AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS"] = "1"
+        try:
+            with patch.dict(TOOL_BINARIES, {"codex": stub}):
+                spec = self.manager._launch_spec(
+                    "codex", "planner", self.workspace, "net plan",
+                    agent_mode="plan", session_name="net-plan-spec",
+                    session_id="sess-net-plan-spec",
+                )
+                self.assertIn("sandbox_workspace_write.network_access=true", spec.argv)
+                sandbox_index = spec.argv.index("--sandbox")
+                self.assertEqual(spec.argv[sandbox_index + 1], "workspace-write")
+                session = self.manager.create(
+                    tool="codex", profile="planner", name="net-plan-session",
+                    repository=str(self.workspace), agent_mode="plan",
+                )
+                self.assertEqual(session["permission_mode"], "plan-network")
+                self.manager.kill("net-plan-session")
+        finally:
+            if previous is None:
+                os.environ.pop("AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS", None)
+            else:
+                os.environ["AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS"] = previous
+
+    def test_codex_plan_without_env_stays_read_only(self) -> None:
+        previous = os.environ.pop("AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS", None)
+        try:
+            spec = self.manager._launch_spec(
+                "codex", "planner", self.workspace, "plain plan",
+                agent_mode="plan", session_name="plain-plan-spec",
+                session_id="sess-plain-plan-spec",
+            )
+            self.assertNotIn("sandbox_workspace_write.network_access=true", spec.argv)
+            sandbox_index = spec.argv.index("--sandbox")
+            self.assertEqual(spec.argv[sandbox_index + 1], "read-only")
+        finally:
+            if previous is not None:
+                os.environ["AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS"] = previous
 
     def test_create_rejects_invalid_codex_pin(self) -> None:
         with self.assertRaises(ValueError):
