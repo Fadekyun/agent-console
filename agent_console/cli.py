@@ -184,7 +184,7 @@ def parser() -> argparse.ArgumentParser:
     delegate.add_argument("--name")
     delegate.add_argument("--auth-context")
     delegate.add_argument("--agent-mode", choices=["plan", "build", "auto"])
-    delegate.add_argument("--model", help="Codex model for the child (codex/codex-pro only)")
+    delegate.add_argument("--model", help="Model for the child (codex/codex-pro or provider-qualified OpenCode)")
     delegate.add_argument("--effort", choices=sorted(CODEX_EFFORT_LEVELS),
                           help="Codex reasoning effort (codex/codex-pro only)")
     delegate.add_argument("--plan-effort", choices=sorted(CODEX_EFFORT_LEVELS),

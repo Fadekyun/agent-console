@@ -73,7 +73,7 @@ def _validate_codex_pin(
     reasoning_effort: str | None,
     plan_reasoning_effort: str | None,
 ) -> None:
-    if model is not None and not CODEX_MODEL_PATTERN.match(model):
+    if model is not None and not CODEX_MODEL_PATTERN.fullmatch(model):
         raise ValueError(f"invalid Codex model name: {model!r}")
     for label, effort in (
         ("reasoning effort", reasoning_effort),
@@ -83,6 +83,8 @@ def _validate_codex_pin(
             raise ValueError(
                 f"Codex {label} must be one of: {', '.join(sorted(CODEX_EFFORT_LEVELS))}"
             )
+
+
 class SessionManager:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings.from_env()

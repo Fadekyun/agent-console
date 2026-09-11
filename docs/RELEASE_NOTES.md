@@ -2,6 +2,15 @@
 
 All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
+## 0.3.0 (Unreleased)
+
+- **Date**: 2026-09-11
+- **Issue/PR**: [#78](https://github.com/Fadekyun/agent-console/issues/78) / pending
+- **Impact**: CLI/API create and delegation can pin Codex/Codex Pro models and reasoning effort before the first process starts. Desktop session creation exposes optional model, reasoning effort and Plan effort controls. Delegation also forwards provider-qualified OpenCode models. Existing default selection is preserved when overrides are omitted.
+- **Configuration/Migration**: No database migration. The existing model field records the chosen model; effort overrides live in the persisted launcher. Model availability remains account-dependent. The private orchestrator skill enforces its tier policy separately.
+- **Verification**: Core, web, deployment, profile, skill and version suites; JavaScript syntax; delegation/restart pin regression. Skill wrapper uses isolated CLI fixtures for native and legacy capabilities.
+- **Rollback**: Restore the previous console release. Existing launchers retain their explicit model/effort flags; changing the installed release does not rewrite running sessions. The skill detects older CLI capabilities and retains its legacy pinning path.
+
 ## 0.2.0 (Unreleased)
 
 - **Date**: 2026-08-26

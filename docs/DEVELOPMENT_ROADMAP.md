@@ -4,6 +4,8 @@ This document tracks the planned and completed development work for Agent Consol
 
 ## Completed
 
+- [x] **Native session model and effort selection** (2026-09-11, [#78](https://github.com/Fadekyun/agent-console/issues/78)) — Create/delegate accept Codex model, reasoning effort and Plan effort; launchers preserve overrides across restart. Desktop creation exposes optional controls. The orchestrator skill uses native flags when available.
+
 ### 0.1.x (Current)
 
 - [x] **Selectable Codex Pro provider** (2026-08-26, [#76](https://github.com/Fadekyun/agent-console/issues/76)) — Adds `codex-pro` as a separate Codex-compatible provider with an independently stored authentication context and identical plan/auto execution controls.

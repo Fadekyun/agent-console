@@ -926,6 +926,31 @@ class SessionIntegrationTests(unittest.TestCase):
             if original is not None:
                 TOOL_BINARIES["codex"] = original
 
+    def test_delegated_codex_pin_survives_restart(self) -> None:
+        stub = Path(self.temp.name) / "codex-delegate-stub"
+        stub.write_text("#!/usr/bin/env bash\nsleep 60\n", encoding="utf-8")
+        stub.chmod(0o755)
+        parent = self.manager.create(tool="shell", profile="general", name="pin-parent",
+                                     repository=str(self.workspace))
+        with patch.dict(TOOL_BINARIES, {"codex": stub}):
+            child = self.manager.delegate(
+                profile="planner", parent=parent["id"], task="inspect only", tool="codex",
+                name="pin-child", model="gpt-5.6-terra", reasoning_effort="medium",
+                plan_reasoning_effort="high",
+            )["session"]
+            self.assertEqual(child["parent_session_id"], parent["id"])
+            self.assertEqual(child["model"], "gpt-5.6-terra")
+            launcher = Path(child["launcher_path"])
+            before = launcher.read_text()
+            self.manager.restart("pin-child")
+            after = launcher.read_text()
+            for value in ('model="gpt-5.6-terra"', 'model_reasoning_effort="medium"',
+                          'plan_mode_reasoning_effort="high"'):
+                self.assertIn(value, before)
+                self.assertIn(value, after)
+            self.assertEqual(self.manager.inspect("pin-child")["agent_mode"], "plan")
+            self.manager.kill("pin-child")
+
     def test_create_rejects_invalid_codex_pin(self) -> None:
         with self.assertRaises(ValueError):
             self.manager.create(
