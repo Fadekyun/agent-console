@@ -871,11 +871,15 @@ function updateAgentModeField() {
 function updateNewToolFields() {
   const tool = newForm.elements.tool.value;
   const catalog = state.identity.tool_status.find((item) => item.name === tool);
+  const codexLike = tool === 'codex' || tool === 'codex-pro';
   if (tool !== 'opencode') { loadModelsReq++; currentModels = []; $('#model-options').replaceChildren(); newForm.elements.model.value = ''; newForm.elements.auth_context.replaceChildren(); }
   updateContextSelect(newForm.elements.tool, newForm.elements.auth_context);
   updateAgentModeField();
   $('#provider-field').hidden = tool !== 'opencode'; newForm.elements.provider.disabled = tool !== 'opencode';
   $('#model-field').hidden = tool !== 'opencode'; newForm.elements.model.disabled = tool !== 'opencode';
+  $('#codex-model-field').hidden = !codexLike; newForm.elements.codex_model.disabled = !codexLike;
+  $('#codex-effort-field').hidden = !codexLike; newForm.elements.codex_effort.disabled = !codexLike;
+  $('#codex-plan-effort-field').hidden = !codexLike; newForm.elements.codex_plan_effort.disabled = !codexLike;
   if (tool === 'opencode') loadModels();
   formStatus.textContent = catalog?.status === 'ready' ? '' : `${catalog?.status || 'unknown'}: ${catalog?.reason || 'configuration required'}`;
 }
@@ -1065,7 +1069,13 @@ window.addEventListener('keydown', (event) => {
 newForm.onsubmit = async (event) => {
   event.preventDefault(); formStatus.textContent = 'Creating…'; const submit = $('button[type="submit"]', newForm); submit.disabled = true;
   const data = Object.fromEntries(new FormData(newForm)); data.worktree = newForm.elements.worktree.checked;
-  for (const key of ['name', 'task', 'agent_mode', 'provider', 'model', 'project_id']) if (!data[key]) data[key] = null;
+  if (data.tool === 'codex' || data.tool === 'codex-pro') {
+    data.model = data.codex_model || null;
+    data.reasoning_effort = data.codex_effort || null;
+    data.plan_reasoning_effort = data.codex_plan_effort || null;
+  }
+  delete data.codex_model; delete data.codex_effort; delete data.codex_plan_effort;
+  for (const key of ['name', 'task', 'agent_mode', 'provider', 'model', 'reasoning_effort', 'plan_reasoning_effort', 'project_id']) if (!data[key]) data[key] = null;
   try { const session = await api('/api/sessions', { method: 'POST', body: JSON.stringify(data) }); await refresh(); selectView('sessions'); renderInspector(session); openTerminal(session.tmux_name); submit.disabled = false; }
   catch (error) { formStatus.textContent = error.message; submit.disabled = false; }
 };

@@ -923,6 +923,14 @@ class WebTests(unittest.TestCase):
         )
         self.assertEqual(dup.status_code, 400)
 
+    def test_create_session_rejects_invalid_reasoning_effort(self) -> None:
+        resp = self.client.post(
+            "/api/sessions",
+            headers=self.headers,
+            json={"tool": "codex", "profile": "general", "reasoning_effort": "turbo"},
+        )
+        self.assertEqual(resp.status_code, 422)
+
     def test_create_session_with_project_id_api(self) -> None:
         proj = self.client.post(
             "/api/projects", headers=self.headers,

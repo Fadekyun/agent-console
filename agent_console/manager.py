@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -62,6 +63,26 @@ def epoch_iso(value: int) -> str:
     return datetime.fromtimestamp(value, tz=timezone.utc).isoformat(timespec="seconds")
 
 
+CODEX_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max", "ultra"})
+CODEX_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _validate_codex_pin(
+    *,
+    model: str | None,
+    reasoning_effort: str | None,
+    plan_reasoning_effort: str | None,
+) -> None:
+    if model is not None and not CODEX_MODEL_PATTERN.match(model):
+        raise ValueError(f"invalid Codex model name: {model!r}")
+    for label, effort in (
+        ("reasoning effort", reasoning_effort),
+        ("plan reasoning effort", plan_reasoning_effort),
+    ):
+        if effort is not None and effort not in CODEX_EFFORT_LEVELS:
+            raise ValueError(
+                f"Codex {label} must be one of: {', '.join(sorted(CODEX_EFFORT_LEVELS))}"
+            )
 class SessionManager:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings.from_env()
@@ -1059,6 +1080,8 @@ class SessionManager:
         auth_context: str | None = None,
         agent_mode: str | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
+        plan_reasoning_effort: str | None = None,
         session_name: str | None = None,
         session_id: str | None = None,
         parent_session_id: str | None = None,
@@ -1165,6 +1188,8 @@ class SessionManager:
             context_path=context_path,
             agent_mode=agent_mode,
             model=model,
+            reasoning_effort=reasoning_effort,
+            plan_reasoning_effort=plan_reasoning_effort,
             read_only=PROFILE_SCHEMA[profile]["read_write_capability"] == "read_only",
         )
 
@@ -1308,6 +1333,8 @@ class SessionManager:
         agent_mode: str | None = None,
         provider: str | None = None,
         model: str | None = None,
+        reasoning_effort: str | None = None,
+        plan_reasoning_effort: str | None = None,
         project_id: str | None = None,
     ) -> dict[str, Any]:
         validate_tool(tool)
@@ -1339,6 +1366,10 @@ class SessionManager:
         ):
             raise RuntimeError(f"{tool}/{context['name']} is setup-required: {context['reason']}")
         if tool == "opencode":
+            if reasoning_effort is not None or plan_reasoning_effort is not None:
+                raise ValueError(
+                    "reasoning effort overrides are supported only for codex and codex-pro"
+                )
             agent_mode = agent_mode or "plan"
             if agent_mode not in {"plan", "build"}:
                 raise ValueError("OpenCode agent mode must be plan or build")
@@ -1366,10 +1397,18 @@ class SessionManager:
                 raise ValueError("Codex mode must be plan or auto")
             if profile_read_only and agent_mode != "plan":
                 raise ValueError("read-only profiles must use Codex Plan mode")
+            _validate_codex_pin(
+                model=model,
+                reasoning_effort=reasoning_effort,
+                plan_reasoning_effort=plan_reasoning_effort,
+            )
             provider = context.get("provider")
-            model = None
             permission_mode = "read-only" if agent_mode == "plan" else "workspace-write"
         else:
+            if reasoning_effort is not None or plan_reasoning_effort is not None:
+                raise ValueError(
+                    "reasoning effort overrides are supported only for codex and codex-pro"
+                )
             agent_mode = None
             provider = context.get("provider")
             model = None
@@ -1440,6 +1479,8 @@ class SessionManager:
                 auth_context=context["name"],
                 agent_mode=agent_mode,
                 model=model,
+                reasoning_effort=reasoning_effort,
+                plan_reasoning_effort=plan_reasoning_effort,
                 session_name=name,
                 session_id=session_id,
                 parent_session_id=parent_session_id,
@@ -2284,6 +2325,9 @@ class SessionManager:
         name: str | None = None,
         auth_context: str | None = None,
         agent_mode: str | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        plan_reasoning_effort: str | None = None,
         creator_surface: str = "CLI",
     ) -> dict[str, Any]:
         validate_tool(tool)
@@ -2329,6 +2373,9 @@ class SessionManager:
             parent_session_id=parent_row["id"],
             auth_context=auth_context,
             agent_mode=agent_mode,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            plan_reasoning_effort=plan_reasoning_effort,
         )
         delegation_id = f"deleg-{uuid.uuid4().hex}"
         with self.database.connect() as conn:

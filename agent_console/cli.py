@@ -6,7 +6,7 @@ import os
 import sys
 from typing import Any
 
-from .manager import SessionManager
+from .manager import CODEX_EFFORT_LEVELS, SessionManager
 from .secrets_store import migrate_openrouter_secret, secret_status, set_openrouter_secret
 from .skills import approve_superpower, doctor_skills, get_effective_skills, list_superpower_approvals, revoke_superpower, sync_skills
 from .validation import PROFILES, TOOLS
@@ -97,6 +97,10 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--agent-mode", choices=["plan", "build", "auto"])
     create.add_argument("--provider", choices=["openrouter", "opencode"])
     create.add_argument("--model")
+    create.add_argument("--effort", choices=sorted(CODEX_EFFORT_LEVELS),
+                        help="Codex reasoning effort (codex/codex-pro only)")
+    create.add_argument("--plan-effort", choices=sorted(CODEX_EFFORT_LEVELS),
+                        help="Codex plan-mode reasoning effort (codex/codex-pro only)")
     interrupt = session_commands.add_parser("interrupt")
     interrupt.add_argument("name")
     restart = session_commands.add_parser("restart-agent")
@@ -180,6 +184,11 @@ def parser() -> argparse.ArgumentParser:
     delegate.add_argument("--name")
     delegate.add_argument("--auth-context")
     delegate.add_argument("--agent-mode", choices=["plan", "build", "auto"])
+    delegate.add_argument("--model", help="Codex model for the child (codex/codex-pro only)")
+    delegate.add_argument("--effort", choices=sorted(CODEX_EFFORT_LEVELS),
+                          help="Codex reasoning effort (codex/codex-pro only)")
+    delegate.add_argument("--plan-effort", choices=sorted(CODEX_EFFORT_LEVELS),
+                          help="Codex plan-mode reasoning effort (codex/codex-pro only)")
 
     models = commands.add_parser("models")
     model_commands = models.add_subparsers(dest="models_command", required=True)
@@ -450,6 +459,8 @@ def main(argv: list[str] | None = None) -> int:
                         agent_mode=args.agent_mode,
                         provider=args.provider,
                         model=args.model,
+                        reasoning_effort=args.effort,
+                        plan_reasoning_effort=args.plan_effort,
                     )
                 )
             elif args.session_command == "interrupt":
@@ -580,6 +591,9 @@ def main(argv: list[str] | None = None) -> int:
                     name=args.name,
                     auth_context=args.auth_context,
                     agent_mode=args.agent_mode,
+                    model=args.model,
+                    reasoning_effort=args.effort,
+                    plan_reasoning_effort=args.plan_effort,
                 )
             )
         return 0
