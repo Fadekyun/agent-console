@@ -54,6 +54,11 @@ class InspectionFixtureTests(unittest.TestCase):
         self.db = self.root / "state" / "console ? fixture.db"
         Database(self.db).migrate()  # Fixture setup only, outside reader boundary.
         self.writer = sqlite3.connect(self.db)
+        # Deliberate historical schema10 fixture on the schema11 dependency.
+        self.writer.execute("DROP TABLE integration_requests")
+        self.writer.execute("ALTER TABLE sessions DROP COLUMN execution_kind")
+        self.writer.execute("UPDATE schema_meta SET value='10' WHERE key='schema_version'")
+        self.writer.commit()
         self.writer.execute("SELECT * FROM sessions").fetchall()  # Keep WAL/SHM present.
 
     def tearDown(self):
@@ -85,6 +90,8 @@ class InspectionFixtureTests(unittest.TestCase):
         self.writer.execute("INSERT INTO integration_requests VALUES ('PRIVATE REQUEST PROMPT')")
         self.writer.execute("UPDATE schema_meta SET value='11' WHERE key='schema_version'")
         self.session(kind="integration-plan")
+        self.writer.execute("UPDATE sessions SET initial_task='PRIVATE REQUEST', attention_note='PRIVATE REQUEST', exit_reason='PRIVATE REQUEST'")
+        self.writer.commit()
         before = fingerprint(self.root)
         result = read_session_snapshot(self.db)
         self.assertEqual(result["sessions"][0]["execution_kind"], "integration-plan")

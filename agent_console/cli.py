@@ -16,6 +16,7 @@ from .integration_requests import (
 from .secrets_store import migrate_openrouter_secret, secret_status, set_openrouter_secret
 from .skills import approve_superpower, doctor_skills, get_effective_skills, list_superpower_approvals, revoke_superpower, sync_skills
 from .validation import PROFILES, TOOLS
+from .inspection_views import inspection_route, read_route
 
 
 def emit(value: Any) -> None:
@@ -299,6 +300,21 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
+        route = inspection_route(args)
+        if route is not None:
+            result = read_route(args, route)
+            if route == ("session", "tree") and not args.json:
+                print_session_tree(result)
+            elif route == ("session", "review") and not args.json:
+                session = result["session"]
+                print(f"Session: {session['tmux_name']} · {session['live_state']} · {result['source']}")
+                print(result["notice"])
+                print("--- peer terminal output begins ---")
+                print(result["content"], end="" if result["content"].endswith("\n") else "\n")
+                print("--- peer terminal output ends ---")
+            else:
+                emit(result)
+            return 0
         if args.command == "skills":
             if args.skills_command == "effective":
                 manager = SessionManager()
@@ -632,6 +648,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
     except (FileNotFoundError, FileExistsError, KeyError, PermissionError, RuntimeError, ValueError) as exc:
+        if route is not None and getattr(args, "json", False):
+            emit({"error": {"code": getattr(exc, "code", "inspection-unavailable"),
+                            "message": "inspection unavailable"}})
         print(f"agentctl: {exc}", file=sys.stderr)
         return 2
 

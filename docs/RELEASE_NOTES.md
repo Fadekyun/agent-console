@@ -2,6 +2,15 @@
 
 All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
+## 0.5.0 (Unreleased)
+
+- **Date**: 2026-09-13
+- **Issue/PR**: [#93](https://github.com/Fadekyun/agent-console/issues/93) / pending
+- **Impact**: Session list/inspect/tree/review/context/group list/group show and profile list/inspect now bypass writer initialization, migration, pruning and reconciliation. Session output preserves stored lifecycle fields and adds bounded live-observation fields. Fixed schema10/11 projection omits request-table contents and redacts integration free text; integration context/review content stays in its owner-authorized request view. All integration commands, including plan-status, retain writer behavior.
+- **Configuration/Migration**: No migration. The trusted SQL reader requires Linux x86_64 and libseccomp; unavailable enforcement or unusable WAL sidecars produces an unavailable diagnostic, with no unguarded/immutable fallback. Existing runtime.env sourcing and CLI arguments are preserved; wrapper Python disables bytecode writes. This branch is stacked on reviewed #91 source617cdfe, which is not asserted merged or enabled. Merge dependency first and reconcile versions/release notes with parallel work before release.
+- **Verification**: Run tests/test_inspection.py and tests/test_cli_inspection.py for real WAL/guard, exact dispatch exclusion, privacy, containment, bounded tmux and output fixtures, then relevant core/web/integration-request/version regressions in isolated HOME/state/sockets. Independent final implementation review is required. No real provider enablement or deployment is part of this verification.
+- **Rollback**: Revert #93 code/version changes; no data or schema rollback. The previous CLI retains writer side effects and must not be described as safe inspection. Keep #91 request data, receipts and activation gates intact.
+
 ## 0.4.0 (Unreleased)
 
 - **Date**: 2026-09-13

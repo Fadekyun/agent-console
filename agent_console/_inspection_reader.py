@@ -204,6 +204,13 @@ def read_snapshot(path: Path) -> dict:
                 item = dict(row)
                 if table == "sessions" and version == 10:
                     item["execution_kind"] = "interactive"
+                if table == "sessions" and item["execution_kind"] != "interactive":
+                    for field in ("initial_task", "attention_note", "exit_reason", "archived_transcript"):
+                        item[field] = None
+                if table == "delegations":
+                    private_ids = {s["id"] for s in result["sessions"] if s["execution_kind"] != "interactive"}
+                    if item["parent_session_id"] in private_ids or item["child_session_id"] in private_ids:
+                        item["task"] = None
                 budget += len(json.dumps(item, ensure_ascii=True)) + 2
                 if len(rows) >= MAX_ROWS or budget > MAX_OUTPUT - 4096:
                     raise Unavailable("snapshot-too-large")
