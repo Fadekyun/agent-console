@@ -174,7 +174,10 @@ the same canonical skill. OpenCode mutation is currently verified for version
 `1.18.30`; missing or unknown versions are diagnosed and skipped conservatively.
 Discovery diagnostics scan confirmed global and project roots with a fixed bound,
 report duplicates and shadowing by the frontmatter skill ID, and mark unverified
-ordering or configuration-dependent sources as uncertain. No remote skills are
+ordering or configuration-dependent sources as uncertain. Repeated isolated
+OpenCode 1.18.30 runs selected different winners for identical cross-root duplicate
+fixtures, so OpenCode duplicate precedence remains unverified and no winner is
+claimed. No remote skills are
 downloaded.
 
 Configure which skills to retain:

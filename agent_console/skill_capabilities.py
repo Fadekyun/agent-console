@@ -153,15 +153,15 @@ SKILL_TOOL_CAPABILITIES: dict[str, SkillToolCapability] = {
         can_isolate_skills=False,
         verification="exact-version",
         discovery_sources=(
-            # The relative order of ~/.claude and the native global root, and
-            # native project over native global, was verified with OpenCode
-            # 1.18.30. Ordering involving .agents or project .claude is not.
-            SkillDiscoverySource("legacy-global-claude", "home", ".claude/skills", True, 10, True),
+            # Repeated isolated 1.18.30 discovery selected different winners
+            # for the same duplicate across these roots. Discovery is verified;
+            # deterministic precedence is not.
+            SkillDiscoverySource("legacy-global-claude", "home", ".claude/skills", True, None, False),
             SkillDiscoverySource("global-agents", "home", ".agents/skills", True, None, False),
-            SkillDiscoverySource("native-global", "xdg-config", "opencode/skills", True, 20, True),
+            SkillDiscoverySource("native-global", "xdg-config", "opencode/skills", True, None, False),
             SkillDiscoverySource("project-claude", "project", ".claude/skills", True, None, False),
             SkillDiscoverySource("project-agents", "project", ".agents/skills", True, None, False),
-            SkillDiscoverySource("native-project", "project", ".opencode/skills", True, 30, True),
+            SkillDiscoverySource("native-project", "project", ".opencode/skills", True, None, False),
         ),
         verified_versions=frozenset({"1.18.30"}),
         unverified_version_policy="skip",

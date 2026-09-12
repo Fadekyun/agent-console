@@ -136,7 +136,12 @@ def _source_diagnostic(root: Path, name: str) -> dict[str, Any]:
     elif not _is_within(skill_real, source_real) or not _is_within(skill_real, root_real):
         result["state"] = "skill-file-escape"
     else:
-        result["state"] = "present"
+        try:
+            skill_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            result["state"] = "unreadable"
+        else:
+            result["state"] = "present"
     return result
 
 
@@ -447,8 +452,13 @@ def _scan_discovery(
     discovered_skills = []
     duplicates = []
     for name, paths in sorted(occurrences.items()):
-        ordering_verified = len(paths) == 1 or all(
-            path["precedence_verified"] and path["precedence"] is not None for path in paths
+        version_verified = capability.verification != "exact-version" or version_state == "verified"
+        precedences = [path["precedence"] for path in paths]
+        ordering_verified = version_verified and (
+            len(paths) == 1 or (
+                all(path["precedence_verified"] and path["precedence"] is not None for path in paths)
+                and len(set(precedences)) == len(precedences)
+            )
         )
         ordered = sorted(paths, key=lambda path: path["precedence"] or -1)
         winner = ordered[-1] if ordering_verified else None
@@ -473,7 +483,7 @@ def _scan_discovery(
     if not capability.configured_sources_inspected:
         uncertainty_reasons.append("configured discovery sources are not inspected")
     if any(item["ordering_state"] == "uncertain" for item in duplicates):
-        uncertainty_reasons.append("duplicate ordering includes an unverified source")
+        uncertainty_reasons.append("duplicate ordering has unverified sources, version, or tied precedence")
     return {
         "status": "uncertain" if uncertainty_reasons else "complete",
         "uncertainty_reasons": uncertainty_reasons,
@@ -558,8 +568,6 @@ def _collect_catalog_state(
                     and winner_occurrence["resolved_source"] != expected_real
                 ):
                     shadowed_by = [discovered["winner"]]
-                elif not discovered["winner"] and str(path) not in discovered["paths"]:
-                    shadowed_by = list(conflicting_paths)
             diagnostics.append({
                 "skill": name,
                 "native_id": native_id,
@@ -838,7 +846,11 @@ def doctor_skills(
         if source_state != "present":
             problems.append(f"canonical skill {name} is {source_state}: {source}")
             continue
-        text = source.read_text(encoding="utf-8", errors="replace")
+        try:
+            text = source.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            problems.append(f"canonical skill {name} is unreadable: {source}")
+            continue
         if not text.startswith("---"):
             problems.append(f"missing frontmatter: {name}")
     for diagnostic in state["diagnostics"]:

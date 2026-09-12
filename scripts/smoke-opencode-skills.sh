@@ -10,8 +10,8 @@ if [[ -z "$opencode_bin" || ! -x "$opencode_bin" ]]; then
   exit 2
 fi
 
-installed_version="$($opencode_bin --version)"
-if [[ "$installed_version" != *"1.18.30"* ]]; then
+installed_version="$("$opencode_bin" --version)"
+if [[ "$installed_version" != "1.18.30" ]]; then
   echo "fixture is verified only for OpenCode 1.18.30 (found: $installed_version)" >&2
   exit 2
 fi
@@ -70,9 +70,15 @@ for skill_id in \
     exit 1
   }
 done
-grep -Fq "shared native project" "$output_file" || {
-  echo "project-native duplicate did not win the verified precedence fixture" >&2
-  exit 1
-}
+python3 - "$output_file" <<'PY'
+import json
+import sys
+
+skills = json.load(open(sys.argv[1], encoding="utf-8"))
+shared = [skill for skill in skills if skill.get("name") == "console81-shared"]
+assert len(shared) == 1, "duplicate fixture must discover one native winner"
+assert shared[0]["description"] in {"shared legacy", "shared native global", "shared native project"}
+print("Observed duplicate winner: " + shared[0]["description"] + "; precedence remains unverified")
+PY
 
 echo "OpenCode 1.18.30 native skill discovery fixture passed"

@@ -3,6 +3,8 @@ from __future__ import annotations
 import tempfile
 import unittest
 import os
+import subprocess
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -191,11 +193,12 @@ class SkillCapabilityTests(unittest.TestCase):
             )
             diagnostic = result["diagnostics"][0]
             self.assertTrue(diagnostic["collision"])
-            self.assertTrue(diagnostic["shadowed"])
-            self.assertEqual(diagnostic["shadowed_by"], [str(project_skill)])
+            self.assertFalse(diagnostic["shadowed"])
+            self.assertEqual(diagnostic["shadowed_by"], [])
             duplicates = result["providers"][0]["discovery"]["duplicates"]
             self.assertEqual(duplicates[0]["name"], "fixture")
-            self.assertEqual(duplicates[0]["winner"], str(project_skill))
+            self.assertIsNone(duplicates[0]["winner"])
+            self.assertEqual(duplicates[0]["ordering_state"], "uncertain")
 
     def test_opencode_scans_all_confirmed_roots_recursively_by_frontmatter_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -291,8 +294,8 @@ class SkillCapabilityTests(unittest.TestCase):
             self.assertEqual(diagnostic["skill"], "folder")
             self.assertEqual(diagnostic["native_id"], "shared-id")
             self.assertTrue(diagnostic["collision"])
-            self.assertTrue(diagnostic["shadowed"])
-            self.assertEqual(diagnostic["shadowed_by"], [str(override)])
+            self.assertFalse(diagnostic["shadowed"])
+            self.assertEqual(diagnostic["shadowed_by"], [])
             self.assertEqual(diagnostic["discovered_paths"], [
                 str(home / ".config" / "opencode" / "skills" / "folder"),
                 str(override),
@@ -422,6 +425,62 @@ class SkillCapabilityTests(unittest.TestCase):
             self.assertEqual(calls, ["opencode"])
             self.assertEqual(catalog["diagnostics"], doctor["diagnostics"])
             self.assertEqual(catalog["providers"], doctor["providers"])
+
+
+    def test_unknown_version_and_tied_precedence_never_claim_winner(self) -> None:
+        capability = SKILL_TOOL_CAPABILITIES["opencode"]
+        fixture_capability = replace(capability, discovery_sources=tuple(
+            replace(source, precedence=index, precedence_verified=True)
+            for index, source in enumerate(capability.discovery_sources, 1)
+        ))
+        for version, second_root in [("9.0.0", "project"), ("1.18.30", "global")]:
+            with self.subTest(version=version, second_root=second_root), tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+                canonical, home, project = base / "canonical", base / "home", base / "project"
+                write_skill(canonical)
+                native = home / ".config/opencode/skills"
+                write_skill(native, "fixture")
+                other = project / ".opencode/skills" if second_root == "project" else native
+                second = write_skill(other, "other")
+                (second / "SKILL.md").write_text("---\nname: fixture\n---\n")
+                with patch.dict(SKILL_TOOL_CAPABILITIES, opencode=fixture_capability):
+                    catalog = skill_catalog(canonical, home=home, project_root=project,
+                                            version_probe=lambda *_: version)
+                duplicate = catalog["providers"][0]["discovery"]["duplicates"][0]
+                self.assertIsNone(duplicate["winner"])
+                self.assertEqual(duplicate["shadowed"], [])
+                self.assertEqual(duplicate["ordering_state"], "uncertain")
+
+    def test_unreadable_canonical_skill_is_diagnosed_before_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            canonical, home = base / "canonical", base / "home"
+            skill_file = write_skill(canonical) / "SKILL.md"
+            original = Path.read_text
+            def read(path, *args, **kwargs):
+                if path == skill_file:
+                    raise PermissionError("fixture read denied")
+                return original(path, *args, **kwargs)
+            with patch.object(Path, "read_text", read):
+                catalog = skill_catalog(canonical, home=home, version_probe=VERIFIED)
+                self.assertEqual(catalog["diagnostics"][0]["source_state"], "unreadable")
+                with self.assertRaisesRegex(ValueError, "unreadable"):
+                    sync_skills(canonical_root=canonical, home=home, version_probe=VERIFIED)
+                doctor = doctor_skills(canonical_root=canonical, home=home, version_probe=VERIFIED)
+                self.assertFalse(doctor["ok"])
+                self.assertTrue(any("unreadable" in problem for problem in doctor["problems"]))
+                self.assertFalse(home.exists())
+
+    def test_smoke_rejects_nonexact_versions_with_spaced_binary_path(self) -> None:
+        script = Path(__file__).resolve().parents[1] / "scripts/smoke-opencode-skills.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "fake opencode"
+            for version in ["1.18.301", "1.18.30-dev", "other 1.18.30"]:
+                binary.write_text(f"#!/bin/sh\nprintf '%s\\n' '{version}'\n")
+                binary.chmod(0o700)
+                result = subprocess.run(["bash", str(script), str(binary)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(f"found: {version}", result.stderr)
 
 
 if __name__ == "__main__":
