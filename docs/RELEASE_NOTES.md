@@ -2,6 +2,15 @@
 
 All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
+## 0.4.0 (Unreleased)
+
+- **Date**: 2026-09-13
+- **Issue/PR**: [#91](https://github.com/Fadekyun/agent-console/issues/91) / pending
+- **Impact**: Adds protocol v1 `agentctl integration plan-request --stdin` and `plan-status --stdin` commands for a trusted local relay. Accepted requests freeze bounded server-prepared context and the complete prompt, reserve capacity before launch, run one Codex native noninteractive turn through owned pipes, and expose only safe state plus an owner-only bounded result. Request sessions reject attach/restart/rename/archive and accept no PTY input. Ordinary `session create --task` remains a stored brief and existing per-session skill-isolation checks are unchanged.
+- **Configuration/Migration**: Additive schema migration 10→11 adds `sessions.execution_kind` and `integration_requests`, including boot-bound child process identity; existing sessions are retained as `interactive`. The integration has no generated production mappings and is off when `plan-integration.json` is absent or `enabled` is false. Enabling additionally requires a locked relay capability FD, owner/channel allowlists, active Console project mappings, bounded prepared-context directories, a server-selected Codex auth context, and `provider_capability_verified:true` only after the deployment containment gate passes. See `docs/security.md`.
+- **Verification**: The final serialized focused run passed 31 tests plus 15 validation subcases across the #91 fake-provider and version suites. It covers validation, authorization, disabled/unverified gates, frozen inputs, injection-shaped text, 20-way idempotency, cross-process ordinary/request admission, integration-owned name collisions and ordinary archived-name reuse, launch-response races, ordered acknowledgement/completion, nonzero and malformed provider results, pre-EOF events, pipe bounds, boot-bound stale/leaderless process groups and `/proc` uncertainty, artifacts/retention, lifecycle denial, migration, and version consistency. Parent-run core/web regression is being repeated on this final source; its prior checkpoints identified only corrected fixture-environment and buffered-websocket assumptions. No paid or real-provider smoke was run.
+- **Rollback**: Set `enabled:false` first, then reconcile or explicitly terminate any accepted/uncertain owned jobs. Retain the database and `integration-artifacts` so idempotency tombstones and receipts are not lost. Restoring an older binary is safe only after new protocol requests are quiesced; there is no destructive down-migration and no request is replayed automatically.
+
 ## 0.3.1 (Unreleased)
 
 - **Date**: 2026-09-12

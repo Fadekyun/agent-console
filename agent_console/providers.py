@@ -61,6 +61,10 @@ class ProviderAdapter:
     def can_isolate_skills(self) -> bool:
         return False
 
+    @property
+    def can_run_planning_task(self) -> bool:
+        return False
+
     def build_environment(self, context: dict[str, Any]) -> dict[str, str]:
         return {}
 
@@ -132,6 +136,36 @@ class CodexAdapter(ProviderAdapter):
     @property
     def can_isolate_skills(self) -> bool:
         return True
+
+    @property
+    def can_run_planning_task(self) -> bool:
+        return True
+
+    def build_planning_task_argv(
+        self,
+        *,
+        cwd: Path,
+        output_schema: Path,
+        final_output: Path,
+    ) -> list[str]:
+        """Build the fixed native non-interactive planning command.
+
+        Prompt delivery is deliberately absent here: the runner writes it to stdin once.
+        """
+        return [
+            str(self.binary),
+            "-c", 'approval_policy="never"',
+            "exec",
+            "--json",
+            "--sandbox", "read-only",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--skip-git-repo-check",
+            "--output-schema", str(output_schema),
+            "--output-last-message", str(final_output),
+            "-C", str(cwd),
+            "-",
+        ]
 
     def build_environment(self, context: dict[str, Any]) -> dict[str, str]:
         return {"CODEX_HOME": str(self.registry.codex_home(context["name"], tool=self.tool))}

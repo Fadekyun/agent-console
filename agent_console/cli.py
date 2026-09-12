@@ -7,6 +7,12 @@ import sys
 from typing import Any
 
 from .manager import CODEX_EFFORT_LEVELS, SessionManager
+from .integration_requests import (
+    IntegrationError,
+    IntegrationService,
+    REQUEST_MAX_BYTES,
+    integration_error_for_raw,
+)
 from .secrets_store import migrate_openrouter_secret, secret_status, set_openrouter_secret
 from .skills import approve_superpower, doctor_skills, get_effective_skills, list_superpower_approvals, revoke_superpower, sync_skills
 from .validation import PROFILES, TOOLS
@@ -59,6 +65,15 @@ def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="agentctl")
     root.add_argument("--json", action="store_true", help="emit JSON (currently the default format)")
     commands = root.add_subparsers(dest="command", required=True)
+
+    integration = commands.add_parser("integration")
+    integration_commands = integration.add_subparsers(
+        dest="integration_command", required=True
+    )
+    plan_request = integration_commands.add_parser("plan-request")
+    plan_request.add_argument("--stdin", action="store_true", required=True)
+    plan_status = integration_commands.add_parser("plan-status")
+    plan_status.add_argument("--stdin", action="store_true", required=True)
 
     session = commands.add_parser("session")
     session_commands = session.add_subparsers(dest="session_command", required=True)
@@ -323,6 +338,25 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 emit(secret_status())
             return 0
+        if args.command == "integration":
+            raw = sys.stdin.buffer.read(REQUEST_MAX_BYTES + 1)
+            try:
+                service = IntegrationService(SessionManager())
+                if args.integration_command == "plan-request":
+                    response, exit_code = service.submit(raw)
+                else:
+                    response, exit_code = service.status(raw)
+            except IntegrationError as exc:
+                response = integration_error_for_raw(raw, exc)
+                exit_code = exc.exit_code
+            except Exception:
+                error = IntegrationError("internal_error", exit_code=4)
+                response = integration_error_for_raw(raw, error)
+                exit_code = 4
+            emit(response)
+            if exit_code:
+                print("agentctl: integration operation rejected", file=sys.stderr)
+            return exit_code
         manager = SessionManager()
         if args.command == "auth":
             if args.auth_command == "login":

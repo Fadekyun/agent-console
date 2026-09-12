@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from .config import Settings
 from .logging_config import configure_logging, configure_uvicorn_logging
 from .manager import SessionManager
+from .integration_requests import IntegrationService
 from .profiles import profile_summaries
 from .skills import (
     approve_superpower,
@@ -477,6 +478,17 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         response.headers["Cache-Control"] = "no-store"
         return session_manager.session_brief(validate_session_name(name))
 
+    @app.get("/api/integration/plan-requests/{request_id}/result")
+    async def integration_plan_result(
+        request_id: str,
+        response: Response,
+        identity: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        if identity.access_surface != "tailscale" or identity.actor != EXPECTED_LOGIN:
+            raise HTTPException(status_code=403, detail="owner identity is required")
+        response.headers["Cache-Control"] = "no-store"
+        return IntegrationService(session_manager).result(request_id)
+
     @app.patch("/api/sessions/{name}/attention")
     async def update_attention(
         name: str,
@@ -791,6 +803,12 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             await websocket.close(code=4400, reason="invalid session name")
             return
         tmux = session_manager.tmux_for_name(name)
+        try:
+            inspected = session_manager.inspect(name)
+        except KeyError:
+            await websocket.close(code=4404, reason="session is not running")
+            return
+        view_only = inspected.get("execution_kind") == "integration-plan"
         if not tmux.exists(name):
             await websocket.close(code=4404, reason="session is not running")
             return
@@ -846,6 +864,9 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                 if message.get("type") == "websocket.disconnect":
                     break
                 if message.get("bytes") is not None:
+                    if view_only:
+                        await websocket.close(code=4403, reason="integration session is view-only")
+                        break
                     os.write(master_fd, message["bytes"])
                 elif message.get("text"):
                     control = json.loads(message["text"])

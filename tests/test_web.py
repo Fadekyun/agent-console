@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import subprocess
 import tempfile
 import threading
@@ -17,6 +19,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from agent_console.config import Settings
+from agent_console.database import utc_now
 from agent_console.manager import SessionManager
 from agent_console.providers import LaunchSpec
 from agent_console.profiles import PROFILE_SCHEMA
@@ -512,6 +515,77 @@ class WebTests(unittest.TestCase):
                     websocket.receive_bytes()
             self.assertEqual(closed.exception.code, 4000)
         self.assertTrue(self.manager.tmux.exists("detach-control-test"))
+
+    def test_integration_session_websocket_rejects_terminal_input(self) -> None:
+        self.manager.create(
+            tool="shell", profile="general", name="view-only-integration",
+            repository=str(self.workspace),
+        )
+        with self.manager.database.connect() as conn:
+            conn.execute(
+                "UPDATE sessions SET execution_kind='integration-plan' WHERE tmux_name=?",
+                ("view-only-integration",),
+            )
+        with self.client.websocket_connect(
+            "/ws/sessions/view-only-integration", headers=self.headers,
+        ) as websocket:
+            websocket.send_bytes(b"touch SHOULD_NOT_RUN\n")
+            with self.assertRaises(WebSocketDisconnect) as closed:
+                # The bridge may have already queued initial terminal output.
+                # Drain only a bounded number of frames while waiting for the
+                # policy close caused by the attempted input.
+                for _ in range(20):
+                    websocket.receive_bytes()
+            self.assertEqual(closed.exception.code, 4403)
+        self.assertFalse((self.workspace / "SHOULD_NOT_RUN").exists())
+
+    def test_integration_result_requires_owner_identity_and_has_no_store(self) -> None:
+        project = self.manager.create_project("Result project")
+        request_id = "12345678901234567"
+        session_id = "sess-result-test"
+        request_uuid = "ireq-" + "a" * 32
+        artifact_dir = self.manager.settings.state_dir / "integration-artifacts" / request_uuid
+        artifact_dir.mkdir(parents=True, mode=0o700)
+        artifact = {"outcome": "plan", "summary": "safe", "steps": [], "verification": [], "blockers": []}
+        raw = json.dumps(artifact, sort_keys=True, separators=(",", ":")).encode()
+        (artifact_dir / "plan.json").write_bytes(raw)
+        (artifact_dir / "plan.json").chmod(0o600)
+        now = utc_now()
+        with self.manager.database.connect() as conn:
+            conn.execute(
+                "INSERT INTO sessions(id,tmux_name,created_at,status,managed,creator_surface,execution_kind) "
+                "VALUES(?,?,?,'process-exited',1,'integration:n8n','integration-plan')",
+                (session_id, f"n8n-plan-{request_id}", now),
+            )
+            conn.execute(
+                """
+                INSERT INTO integration_requests(
+                    id,integration,request_key,requester_id,channel_id,canonical_hash,
+                    canonical_payload_json,project_alias,project_id,frozen_context,context_hash,
+                    frozen_prompt,prompt_hash,artifact_dir,session_id,state,accepted_at,
+                    content_expires_at,updated_at,launch_nonce,provider_tool,auth_context,
+                    final_artifact_hash,final_artifact_name,reason_code,admission_held
+                ) VALUES(?,'n8n',?,?,?,'hash','{}','n100',?,'{}','context-hash','prompt',
+                    'prompt-hash',?,?,'completed',?,'2099-01-01T00:00:00+00:00',?,
+                    'nonce','codex','default',?,'plan.json','completed',0)
+                """,
+                (
+                    request_uuid, request_id, "191524132624531458", "1493588468884836402",
+                    project["id"], str(artifact_dir), session_id, now, now,
+                    hashlib.sha256(raw).hexdigest(),
+                ),
+            )
+        response = self.client.get(
+            f"/api/integration/plan-requests/{request_id}/result", headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertEqual(response.json(), artifact)
+        lan_client = TestClient(
+            create_app(self.manager), client=("10.0.0.40", 50000), base_url="http://10.0.0.1",
+        )
+        denied = lan_client.get(f"/api/integration/plan-requests/{request_id}/result")
+        self.assertEqual(denied.status_code, 403)
 
     def test_kill_closes_websocket_instead_of_switching_sessions(self) -> None:
         self.manager.create(

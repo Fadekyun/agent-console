@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .auth import AuthRegistry
+from .admission import admission_lock
 from .config import Settings
 from .database import Database, EVIDENCE_RESULTS, EVIDENCE_TYPES, REQUIRED_EVIDENCE_TYPES, utc_now
 from .deployer import DeploymentMode, Deployer, ProductionServiceRunner, ServiceConfig
@@ -190,6 +191,7 @@ class SessionManager:
                     "archived",
                     "completed",
                     "process-exited",
+                    "reserved",
                 }:
                     status = "process-exited" if row["managed"] else "unknown"
                     conn.execute(
@@ -246,11 +248,15 @@ class SessionManager:
             item["child_count"] = child_counts.get(item["id"], 0)
             item["total_child_count"] = total_child_counts.get(item["id"], 0)
             item["live_state"] = self._mechanical_state(item)
-            actions = ["archive"]
+            integration_owned = item.get("execution_kind") == "integration-plan"
+            actions = [] if integration_owned else ["archive"]
             if session is not None:
-                actions.extend(["attach", "interrupt", "kill"])
-                if item["managed"] and item.get("launcher_path"):
-                    actions.append("restart")
+                if integration_owned:
+                    actions.extend(["view", "interrupt", "kill"])
+                else:
+                    actions.extend(["attach", "interrupt", "kill"])
+                    if item["managed"] and item.get("launcher_path"):
+                        actions.append("restart")
             item["actions"] = actions
             result.append(item)
         return result
@@ -300,12 +306,15 @@ class SessionManager:
         result["total_child_count"] = len(children)
         result["parent_session"] = parent["tmux_name"] if parent else None
         result["live_state"] = self._mechanical_state(result)
-        result["actions"] = ["archive"] + (
-            ["attach", "interrupt", "kill"]
-            + (["restart"] if result["managed"] and result.get("launcher_path") else [])
-            if live
-            else []
-        )
+        if result.get("execution_kind") == "integration-plan":
+            result["actions"] = ["view", "interrupt", "kill"] if live else ["view"]
+        else:
+            result["actions"] = ["archive"] + (
+                ["attach", "interrupt", "kill"]
+                + (["restart"] if result["managed"] and result.get("launcher_path") else [])
+                if live
+                else []
+            )
         return result
 
     def session_tree(self) -> dict[str, Any]:
@@ -1424,14 +1433,6 @@ class SessionManager:
             provider = context.get("provider")
             model = None
             permission_mode = None
-        with self.database.connect() as conn:
-            managed_count = conn.execute(
-                "SELECT COUNT(*) FROM sessions WHERE managed=1 AND status IN ('attached', 'detached')"
-            ).fetchone()[0]
-        if managed_count >= self.settings.max_managed_sessions:
-            raise RuntimeError(
-                f"managed-session limit reached ({self.settings.max_managed_sessions})"
-            )
         project_info: dict[str, Any] | None = None
         if project_id is not None:
             with self.database.connect() as conn:
@@ -1473,7 +1474,37 @@ class SessionManager:
         launcher_backup = launcher_path.read_bytes() if launcher_path.exists() else None
         context_created = False
         launcher_created = False
+        tmux_creation_started = False
+        admission = admission_lock(self.settings.state_dir)
+        admission.__enter__()
         try:
+            with self.database.connect() as conn:
+                ordinary_count = conn.execute(
+                    "SELECT COUNT(*) FROM sessions WHERE managed=1 "
+                    "AND execution_kind!='integration-plan' "
+                    "AND status IN ('reserved','attached','detached')"
+                ).fetchone()[0]
+                integration_count = conn.execute(
+                    "SELECT COUNT(*) FROM integration_requests WHERE admission_held=1"
+                ).fetchone()[0]
+            if ordinary_count + integration_count >= self.settings.max_managed_sessions:
+                raise RuntimeError(
+                    f"managed-session limit reached ({self.settings.max_managed_sessions})"
+                )
+            if self.tmux.exists(name):
+                raise FileExistsError(f"tmux session already exists: {name}")
+            with self.database.connect() as conn:
+                locked_existing = conn.execute(
+                    "SELECT id, execution_kind FROM sessions WHERE tmux_name=?", (name,)
+                ).fetchone()
+            if locked_existing is not None:
+                if locked_existing["execution_kind"] == "integration-plan":
+                    raise FileExistsError(
+                        f"session name is reserved by an integration request: {name}"
+                    )
+                session_id = locked_existing["id"]
+            # The lock stays held through tmux creation and persistence, so another
+            # create/request process cannot observe free capacity in this interval.
             if worktree:
                 worktree_path = self._create_worktree(cwd, name)
                 cwd = worktree_path
@@ -1527,6 +1558,7 @@ class SessionManager:
             )
 
             created_at = utc_now()
+            tmux_creation_started = True
             self.tmux.create(name, cwd, launcher)
 
             with self.database.connect() as conn:
@@ -1592,10 +1624,11 @@ class SessionManager:
             log.info("session=%s id=%s tool=%s profile=%s mode=%s provider=%s worktree=%s surface=%s",
                      name, session_id, tool, profile, agent_mode, provider, worktree, creator_surface)
         except Exception:
-            try:
-                self.tmux.kill(name)
-            except Exception:
-                pass
+            if tmux_creation_started:
+                try:
+                    self.tmux.kill(name)
+                except Exception:
+                    pass
             if context_backup is not None:
                 try:
                     context_path.write_bytes(context_backup)
@@ -1635,10 +1668,14 @@ class SessionManager:
             except Exception:
                 pass
             raise
+        finally:
+            admission.__exit__(None, None, None)
         return self.inspect(name)
 
     def interrupt(self, name: str) -> dict[str, Any]:
         session = self.inspect(name)
+        if session.get("execution_kind") == "integration-plan":
+            return self._terminate_integration_session(session, reason="interrupted_by_owner")
         if session["managed"] and session.get("tool"):
             provider_adapter(session["tool"], self.auth).interrupt(session)
         self.tmux_for_name(name).interrupt(name)
@@ -1648,6 +1685,8 @@ class SessionManager:
 
     def restart(self, name: str) -> dict[str, Any]:
         session = self.inspect(name)
+        if session.get("execution_kind") == "integration-plan":
+            raise PermissionError("integration planning sessions cannot be restarted")
         if not session["managed"] or not session["launcher_path"]:
             raise ValueError("restart-agent is available only for managed sessions")
         project_id = session.get("project_id")
@@ -1711,7 +1750,22 @@ class SessionManager:
         launcher_path.write_text(launcher_text, encoding="utf-8")
         launcher_path.chmod(0o700)
         provider_adapter(tool, self.auth).restart(session)
-        self.tmux_for_name(name).restart(name, launcher_path)
+        with admission_lock(self.settings.state_dir):
+            if not session.get("running"):
+                with self.database.connect() as conn:
+                    ordinary_count = conn.execute(
+                        "SELECT COUNT(*) FROM sessions WHERE managed=1 "
+                        "AND execution_kind!='integration-plan' "
+                        "AND status IN ('reserved','attached','detached')"
+                    ).fetchone()[0]
+                    integration_count = conn.execute(
+                        "SELECT COUNT(*) FROM integration_requests WHERE admission_held=1"
+                    ).fetchone()[0]
+                if ordinary_count + integration_count >= self.settings.max_managed_sessions:
+                    raise RuntimeError(
+                        f"managed-session limit reached ({self.settings.max_managed_sessions})"
+                    )
+            self.tmux_for_name(name).restart(name, launcher_path)
         self.database.audit(
             "session.restarted", name, "success",
             details={"effective_skills": [s["name"] for s in skill_validation["effective"]]},
@@ -1722,6 +1776,8 @@ class SessionManager:
     def rename(self, name: str, new_name: str) -> dict[str, Any]:
         validate_session_name(new_name)
         session = self.inspect(name)
+        if session.get("execution_kind") == "integration-plan":
+            raise PermissionError("integration planning sessions cannot be renamed")
         self.tmux_for_name(name).rename(name, new_name)
         launcher_path = session["launcher_path"]
         if launcher_path:
@@ -1758,6 +1814,8 @@ class SessionManager:
 
     def kill(self, name: str, *, allow_unmanaged: bool = False) -> dict[str, Any]:
         session = self.inspect(name)
+        if session.get("execution_kind") == "integration-plan":
+            return self._terminate_integration_session(session, reason="killed_by_owner")
         if not session["managed"] and not allow_unmanaged:
             raise PermissionError("unmanaged session requires explicit --allow-unmanaged")
         tmux = self.tmux_for_name(name)
@@ -1798,6 +1856,8 @@ class SessionManager:
 
     def archive(self, name: str, *, kill: bool = False, allow_unmanaged: bool = False) -> dict[str, Any]:
         session = self.inspect(name)
+        if session.get("execution_kind") == "integration-plan":
+            raise PermissionError("integration planning sessions cannot be archived")
         transcript = self.settings.state_dir / "transcripts" / f"{name}-{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         tmux = self.tmux_for_name(name)
         if tmux.exists(name):
@@ -1822,11 +1882,85 @@ class SessionManager:
         if not tmux.exists(name):
             raise KeyError(f"tmux session is not running: {name}")
         session = self.inspect(name)
+        if session.get("execution_kind") == "integration-plan":
+            raise PermissionError("integration planning sessions are view-only")
         if session["managed"] and session.get("tool"):
             provider_adapter(session["tool"], self.auth).resume(session)
         self.database.audit("session.attached", name, "success")
         log.info("session=%s action=attach tool=%s profile=%s", name, session.get("tool"), session.get("profile"))
         tmux.attach(name)
+
+    def _terminate_integration_session(
+        self, session: dict[str, Any], *, reason: str
+    ) -> dict[str, Any]:
+        from .task_runner import process_identity_matches, terminate_owned_group
+
+        with self.database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            request = conn.execute(
+                "SELECT * FROM integration_requests WHERE session_id=?", (session["id"],)
+            ).fetchone()
+            if request is None:
+                raise RuntimeError("integration request record is missing")
+            terminal = request["state"] in {"completed", "needs_input", "blocked", "failed"}
+            preclaim_stopped = False
+            if not terminal and request["state"] == "accepted" and request["claimed_at"] is None:
+                now = utc_now()
+                stopped = conn.execute(
+                    "UPDATE integration_requests SET state='failed', reason_code=?, "
+                    "admission_held=0, terminal_at=?, updated_at=?, revision=revision+1 "
+                    "WHERE id=? AND state='accepted' AND claimed_at IS NULL",
+                    (reason, now, now, request["id"]),
+                )
+                preclaim_stopped = stopped.rowcount == 1
+        confirmed = terminal or preclaim_stopped
+        if not confirmed:
+            pid = request["child_pid"]
+            identity_matches = bool(
+                pid and process_identity_matches(
+                    pid,
+                    request["child_start_time"],
+                    request["child_pgid"],
+                    request["child_boot_id"],
+                )
+            )
+            confirmed = bool(
+                identity_matches
+                and terminate_owned_group(
+                    pid,
+                    request["child_start_time"],
+                    request["child_pgid"],
+                    request["child_boot_id"],
+                )
+            )
+            now = utc_now()
+            with self.database.connect() as conn:
+                if confirmed:
+                    conn.execute(
+                        "UPDATE integration_requests SET state='failed', reason_code=?, "
+                        "admission_held=0, terminal_at=?, updated_at=?, revision=revision+1 "
+                        "WHERE id=? AND state NOT IN ('completed','needs_input','blocked','failed')",
+                        (reason, now, now, request["id"]),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE integration_requests SET state='delivery_unknown', "
+                        "reason_code='termination_unconfirmed', admission_held=1, updated_at=?, "
+                        "revision=revision+1 WHERE id=? "
+                        "AND state NOT IN ('completed','needs_input','blocked','failed')",
+                        (now, request["id"]),
+                    )
+        if not confirmed:
+            return self.inspect(session["tmux_name"])
+        tmux = self.tmux_for_name(session["tmux_name"])
+        if tmux.exists(session["tmux_name"]):
+            tmux.kill(session["tmux_name"])
+        with self.database.connect() as conn:
+            conn.execute(
+                "UPDATE sessions SET status='process-exited', exit_reason=? WHERE id=?",
+                (reason, session["id"]),
+            )
+        return self.inspect(session["tmux_name"])
 
     def list_profiles(self) -> list[dict[str, Any]]:
         from .profiles import installed_profiles
@@ -2571,6 +2705,8 @@ class SessionManager:
         }
 
     def doctor(self) -> dict[str, Any]:
+        from .integration_requests import integration_capability_status
+
         profile_dir = self.settings.profile_dir
         profile_count = sum(1 for p in PROFILES if (profile_dir / f"{p}.md").is_file())
         checks: dict[str, Any] = {
@@ -2583,6 +2719,9 @@ class SessionManager:
             "profile_dir_exists": profile_dir.is_dir(),
             "tools": {name: path.is_file() for name, path in TOOL_BINARIES.items()},
             "authentication": self.auth.doctor(),
+            "integration_planner": integration_capability_status(
+                self.settings.config_dir or self.settings.state_dir / "config"
+            ),
         }
         checks["ok"] = all(
             [checks["workspace_root"], checks["state_dir"], checks["database"], checks["tmux"]]
