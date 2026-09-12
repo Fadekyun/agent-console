@@ -1,4 +1,5 @@
 import { initTheme } from '/static/theme.js?v=8';
+import { skillActionMessage, skillToolDiagnostic } from '/static/skill-diagnostics.js?v=1';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -651,10 +652,10 @@ async function renderSkills() {
   } else {
     status.textContent = '';
   }
-  $('#skills-list').replaceChildren(...data.entries.map(skillCard));
+  $('#skills-list').replaceChildren(...data.entries.map((entry) => skillCard(entry, data.providers)));
 }
 
-function skillCard(entry) {
+function skillCard(entry, providers = []) {
   const card = document.createElement('div'); card.className = 'skill-card';
   const header = document.createElement('div'); header.className = 'skill-card-header';
   const h3 = document.createElement('h3'); h3.textContent = entry.name;
@@ -663,10 +664,7 @@ function skillCard(entry) {
   const desc = document.createElement('p'); desc.textContent = entry.description || 'No description';
   const tools = document.createElement('div'); tools.className = 'skill-tools';
   (entry.synced || []).forEach((s) => {
-    const badge = document.createElement('span'); badge.className = `skill-tool-badge ${s.linked ? 'linked' : 'missing'}`;
-    badge.textContent = `${s.tool}: ${s.linked ? 'synced' : 'missing'}`;
-    badge.title = s.linked ? 'Symlink present and valid' : 'Symlink missing or broken';
-    tools.append(badge);
+    tools.append(skillToolDiagnostic(s, providers.find((provider) => provider.tool === s.tool)));
   });
   const sourceBadge = document.createElement('span'); sourceBadge.className = `skill-tool-badge ${entry.source_present ? 'linked' : 'missing'}`;
   sourceBadge.textContent = entry.source_present ? 'source present' : 'source missing';
@@ -752,8 +750,8 @@ async function runSkillsSync() {
   const status = $('#skills-status'); status.textContent = 'Syncing…';
   try {
     const result = await api('/api/skills/sync', { method: 'POST', body: '{}' });
-    status.textContent = `Sync complete: ${result.skills} skills synced`;
-    renderSkills();
+    await renderSkills();
+    status.textContent = skillActionMessage('sync', result);
   } catch (e) { status.textContent = `Sync failed: ${e.message}`; }
 }
 
@@ -761,8 +759,8 @@ async function runSkillsDoctor() {
   const status = $('#skills-status'); status.textContent = 'Running doctor…';
   try {
     const result = await api('/api/skills/doctor', { method: 'POST', body: '{}' });
-    status.textContent = result.ok ? `Doctor OK (${result.skills} skills)` : `Doctor: ${result.problems.join('; ')}`;
-    renderSkills();
+    await renderSkills();
+    status.textContent = skillActionMessage('doctor', result);
   } catch (e) { status.textContent = `Doctor failed: ${e.message}`; }
 }
 

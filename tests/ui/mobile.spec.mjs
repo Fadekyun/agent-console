@@ -121,8 +121,8 @@ test.describe('mobile skills view', () => {
     await expect(card).toContainText('test-catalog-skill');
     await expect(card).toContainText('standard');
     await expect(card).toContainText('A test catalog skill');
-    await expect(card).toContainText('codex: ✓');
-    await expect(card).toContainText('claude: ✗');
+    await expect(card).toContainText('codex: synced');
+    await expect(card).toContainText('claude: missing');
     await expect(card).toContainText('Standard skill · no approval gate');
     await expect(card).toContainText('Assigned:');
     await expect(card).toContainText('coder');

@@ -2,6 +2,15 @@
 
 All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
+## 0.4.0 (Unreleased)
+
+- **Date**: 2026-09-13
+- **Issue/PR**: [#81](https://github.com/Fadekyun/agent-console/issues/81) / pending
+- **Impact**: Adds a typed provider skill-capability source of truth shared by catalogue, sync, doctor, and provider isolation gates. OpenCode 1.18.30 gains canonical materialization at its XDG-aware native global root, bounded recursive discovery diagnostics for confirmed global/project roots, frontmatter-ID duplicate and shadow reporting, and conservative mutation refusal for missing or unverified OpenCode versions. Sync validates canonical and target containment, preserves unrelated paths and wrong-target user symlinks, and removes a revoked per-tool link only when exact canonical ownership is proven. Existing Codex, Codex Pro, Claude, and Hermes roots and fail-closed assignment/superpower behavior remain intact.
+- **Configuration/Migration**: No database migration. OpenCode uses `${XDG_CONFIG_HOME:-~/.config}/opencode/skills` for the real user home. Existing skill `tools` frontmatter remains authoritative; no remote download or live-directory synchronization occurs during upgrade.
+- **Verification**: `pytest tests/test_core.py tests/test_web.py tests/test_skill_capabilities.py tests/test_skills.py tests/test_skills_secrets.py tests/test_version.py -q` passed 240 tests in 45.51 seconds (one Starlette deprecation warning). The isolated `scripts/smoke-opencode-skills.sh /home/agentstage/.opencode/bin/opencode` fixture passed against OpenCode 1.18.30 without credentials, model calls, or real-home changes. UI diagnostics checks passed 13 tests with 8 intentional platform skips.
+- **Rollback**: Revert the issue #81 commit or restore the prior application release. Materialized links are not bulk-deleted on rollback; remove a link only after verifying it targets the canonical skill. No database rollback is required.
+
 ## 0.3.1 (Unreleased)
 
 - **Date**: 2026-09-12

@@ -159,6 +159,24 @@ agentctl skills sync
 agentctl skills doctor
 ```
 
+The catalogue, sync command, and doctor use one provider capability table. Native
+materialization roots are `~/.codex/skills` (Codex and Codex Pro),
+`~/.claude/skills` (Claude), `~/.hermes/skills/homelab` (Hermes), and
+`${XDG_CONFIG_HOME:-~/.config}/opencode/skills` (OpenCode). An explicit `home`
+used by tests or embedding always resolves OpenCode beneath that home and ignores
+ambient XDG variables.
+
+Sync creates canonical-target directory symlinks only. It preserves unrelated
+files, directories, and user symlinks; a canonical-name collision or wrong target
+is reported instead of replaced. If a skill's explicit `tools` allowlist removes a
+provider, sync removes the old link only when it can prove that link still targets
+the same canonical skill. OpenCode mutation is currently verified for version
+`1.18.30`; missing or unknown versions are diagnosed and skipped conservatively.
+Discovery diagnostics scan confirmed global and project roots with a fixed bound,
+report duplicates and shadowing by the frontmatter skill ID, and mark unverified
+ordering or configuration-dependent sources as uncertain. No remote skills are
+downloaded.
+
 Configure which skills to retain:
 
 ```bash

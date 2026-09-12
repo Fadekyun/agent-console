@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .auth import AuthRegistry
+from .skill_capabilities import SKILL_TOOL_CAPABILITIES
 
 
 def _resolve_binary(env_var: str, fallback: str) -> Path:
@@ -59,7 +60,8 @@ class ProviderAdapter:
 
     @property
     def can_isolate_skills(self) -> bool:
-        return False
+        capability = SKILL_TOOL_CAPABILITIES.get(self.tool)
+        return bool(capability and capability.can_isolate_skills)
 
     def build_environment(self, context: dict[str, Any]) -> dict[str, str]:
         return {}
@@ -128,10 +130,6 @@ def _codex_pin_args(
 
 class CodexAdapter(ProviderAdapter):
     tool = "codex"
-
-    @property
-    def can_isolate_skills(self) -> bool:
-        return True
 
     def build_environment(self, context: dict[str, Any]) -> dict[str, str]:
         return {"CODEX_HOME": str(self.registry.codex_home(context["name"], tool=self.tool))}
