@@ -1,4 +1,4 @@
-"""Private experimental SQL reader. Not wired into CLI or runtime yet.
+"""Private guarded SQL reader for the allowlisted CLI inspection routes.
 
 This is an application-state write guard for trusted read code, not a sandbox
 for running user code. Tmux observation and formatting belong in the caller.

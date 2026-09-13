@@ -54,6 +54,11 @@ if [ -n "$(git -C "$checkout" status --porcelain --untracked-files=all)" ]; then
   exit 1
 fi
 
+# Read the existing trusted runtime before choosing the database to back up.
+set -a
+source "$runtime"
+set +a
+database_path="${AGENT_CONSOLE_DB:-$state/agent-console.sqlite3}"
 timestamp="$(date +%Y%m%d_%H%M%S)"
 backup="$state/update-backups/${timestamp}-${requested_sha:0:12}"
 mkdir -p "$backup"
@@ -82,7 +87,7 @@ done
 if [ -d "$state/launchers" ]; then
   cp -a "$state/launchers" "$backup/"
 fi
-python3 - "$state/agent-console.sqlite3" "$backup/agent-console.sqlite3" <<'PY'
+python3 -B - "$database_path" "$backup/agent-console.sqlite3" <<'PY'
 import sqlite3
 import sys
 
@@ -116,6 +121,19 @@ wait_for_health() {
 }
 
 rollback() {
+  # Gate BEFORE restoring old runner/CLI/release files: an old writer must never
+  # silently relabel a database containing private request data.
+  if [ -L "$backup/releases/current" ]; then
+    rollback_release="$current_target"
+  else
+    rollback_release="$root"
+  fi
+  if ! "$state/venv/bin/python" -B "$checkout/scripts/prepare-schema-transition.py" \
+    --database "$database_path" --config-dir "$config_dir" --state-dir "$state" \
+    --release "$rollback_release"; then
+    printf 'FATAL: schema-incompatible rollback refused; current source and all database state retained. Use reviewed forward recovery.\n' >&2
+    return 1
+  fi
   cp -a "$backup/runtime.env" "$runtime"
   cp -a "$backup/agent-console-web.service" "$unit"
   cp -a "$backup/agent-console-tailscale-tunnel.service" "$tunnel_unit"
@@ -151,15 +169,16 @@ if ! "$checkout/scripts/install.sh"; then
 fi
 
 if ! release_name="$(PYTHONPATH="$checkout" "$state/venv/bin/python" - \
-  "$state/releases" "$checkout" "$requested_sha" <<'PY'
+  "$state/releases" "$checkout" "$requested_sha" "$database_path" "$config_dir" "$state" <<'PY'
 import sys
 import time
 from pathlib import Path
 
 from agent_console.deployer import Deployer
 
-releases_root, source, candidate_sha = map(Path, sys.argv[1:])
-deployer = Deployer(releases_root, object(), source_tracker="git")
+releases_root, source, candidate_sha, database, config, state = map(Path, sys.argv[1:])
+deployer = Deployer(releases_root, object(), source_tracker="git", database_path=database,
+                    config_dir=config, state_dir=state)
 try:
     release = deployer.create_release(source, candidate_sha=str(candidate_sha))
 except FileExistsError:

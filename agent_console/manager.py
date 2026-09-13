@@ -133,6 +133,9 @@ class SessionManager:
             self.settings.releases_root or self.settings.state_dir / "releases",
             runner=runner,
             source_tracker="git",
+            database_path=self.settings.database_path,
+            config_dir=self.settings.config_dir or self.settings.state_dir / "config",
+            state_dir=self.settings.state_dir,
         )
 
     def _live_sessions(self) -> dict[str, tuple[str, Any]]:

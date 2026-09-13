@@ -179,6 +179,27 @@ agentctl skills sync
 agentctl skills doctor
 ```
 
+The catalogue, sync command, and doctor use one provider capability table. Native
+materialization roots are `~/.codex/skills` (Codex and Codex Pro),
+`~/.claude/skills` (Claude), `~/.hermes/skills/homelab` (Hermes), and
+`${XDG_CONFIG_HOME:-~/.config}/opencode/skills` (OpenCode). An explicit `home`
+used by tests or embedding always resolves OpenCode beneath that home and ignores
+ambient XDG variables.
+
+Sync creates canonical-target directory symlinks only. It preserves unrelated
+files, directories, and user symlinks; a canonical-name collision or wrong target
+is reported instead of replaced. If a skill's explicit `tools` allowlist removes a
+provider, sync removes the old link only when it can prove that link still targets
+the same canonical skill. OpenCode mutation is currently verified for version
+`1.18.30`; missing or unknown versions are diagnosed and skipped conservatively.
+Discovery diagnostics scan confirmed global and project roots with a fixed bound,
+report duplicates and shadowing by the frontmatter skill ID, and mark unverified
+ordering or configuration-dependent sources as uncertain. Repeated isolated
+OpenCode 1.18.30 runs selected different winners for identical cross-root duplicate
+fixtures, so OpenCode duplicate precedence remains unverified and no winner is
+claimed. No remote skills are
+downloaded.
+
 Configure which skills to retain:
 
 ```bash
@@ -269,3 +290,7 @@ web/static/        Frontend HTML, JS, CSS
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+### Combined release preparation
+
+The combined candidate is tracked in [issue96](https://github.com/Fadekyun/agent-console/issues/96). See [actual skills and prepared delivery](docs/skill-delivery-audit.md) for the distinction between engine support, existing content, prepared helpers and installed/assigned state. The [schema11 rollback contract](docs/schema-rollback.md) permits a return to schema10 only with disabled planning and no retained request/noninteractive state. Native planning remains disabled/unverified; skill discovery and guarded SQL reads do not establish native provider containment.

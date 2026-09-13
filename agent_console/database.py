@@ -40,6 +40,17 @@ class Database:
 
     def migrate(self) -> None:
         with self.connect() as conn:
+            # Never let an older writer silently relabel a newer schema. An
+            # explicit, guarded maintenance rollback is separate from migration.
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='schema_meta'").fetchone():
+                row = conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()
+                if row is not None:
+                    try:
+                        existing_version = int(row[0])
+                    except (TypeError, ValueError):
+                        raise ValueError("database schema version is invalid") from None
+                    if existing_version < 1 or existing_version > SCHEMA_VERSION:
+                        raise ValueError("database schema version is unsupported by this writer")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS schema_meta (

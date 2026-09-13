@@ -14,6 +14,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from contextlib import nullcontext
+
+from .admission import admission_lock
+from .schema_compatibility import prepare_database_for_release, release_schema_version
 
 log = logging.getLogger(__name__)
 
@@ -293,7 +297,13 @@ class Deployer:
         runner: ServiceRunner,
         *,
         source_tracker: str | None = None,
+        database_path: Path | None = None,
+        config_dir: Path | None = None,
+        state_dir: Path | None = None,
     ):
+        self.database_path = database_path
+        self.config_dir = config_dir
+        self.state_dir = state_dir or (database_path.parent if database_path else None)
         self.releases_root = releases_root.resolve()
         self.runner = runner
         self.source_tracker = source_tracker
@@ -337,10 +347,19 @@ class Deployer:
 
     def _set_link(self, link_name: str, release_name: str) -> None:
         self._contained_release_name(release_name)
-        link = self.releases_root / link_name
-        tmp = self.releases_root / f".{link_name}.tmp"
-        tmp.symlink_to(release_name)
-        tmp.rename(link)
+        guarded = link_name == CURRENT_LINK and self.database_path is not None
+        with admission_lock(self.state_dir) if guarded else nullcontext():
+            if guarded:
+                if self.config_dir is None:
+                    raise ValueError("release schema guard requires configuration directory")
+                prepare_database_for_release(
+                    self.database_path, release_schema_version(self._release_path(release_name)),
+                    self.config_dir,
+                )
+            link = self.releases_root / link_name
+            tmp = self.releases_root / f".{link_name}.tmp"
+            tmp.symlink_to(release_name)
+            tmp.rename(link)
 
     def _clear_link(self, link_name: str) -> None:
         link = self.releases_root / link_name
