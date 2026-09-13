@@ -42,6 +42,8 @@ class InstallerTests(unittest.TestCase):
     def _create_stubs(self):
         self._stub("python3", """#!/bin/bash
 set -euo pipefail
+# The production wrapper disables bytecode; preserve the remaining CLI args.
+if [ "${1:-}" = "-B" ]; then shift; fi
 if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then
   mkdir -p "$3/bin"
   cat > "$3/bin/pip" <<'PIPEOF'
