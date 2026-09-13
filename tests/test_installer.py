@@ -534,7 +534,7 @@ class UpdateScriptTests(unittest.TestCase):
             "fetch --quiet origin main",
             "requested SHA",
             "snapshot-database.py",
-            "prepare-schema-transition.py",
+            "select-release.py",
             "backup/releases/current",
             "sessions-before.json",
             "sessions-after.json",
@@ -545,6 +545,15 @@ class UpdateScriptTests(unittest.TestCase):
             "systemctl --user restart agent-console-web.service",
         ):
             self.assertIn(expected, text)
+        rollback = text[text.index("rollback() {"):text.index("\nexport AGENT_CONSOLE_SOURCE_ROOT")]
+        selection = rollback.index('"$checkout/scripts/select-release.py"')
+        restoration = rollback.index('cp -a "$backup/runtime.env"')
+        self.assertLess(selection, restoration)
+        self.assertIn('--database "$database_path" --config "$config_dir" --state "$state"', rollback)
+        self.assertIn('--releases "$state/releases" --release "$rollback_release"', rollback)
+        self.assertIn('return 1', rollback[selection:restoration])
+        self.assertNotIn('rm -f "$current_link"', rollback)
+        self.assertNotIn('cp -a "$backup/releases/current"', rollback)
 
 
 if __name__ == "__main__":

@@ -31,7 +31,7 @@ _resolve_bin() {
 }
 
 root="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
-state="$HOME/.local/share/agent-console"
+state="${AGENT_CONSOLE_STATE_DIR:-$HOME/.local/share/agent-console}"
 mkdir -p "$state" "$HOME/bin" "$HOME/.local/bin" "$HOME/.config/systemd/user"
 chmod 700 "$state"
 python3 -m venv "$state/venv"
@@ -42,10 +42,7 @@ claude_bin=$(_resolve_bin AGCONSOLE_CLAUDE_BIN claude 0)
 opencode_bin=$(_resolve_bin AGCONSOLE_OPENCODE_BIN opencode)
 hermes_bin=$(_resolve_bin AGCONSOLE_HERMES_BIN hermes)
 (cd "$root" && "$npm_cmd" ci --omit=dev --no-audit --no-fund)
-for name in agentctl agent-selector agent-console-status agent-console-logs; do
-  ln -sfn "$root/scripts/$name" "$HOME/bin/$name"
-  ln -sfn "$HOME/bin/$name" "$HOME/.local/bin/$name"
-done
+
 
 tailscale_login="${AGENT_CONSOLE_TAILSCALE_LOGIN:-your-email@example.com}"
 lan_cidr="${AGENT_CONSOLE_LAN_CIDR:-127.0.0.1/32}"
@@ -138,6 +135,7 @@ fi
   echo "AGENT_CONSOLE_TRUSTED_HOSTS=$trusted_hosts"
   echo "AGENT_CONSOLE_WORKSPACE_ROOT=$workspace_root"
   echo "AGENT_CONSOLE_STATE_DIR=$state_dir"
+  echo "AGENT_CONSOLE_DB=${AGENT_CONSOLE_DB:-$state_dir/agent-console.sqlite3}"
   echo "AGENT_CONSOLE_CONFIG_DIR=$config_dir"
   echo "AGENT_CONSOLE_PROFILE_DIR=$profile_dir"
   echo "AGENT_CONSOLE_HANDOFF_DIR=$handoff_dir"
@@ -228,11 +226,18 @@ NoNewPrivileges=true
 WantedBy=default.target
 EOF
 
+# Bootstrap owns fresh initialization; upgrades retain the selected release.
+# Missing current with an existing DB is refused, never a checkout fallback.
+python3 -B "$root/scripts/install-entrypoints.py" \
+  --home "$HOME" --state "$state_dir" --releases "$state_dir/releases" \
+  --bootstrap-source "$root" --database "${AGENT_CONSOLE_DB:-$state_dir/agent-console.sqlite3}" \
+  --config "$config_dir"
+
 systemctl --user daemon-reload
 systemctl --user enable agent-console-web.service
 systemctl --user restart agent-console-web.service
 
-"$HOME/bin/agentctl" doctor
+PYTHONPATH="$state_dir/releases/current" python3 -B -m agent_console.cli doctor
 
 printf '\nSkills setup (optional):\n'
 printf '  export AGCONSOLE_SKILLS_ROOT=%s\n' "$skills_root"

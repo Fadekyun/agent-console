@@ -14,6 +14,16 @@ if ! [[ "$requested_sha" =~ ^[0-9a-f]{40}$ ]]; then
   printf 'Usage: %s <40-character-approved-main-sha>\n' "$0" >&2
   exit 2
 fi
+if [ ! -f "$runtime" ]; then
+  printf 'FATAL: existing trusted runtime configuration is required.\n' >&2
+  exit 1
+fi
+# Resolve the configured state before choosing locks, backup paths or the runner.
+set -a
+source "$runtime"
+set +a
+state="${AGENT_CONSOLE_STATE_DIR:-$state}"
+runner="$state/runner.sh"
 if [ ! -f "$runtime" ] || [ ! -f "$unit" ] || [ ! -f "$tunnel_unit" ] || [ ! -f "$runner" ]; then
   printf 'FATAL: existing runtime, service units, and stable runner are required before update.\n' >&2
   exit 1
@@ -123,9 +133,9 @@ rollback() {
   else
     rollback_release="$root"
   fi
-  if ! "$state/venv/bin/python" -B "$checkout/scripts/prepare-schema-transition.py" \
-    --database "$database_path" --config-dir "$config_dir" --state-dir "$state" \
-    --release "$rollback_release"; then
+  if ! "$state/venv/bin/python" -B "$checkout/scripts/select-release.py" \
+    --database "$database_path" --config "$config_dir" --state "$state" \
+    --releases "$state/releases" --release "$rollback_release"; then
     printf 'FATAL: schema-incompatible rollback refused; current source and all database state retained. Use reviewed forward recovery.\n' >&2
     return 1
   fi
@@ -133,20 +143,10 @@ rollback() {
   cp -a "$backup/agent-console-web.service" "$unit"
   cp -a "$backup/agent-console-tailscale-tunnel.service" "$tunnel_unit"
   cp -a "$backup/runner.sh" "$runner"
-  rm -f "$current_link"
-  if [ -L "$backup/releases/current" ]; then
-    cp -a "$backup/releases/current" "$state/releases/"
-  fi
-  for name in agentctl agent-selector agent-console-status agent-console-logs; do
-    if [ -L "$backup/bin/$name" ]; then
-      rm -f "$HOME/bin/$name"
-      cp -a "$backup/bin/$name" "$HOME/bin/"
-    fi
-    if [ -L "$backup/local-bin/$name" ]; then
-      rm -f "$HOME/.local/bin/$name"
-      cp -a "$backup/local-bin/$name" "$HOME/.local/bin/"
-    fi
-  done
+  # Historical aliases are evidence only; never restore a schema10 writer path.
+  "$state/venv/bin/python" -B "$checkout/scripts/install-entrypoints.py" \
+    --home "$HOME" --state "$state" --releases "$state/releases"
+
   systemctl --user daemon-reload
   systemctl --user restart agent-console-web.service
   if ! wait_for_health 30; then
@@ -185,6 +185,13 @@ PY
 )"; then
   rollback
   printf 'FATAL: exact-SHA release creation failed; previous release restored from %s.\n' "$backup" >&2
+  exit 1
+fi
+
+if ! "$state/venv/bin/python" -B "$checkout/scripts/install-entrypoints.py" \
+  --home "$HOME" --state "$state" --releases "$state/releases"; then
+  rollback
+  printf 'FATAL: selected-release entrypoints unavailable.\n' >&2
   exit 1
 fi
 
