@@ -150,6 +150,7 @@ class SelectedRelease:
             raise EntrypointError('release manifest is invalid')
         if type(manifest.get('file_count')) is not int or manifest['file_count'] != len(files):
             raise EntrypointError('release manifest count is invalid')
+        self.hashes = files
         for name in NAMES:
             if f'scripts/{name}' not in files:
                 raise EntrypointError('release is missing a normal entrypoint')
@@ -197,13 +198,20 @@ class SelectedRelease:
                 raise EntrypointError('validated release file changed')
 
 
-def install_entrypoints(home: Path, state: Path, releases: Path) -> dict:
+def install_entrypoints(home: Path, state: Path, releases: Path, *, expected_selection: dict | None = None) -> dict:
     home, state, releases = home.absolute(), state.absolute(), releases.absolute()
     # No manager, database, provider or selected-source execution in this operation.
     with entrypoint_lock(state), ExitStack() as stack:
         home_fd = _directory(home)
         stack.callback(os.close, home_fd)
         selected = SelectedRelease(releases, stack)
+        if expected_selection is not None:
+            current = selected.current
+            observed = (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns)
+            if (observed != tuple(expected_selection['current'])
+                    or _identity(selected.fd)[:2] != tuple(expected_selection['release'])
+                    or any(selected.hashes.get(name) != digest for name, digest in expected_selection['files'].items())):
+                raise EntrypointError('selected source changed since immutable capture')
         directories = (home / 'bin', home / '.local' / 'bin')
         old = {}
         # Validate every existing ancestor and destination before creating anything.

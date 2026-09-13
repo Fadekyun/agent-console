@@ -4,7 +4,8 @@ import argparse
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+if not getattr(sys, "_agconsole_pinned", False):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_console.entrypoints import EntrypointError, install_entrypoints, bootstrap_entrypoints
 
 
@@ -23,7 +24,8 @@ def main():
         parser.error('database and config are bootstrap-only')
     try:
         result = (bootstrap_entrypoints(args.bootstrap_source, args.home, args.state, args.releases, args.database, args.config)
-                  if args.bootstrap_source else install_entrypoints(args.home, args.state, args.releases))
+                  if args.bootstrap_source else install_entrypoints(args.home, args.state, args.releases,
+                        expected_selection=getattr(sys, "_agconsole_selection", None)))
         print('selected-release entrypoints installed: ' + str(len(result['aliases'])))
         return 0
     except (OSError, ValueError, EntrypointError):

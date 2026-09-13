@@ -179,6 +179,53 @@ class EntrypointTests(unittest.TestCase):
         result=subprocess.run(command,capture_output=True,text=True,timeout=5)
         self.assertEqual(result.returncode,2);self.assertNotIn('RuntimeError',result.stderr)
 
+    def delegate_module(self):
+        spec=importlib.util.spec_from_file_location('delegate_fixture',REPO/'ops/lxc115-entrypoint-delegate.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        return module
+
+    def test_sealed_execution_rejects_path_and_inplace_races_for_script_and_modules(self):
+        for relative in ('scripts/install-entrypoints.py','agent_console/entrypoints.py','agent_console/__init__.py'):
+            for race in ('replace','inplace'):
+                with self.subTest(relative=relative,race=race):
+                    module=self.delegate_module();captured,expected=module.capture(self.home)
+                    target=self.one/relative;original=target.read_bytes();canary=self.home/'UNVALIDATED_CODE_RAN'
+                    malicious=('from pathlib import Path; Path('+repr(str(canary))+').touch()\n').encode()
+                    real_run=subprocess.run
+                    def at_launch(command,**kwargs):
+                        # Deterministic mutation AFTER sealing/last parent check.
+                        import fcntl
+                        fd=kwargs['pass_fds'][0]
+                        self.assertTrue(fcntl.fcntl(fd,fcntl.F_GET_SEALS)&fcntl.F_SEAL_WRITE)
+                        with self.assertRaises(OSError):os.pwrite(fd,b'x',0)
+                        if race=='replace':target.unlink()
+                        target.write_bytes(malicious)
+                        return real_run(command,**kwargs,capture_output=True)
+                    try:
+                        with patch.object(module.subprocess,'run',side_effect=at_launch):
+                            with self.assertRaises(subprocess.CalledProcessError):module.execute_captured(self.home,captured,expected)
+                        self.assertFalse(canary.exists(),'no unvalidated script or imported module may execute')
+                        self.assertFalse((self.home/'bin/agentctl').exists())
+                    finally:target.write_bytes(original)
+
+    def test_sealed_execution_rejects_selected_change_before_alias_mutation(self):
+        module=self.delegate_module();captured,expected=module.capture(self.home)
+        other=self.make_release('release-other');real_run=subprocess.run
+        def at_launch(command,**kwargs):
+            self.current.unlink();self.current.symlink_to(other.name)
+            return real_run(command,**kwargs,capture_output=True)
+        with patch.object(module.subprocess,'run',side_effect=at_launch):
+            with self.assertRaises(subprocess.CalledProcessError):module.execute_captured(self.home,captured,expected)
+        self.assertEqual(self.current.resolve(),other);self.assertFalse((self.home/'bin/agentctl').exists())
+
+    def test_delegate_capture_refuses_linked_sources_and_wrong_manifest(self):
+        module=self.delegate_module();target=self.one/'scripts/install-entrypoints.py';original=target.read_bytes()
+        elsewhere=self.home/'elsewhere.py';elsewhere.write_bytes(original)
+        target.unlink();target.symlink_to(elsewhere)
+        with self.assertRaises((OSError,ValueError)):module.capture(self.home)
+        target.unlink();target.write_bytes(original+b'\n# changed\n')
+        with self.assertRaises(ValueError):module.capture(self.home)
+
     def test_patch_wrong_source_hash_refuses_without_output(self):
         source=self.home/'wrong.sh';source.write_text('unrelated');output=self.home/'out.sh'
         result=subprocess.run([sys.executable,'-B',str(REPO/'ops/prepare-lxc115-sync-patch.py'),str(source),str(output)],capture_output=True,timeout=5)
@@ -296,3 +343,12 @@ exec /usr/bin/python3 -B "$@"
 
     def test_real_updater_retained_request_blocks_before_restore(self):self.rollback_fixture(blocked="requests",custom=True)
     def test_real_updater_custom_database_guarded_selection(self):self.rollback_fixture(custom=True)
+
+    def test_initial_bootstrap_runner_starts_selected_release_only(self):
+        result=self.run_install();self.assertEqual(result.returncode,0,result.stderr)
+        selected=(self.state/'releases/current').resolve()
+        uvicorn=self.state/'venv/bin/uvicorn'
+        uvicorn.write_text('#!/bin/sh\nprintf "%s|%s" "$PWD" "$PYTHONPATH"\n');uvicorn.chmod(0o700)
+        result=subprocess.run([str(self.state/'runner.sh')],env=self.env,capture_output=True,text=True,timeout=5)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(result.stdout,str(selected)+'|'+str(selected))

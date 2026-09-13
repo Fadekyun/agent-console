@@ -11,6 +11,8 @@ All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/mig
 - **Verification**: Isolated alias/manifest/inode/containment, shared-lock, bootstrap/upgrade, guarded rollback and helper-delegation fixtures; installer/release/core regressions and independent final source review required. No old writer, host helper, provider or real service is executed by fixtures.
 - **Rollback**: Preserve receipts and current data. Use the new guarded release selector and reinstall current-based aliases; never restore historical alias targets or the known unsafe context-sync function while schema11 is active. Missing installer fails closed. The separate live-WAL read limitation is unchanged.
 
+The stable runner refuses missing/incomplete current releases without checkout fallback. The host delegate executes sealed validated installer/package bytes; deterministic replacement and in-place race fixtures cover the boundary.
+
 ## 0.4.0 (Unreleased)
 
 - **Date**: 2026-09-13

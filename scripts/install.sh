@@ -162,7 +162,6 @@ cat > "$runner_path" <<RUNNEREOF
 #!/usr/bin/env bash
 set -euo pipefail
 runner_state="$state"
-runner_root="$root"
 runner_bind="$bind_host"
 runner_port="$port"
 runner_releases="\$runner_state/releases"
@@ -170,13 +169,14 @@ runner_current="\$runner_state/releases/current"
 if [ -L "\$runner_current" ]; then
   target="\$(readlink -f "\$runner_current")"
   case "\$target" in
-    "\$runner_releases"/release-*) release_contained=true ;;
+    "\$runner_releases"/release-*)
+      if [ "\$(dirname "\$target")" = "\$runner_releases" ]; then release_contained=true; else release_contained=false; fi ;;
     *) release_contained=false ;;
   esac
-  if \$release_contained && [ -d "\$target/agent_console" ]; then
+  if \$release_contained && [ -d "\$target/agent_console" ] && [ ! -L "\$target/agent_console" ]; then
     has_xterm=true
-    for asset in node_modules/@xterm/xterm/lib/xterm.mjs node_modules/@xterm/xterm/css/xterm.css node_modules/@xterm/addon-fit/lib/addon-fit.mjs; do
-      if [ ! -f "\$target/\$asset" ]; then has_xterm=false; break; fi
+    for asset in manifest.json agent_console/__init__.py agent_console/web.py node_modules/@xterm/xterm/lib/xterm.mjs node_modules/@xterm/xterm/css/xterm.css node_modules/@xterm/addon-fit/lib/addon-fit.mjs; do
+      if [ ! -f "\$target/\$asset" ] || [ -L "\$target/\$asset" ]; then has_xterm=false; break; fi
     done
     if \$has_xterm; then
       cd "\$target"
@@ -184,8 +184,8 @@ if [ -L "\$runner_current" ]; then
     fi
   fi
 fi
-cd "\$runner_root"
-PYTHONPATH="\$runner_root" exec "\$runner_state/venv/bin/uvicorn" agent_console.web:app --host "\$runner_bind" --port "\$runner_port" --no-proxy-headers
+printf 'Selected Console release unavailable; refusing startup.\n' >&2
+exit 2
 RUNNEREOF
 chmod 700 "$runner_path"
 
