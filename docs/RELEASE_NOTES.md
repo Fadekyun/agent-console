@@ -2,6 +2,17 @@
 
 All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
+## 0.4.1 (Unreleased)
+
+- **Date**: 2026-09-13
+- **Issue/PR**: [#98](https://github.com/Fadekyun/agent-console/issues/98) / pending
+- **Impact**: One manifest-validated installer keeps exactly eight normal CLI aliases on the selected release. Current selection and alias writers share a lock; bootstrap, upgrades and guarded rollback cannot restore checkout-era aliases. Includes an inert exact-hash patch renderer for the private context-sync writer, with no legacy fallback when the selected installer is missing.
+- **Configuration/Migration**: No schema migration or native planning enablement. Explicit fresh bootstrap may initialize a new database; an existing database without a selected release requires recovery, not automatic source fallback. Applying the private helper patch and its managed PATH delta requires separate reviewed maintenance authorization. No live helper, alias, environment or service change is performed by preparing the patch.
+- **Verification**: Isolated alias/manifest/inode/containment, shared-lock, bootstrap/upgrade, guarded rollback and helper-delegation fixtures; installer/release/core regressions and independent final source review required. No old writer, host helper, provider or real service is executed by fixtures.
+- **Rollback**: Preserve receipts and current data. Use the new guarded release selector and reinstall current-based aliases; never restore historical alias targets or the known unsafe context-sync function while schema11 is active. Missing installer fails closed. The separate live-WAL read limitation is unchanged.
+
+The stable runner refuses missing/incomplete current releases without checkout fallback. The host delegate executes sealed validated installer/package bytes; deterministic replacement and in-place race fixtures cover the boundary.
+
 ## 0.4.0 (Unreleased)
 
 - **Date**: 2026-09-13

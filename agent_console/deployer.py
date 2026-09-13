@@ -17,6 +17,7 @@ from typing import Any
 from contextlib import nullcontext
 
 from .admission import admission_lock
+from .entrypoints import entrypoint_lock
 from .schema_compatibility import prepare_database_for_release, release_schema_version
 
 log = logging.getLogger(__name__)
@@ -331,6 +332,10 @@ class Deployer:
         return candidate
 
     def _link_target(self, link_name: str) -> Path | None:
+        with entrypoint_lock(self.state_dir or self.releases_root.parent) if link_name == CURRENT_LINK else nullcontext():
+            return self._link_target_unlocked(link_name)
+
+    def _link_target_unlocked(self, link_name: str) -> Path | None:
         link = self.releases_root / link_name
         if not link.is_symlink():
             return None
@@ -348,7 +353,8 @@ class Deployer:
     def _set_link(self, link_name: str, release_name: str) -> None:
         self._contained_release_name(release_name)
         guarded = link_name == CURRENT_LINK and self.database_path is not None
-        with admission_lock(self.state_dir) if guarded else nullcontext():
+        with admission_lock(self.state_dir) if guarded else nullcontext(), \
+                entrypoint_lock(self.state_dir or self.releases_root.parent) if link_name == CURRENT_LINK else nullcontext():
             if guarded:
                 if self.config_dir is None:
                     raise ValueError("release schema guard requires configuration directory")
@@ -362,9 +368,10 @@ class Deployer:
             tmp.rename(link)
 
     def _clear_link(self, link_name: str) -> None:
-        link = self.releases_root / link_name
-        if link.is_symlink():
-            link.unlink()
+        with entrypoint_lock(self.state_dir or self.releases_root.parent) if link_name == CURRENT_LINK else nullcontext():
+            link = self.releases_root / link_name
+            if link.is_symlink():
+                link.unlink()
 
     def _restore_current(self, previous: str | None) -> None:
         if previous:

@@ -4,6 +4,8 @@ This document tracks the planned and completed development work for Agent Consol
 
 ## Integration in progress
 
+- [ ] **Selected-release CLI entrypoints** (2026-09-13, [#98](https://github.com/Fadekyun/agent-console/issues/98)) — Shared manifest/inode/containment validation and writer locking for eight aliases; explicit bootstrap, upgrade and guarded rollback; inert exact-hash authoritative sync patch. Source validation/review pending; no live application.
+
 - [ ] **Single reviewed Console release candidate** (2026-09-13, [#96](https://github.com/Fadekyun/agent-console/issues/96)) — Combine the reviewed skill engine, disabled planning protocol and guarded inspection; enforce schema-compatible release/rollback, prepare existing-skill references/helpers and audit actual content delivery. Combined regression, assignment, native skill discovery and UI fixture validation passed; independent final review remains pending. No native planning enablement.
 
 ## Completed

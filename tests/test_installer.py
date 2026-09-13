@@ -416,30 +416,26 @@ exit 0
         content = runner.read_text()
         self.assertIn("PYTHONPATH", content)
         self.assertIn("uvicorn", content)
-        self.assertIn("runner_root", content)
+        self.assertNotIn("runner_root", content)
         self.assertIn("runner_bind", content)
         self.assertIn("runner_port", content)
 
-    def test_runner_falls_back_to_bootstrap(self):
-        self._create_tool("codex")
-        result = self._run()
-        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
-        runner = self.temp_home / ".local" / "share" / "agent-console" / "runner.sh"
-        content = runner.read_text()
-        # When releases/current does not exist, runner falls back to bootstrap root
-        self.assertIn("runner_root", content)
-        self.assertIn('PYTHONPATH="$runner_root"', content)
-
-    def test_runner_executes_bootstrap_without_current_release(self):
+    def test_runner_refuses_missing_broken_or_escaped_current(self):
         self._create_tool("codex")
         result = self._run()
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
         self._stub_runner_uvicorn()
-        executed = subprocess.run(
-            [str(self._runner_path())], capture_output=True, text=True, env=self.base_env,
-        )
-        self.assertEqual(executed.returncode, 0, msg=executed.stderr)
-        self.assertTrue(executed.stdout.startswith(f"{REPO_ROOT}|{REPO_ROOT}|"))
+        current = self.temp_home / ".local/share/agent-console/releases/current"
+        current.parent.mkdir(parents=True, exist_ok=True)
+        for target in (None, 'release-missing', str(REPO_ROOT)):
+            with self.subTest(target=target):
+                current.unlink(missing_ok=True)
+                if target is not None:
+                    current.symlink_to(target)
+                executed = subprocess.run([str(self._runner_path())], capture_output=True, text=True, env=self.base_env)
+                self.assertNotEqual(executed.returncode, 0)
+                self.assertEqual(executed.stdout, "", "uvicorn/checkout canary must never execute")
+                self.assertNotIn('runner_root', self._runner_path().read_text())
 
     def test_runner_selects_only_complete_contained_release(self):
         self._create_tool("codex")
@@ -450,6 +446,7 @@ exit 0
         release = releases / "release-test"
         (release / "agent_console").mkdir(parents=True)
         for relative in (
+            "manifest.json", "agent_console/__init__.py", "agent_console/web.py",
             "node_modules/@xterm/xterm/lib/xterm.mjs",
             "node_modules/@xterm/xterm/css/xterm.css",
             "node_modules/@xterm/addon-fit/lib/addon-fit.mjs",
@@ -464,12 +461,13 @@ exit 0
         self.assertEqual(executed.returncode, 0, msg=executed.stderr)
         self.assertTrue(executed.stdout.startswith(f"{release}|{release}|"))
 
-        (release / "node_modules/@xterm/addon-fit/lib/addon-fit.mjs").unlink()
-        fallback = subprocess.run(
-            [str(self._runner_path())], capture_output=True, text=True, env=self.base_env,
-        )
-        self.assertEqual(fallback.returncode, 0, msg=fallback.stderr)
-        self.assertTrue(fallback.stdout.startswith(f"{REPO_ROOT}|{REPO_ROOT}|"))
+        for relative in ('manifest.json','agent_console/__init__.py','agent_console/web.py','node_modules/@xterm/addon-fit/lib/addon-fit.mjs'):
+            with self.subTest(missing=relative):
+                missing=release/relative;original=missing.read_bytes();missing.unlink()
+                fallback = subprocess.run([str(self._runner_path())], capture_output=True, text=True, env=self.base_env)
+                self.assertNotEqual(fallback.returncode, 0)
+                self.assertEqual(fallback.stdout, "", "incomplete release must never start checkout canary")
+                missing.write_bytes(original)
 
     def test_web_unit_uses_runner(self):
         self._create_tool("codex")
@@ -534,7 +532,7 @@ class UpdateScriptTests(unittest.TestCase):
             "fetch --quiet origin main",
             "requested SHA",
             "snapshot-database.py",
-            "prepare-schema-transition.py",
+            "select-release.py",
             "backup/releases/current",
             "sessions-before.json",
             "sessions-after.json",
@@ -545,6 +543,15 @@ class UpdateScriptTests(unittest.TestCase):
             "systemctl --user restart agent-console-web.service",
         ):
             self.assertIn(expected, text)
+        rollback = text[text.index("rollback() {"):text.index("\nexport AGENT_CONSOLE_SOURCE_ROOT")]
+        selection = rollback.index('"$checkout/scripts/select-release.py"')
+        restoration = rollback.index('cp -a "$backup/runtime.env"')
+        self.assertLess(selection, restoration)
+        self.assertIn('--database "$database_path" --config "$config_dir" --state "$state"', rollback)
+        self.assertIn('--releases "$state/releases" --release "$rollback_release"', rollback)
+        self.assertIn('return 1', rollback[selection:restoration])
+        self.assertNotIn('rm -f "$current_link"', rollback)
+        self.assertNotIn('cp -a "$backup/releases/current"', rollback)
 
 
 if __name__ == "__main__":
