@@ -87,17 +87,12 @@ done
 if [ -d "$state/launchers" ]; then
   cp -a "$state/launchers" "$backup/"
 fi
-python3 -B - "$database_path" "$backup/agent-console.sqlite3" <<'PY'
-import sqlite3
-import sys
-
-source = sqlite3.connect(sys.argv[1])
-target = sqlite3.connect(sys.argv[2])
-source.backup(target)
-target.close()
-source.close()
-PY
-"$HOME/bin/agentctl" session list > "$backup/sessions-before.json"
+# Consistent closed snapshots avoid live WAL-sidecar creation in the guarded
+# inventory reader. This is maintenance backup, never an inspection fallback.
+"$state/venv/bin/python" -B "$checkout/scripts/snapshot-database.py" \
+  "$database_path" "$backup/agent-console.sqlite3"
+PYTHONPATH="$checkout" AGENT_CONSOLE_DB="$backup/agent-console.sqlite3" \
+  "$state/venv/bin/python" -B -m agent_console.cli session list > "$backup/sessions-before.json"
 
 set -a
 source "$runtime"
@@ -205,7 +200,10 @@ if ! wait_for_health 30; then
   exit 1
 fi
 
-"$HOME/bin/agentctl" session list > "$backup/sessions-after.json"
+"$state/venv/bin/python" -B "$checkout/scripts/snapshot-database.py" \
+  "$database_path" "$backup/agent-console-after.sqlite3"
+PYTHONPATH="$checkout" AGENT_CONSOLE_DB="$backup/agent-console-after.sqlite3" \
+  "$state/venv/bin/python" -B -m agent_console.cli session list > "$backup/sessions-after.json"
 if ! python3 - "$backup/sessions-before.json" "$backup/sessions-after.json" <<'PY'
 import json
 import sys

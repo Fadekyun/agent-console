@@ -132,3 +132,33 @@ class SchemaCompatibilityTests(unittest.TestCase):
         # Upgrade failure's automatic rollback uses this same guarded link path.
         with self.assertRaises(SchemaCompatibilityError): deployer._restore_current(sources[0])
         self.assertEqual((deployer.releases_root/'current').resolve().name,sources[1])
+
+
+class ConsistentMaintenanceSnapshotTests(unittest.TestCase):
+    def test_wal_commit_visible_in_closed_guard_readable_snapshot(self):
+        import importlib.util
+        from agent_console.inspection import read_session_snapshot
+        script=Path(__file__).resolve().parents[1]/'scripts'/'snapshot-database.py'
+        spec=importlib.util.spec_from_file_location('snapshot_database',script)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); source=root/'source.sqlite3'; target=root/'snapshot.sqlite3'
+            Database(source).migrate()
+            conn=sqlite3.connect(source)
+            self.addCleanup(conn.close)
+            conn.execute("INSERT INTO sessions(id,tmux_name,created_at,status) VALUES('wal','wal','now','detached')")
+            conn.commit()
+            self.assertTrue(Path(str(source)+'-wal').exists())
+            module.snapshot(source,target)
+            self.assertEqual(target.stat().st_mode & 0o777,0o600)
+            self.assertFalse(Path(str(target)+'-wal').exists())
+            self.assertFalse(Path(str(target)+'-shm').exists())
+            before=target.read_bytes()
+            rows=read_session_snapshot(target)['sessions']
+            self.assertEqual([row['id'] for row in rows],['wal'])
+            conn.execute("INSERT INTO sessions(id,tmux_name,created_at,status) VALUES('later','later','later','detached')")
+            conn.commit()
+            self.assertEqual(target.read_bytes(),before)
+            with self.assertRaises(FileExistsError): module.snapshot(source,target)
+            self.assertEqual(target.read_bytes(),before)
+            conn.close()

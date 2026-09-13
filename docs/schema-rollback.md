@@ -7,7 +7,11 @@ containment evidence, and enabling its configuration is not part of this release
 
 Before deployment, record the exact candidate and current release, active session
 inventory, configured database path and a consistent SQLite backup. Verify the
-backup on an isolated copy. Do not naively copy a live WAL database, overwrite new
+backup on an isolated copy. The updater inventories stored sessions from consistent,
+closed SQLite backups normalized to rollback-journal mode, then observes tmux
+separately. It does not force the guarded reader to create missing live sidecars
+or fall back to unguarded SQL. This is explicit maintenance backup, not a change
+to the nine read-only CLI routes. Do not naively copy a live WAL database, overwrite new
 state with an old snapshot, or remove request artifacts/receipts/tombstones.
 
 ## Supported return to schema10
