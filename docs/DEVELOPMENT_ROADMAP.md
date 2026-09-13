@@ -48,3 +48,8 @@ This document tracks the planned and completed development work for Agent Consol
 - [ ] Multi-user support
 - [ ] Webhook integrations
 - [ ] Plugin system
+
+### Issue #100 — fixed AGC laptop presence
+
+- [ ] Validate/review disabled fixed receiver, shared process lifetime, private durable ordering and project display.
+- [ ] Separately approve actual UID/scoped credential/service, n8n authenticated E2E and specific activation; no native/task API or strict24h waiver.

@@ -770,6 +770,19 @@ $('#skills-doctor').onclick = runSkillsDoctor;
 async function renderProjects() {
   const projects = await api('/api/projects');
   $('#projects-list').replaceChildren(...projects.map(projectCard));
+  const laptop = document.querySelector('[data-agc-laptop-presence]');
+  if (laptop) {
+    try {
+      const presence = await api('/api/device-presence/agc-laptop');
+      if (presence.project_id === 'proj-7e8a68b0c8444fa9b97276ef9437a65d') {
+        laptop.textContent = `AGC laptop: ${['Online', 'Offline'].includes(presence.status) ? presence.status : 'Status unavailable'} · Tailnet presence`;
+        const remaining = Date.parse(presence.expires_at || '') - Date.now();
+        if (Number.isFinite(remaining) && remaining > 0 && remaining <= 180000) {
+          setTimeout(() => { laptop.textContent = 'AGC laptop: Status unavailable · Tailnet presence'; }, remaining);
+        } else { laptop.textContent = 'AGC laptop: Status unavailable · Tailnet presence'; }
+      }
+    } catch (_) { /* Keep unavailable; transport errors are not Offline. */ }
+  }
 }
 
 function projectCard(project) {
@@ -781,6 +794,12 @@ function projectCard(project) {
   const meta = document.createElement('div'); meta.className = 'meta';
   meta.innerHTML = `<span>sessions: ${project.session_count || 0}</span>${project.repository ? `<span>${escapeHtml(project.repository)}</span>` : ''}`;
   const desc = document.createElement('p'); desc.textContent = project.description || '';
+  if (project.id === 'proj-7e8a68b0c8444fa9b97276ef9437a65d') {
+    const presence = document.createElement('p');
+    presence.dataset.agcLaptopPresence = '';
+    presence.textContent = 'AGC laptop: Status unavailable · Tailnet presence';
+    card.append(presence);
+  }
   const actions = document.createElement('div'); actions.className = 'dialog-actions';
   const viewBtn = document.createElement('button'); viewBtn.textContent = 'View sessions'; viewBtn.onclick = () => openProjectDetail(project.id, project.name);
   actions.append(viewBtn);

@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.5.0 (unreleased)
+
+- 2026-09-13, issue #100: prepare disabled fixed AGC laptop presence receiver and identity-protected project display. Scoped three-field POST/seven-field ACK; shared startup authority, strict freshness and private durable ordering. Configuration: opt-in master launcher/private directory/verifier required; no SQLite migration or live provisioning. Verification: focused disposable presence contract/process/auth/persistence fixtures, then independent review; focused16 tests plus2 subtests PASS; syntax/vector checks PASS; independent review pending. Rollback: disable scoped ingress, preserve ordering, restart unavailable until a newer observation; no old ordering restoration. Merge after alias98/0.4.1.
+
+
 All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
 ## 0.4.1 (Unreleased)

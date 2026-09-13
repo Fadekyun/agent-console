@@ -240,6 +240,27 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail="Tailscale identity or trusted LAN is required")
         return AuthContext(actor=client_host, access_surface="local-lan")
 
+    # Presence reads use the existing identity policy without authentication audit
+    # writes or any session/database manager call on this inspection route.
+    def presence_identity(request: Request, tailscale_user_login: str | None = Header(default=None)):
+        if not EXPECTED_LOGIN:
+            raise HTTPException(status_code=503, detail="Presence identity unavailable")
+        login = (tailscale_user_login or "").strip().lower()
+        if login:
+            if login != EXPECTED_LOGIN:
+                raise HTTPException(status_code=403, detail="Presence identity denied")
+            return AuthContext(actor=login, access_surface="tailscale")
+        try:
+            local = ipaddress.ip_address(request.client.host if request.client else "") in LAN_NETWORK
+        except ValueError:
+            local = False
+        if not local:
+            raise HTTPException(status_code=403, detail="Presence identity denied")
+        return AuthContext(actor=request.client.host, access_surface="local-lan")
+
+    from .presence_routes import install as install_presence
+    install_presence(app, presence_identity)
+
     @app.get("/healthz", response_class=PlainTextResponse)
     async def healthz() -> str:
         return "ok\n"
