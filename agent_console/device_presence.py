@@ -78,7 +78,7 @@ def timestamp(value):
 def payload(raw):
     value = decode(raw)
     if (not isinstance(value, dict) or set(value) != {'device_id', 'state', 'observed_at'}
-            or value['device_id'] != DEVICE or value['state'] not in ('online', 'offline')):
+            or value['device_id'] != DEVICE or value['state'] not in ('online', 'offline', 'unknown')):
         raise Rejected()
     observed = timestamp(value['observed_at'])
     return value, observed, hashlib.sha256(encode(value)).hexdigest()
@@ -271,13 +271,14 @@ class Receiver:
             raise Unavailable() from exc
 
     def get(self):
-        result = {'project_id': PROJECT, 'device_id': DEVICE, 'status': 'Status unavailable',
+        result = {'project_id': PROJECT, 'status': 'Status unavailable',
                   'observed_at': None, 'expires_at': None, 'meaning': 'Tailnet presence, not application health'}
         try:
             _, wall, after = self.check()
             if self.current:
                 ack = self.current['ack']
-                if (0 <= wall-timestamp(ack['observed_at']) < TTL
+                if (ack['state'] in ('online', 'offline')
+                        and 0 <= wall-timestamp(ack['observed_at']) < TTL
                         and after < self.current['mono_end']):
                     result.update(status=ack['state'].title(), observed_at=ack['observed_at'],
                                   expires_at=ack['expires_at'])

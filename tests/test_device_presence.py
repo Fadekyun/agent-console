@@ -222,3 +222,63 @@ class PresenceTests(unittest.TestCase):
         with self.assertRaises(Rejected):Receiver(self.store,self.sample.clock)
         with self.assertRaises(Rejected):Authority(self.directory,secrets.token_hex(32))
         self.assertFalse((self.directory/'receiver.sock').exists())
+
+    def assert_safe_projection(self, value, status):
+        self.assertEqual(set(value), {'project_id','status','observed_at','expires_at','meaning'})
+        self.assertEqual(value['status'], status)
+        encoded=json.dumps(value)
+        for private in (DEVICE,DUMMY,'100.111.183.86','shop-kiosk-01','device_id','payload_sha256'):
+            self.assertNotIn(private,encoded)
+
+    def test_unknown_supersedes_online_immutable_ack_replay_restart_and_recovery(self):
+        vector=json.loads((Path(__file__).parent/'fixtures/presence-unknown-vector.json').read_bytes())
+        online=self.raw();self.receiver.post(online,DUMMY)
+        self.assert_safe_projection(self.receiver.get(),'Online')
+        self.sample.step(1)
+        unknown=self.raw('unknown');self.assertEqual(unknown.decode(),vector['canonical_utf8'])
+        self.sample.step(.5)
+        first=self.receiver.post(unknown,DUMMY)
+        self.assertEqual(first,vector['ack_initial'])
+        self.assert_safe_projection(self.receiver.get(),'Status unavailable')
+        deadline=self.receiver.current['mono_end'];ordering=(self.directory/'ordering.json').read_bytes()
+        self.sample.step(1)
+        self.assertEqual(self.receiver.post(unknown,DUMMY),vector['ack_duplicate'])
+        self.assertEqual(self.receiver.current['mono_end'],deadline)
+        self.assertEqual((self.directory/'ordering.json').read_bytes(),ordering)
+        with self.assertRaises(Rejected) as stale:self.receiver.post(online,DUMMY)
+        self.assertEqual(stale.exception.status,409)
+        restarted=Receiver(self.store,self.sample.clock)
+        self.assert_safe_projection(restarted.get(),'Status unavailable')
+        with self.assertRaises(Rejected) as replay:restarted.post(unknown,DUMMY)
+        self.assertEqual(replay.exception.status,409)
+        self.sample.step(1)
+        self.assertTrue(restarted.post(self.raw('offline'),DUMMY)['accepted'])
+        self.assert_safe_projection(restarted.get(),'Offline')
+        self.sample.step(180)
+        self.assert_safe_projection(restarted.get(),'Status unavailable')
+        with self.assertRaises(Rejected):restarted.post(unknown,DUMMY)
+
+    def test_actual_get_redacts_private_identity_for_all_states_restart_and_failure(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from agent_console.presence_routes import install
+        generation=secrets.token_hex(32);child=self.start(generation)
+        app=FastAPI();install(app,lambda:None,directory=str(self.directory),generation=generation)
+        def read(client,expected):
+            response=client.get(GET);self.assertEqual(response.status_code,200)
+            self.assert_safe_projection(response.json(),expected)
+        with TestClient(app) as client:
+            read(client,'Status unavailable')
+            for state,expected in [('online','Online'),('offline','Offline'),('unknown','Status unavailable')]:
+                raw=encode({'device_id':DEVICE,'state':state,'observed_at':utc(time.time())})
+                response=client.post(POST,content=raw,headers={'X-AGC-Presence-Writer':DUMMY,'Content-Type':'application/json'})
+                self.assertEqual(response.status_code,200);self.assertEqual(response.json()['state'],state)
+                read(client,expected)
+            self.stop(child)
+        generation2=secrets.token_hex(32);self.start(generation2)
+        restarted=FastAPI();install(restarted,lambda:None,directory=str(self.directory),generation=generation2)
+        with TestClient(restarted) as client:
+            read(client,'Status unavailable')
+            # A private persisted-ordering failure gives the same safe read shape.
+            (self.directory/'ordering.json').write_text('{}')
+            read(client,'Status unavailable')

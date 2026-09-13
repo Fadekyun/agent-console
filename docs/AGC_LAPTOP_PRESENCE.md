@@ -7,8 +7,8 @@ change SQLite schema. Presence describes Tailscale reachability, not kiosk healt
 Project proj-7e8a68b0c8444fa9b97276ef9437a65d, device ngF3guMi1g11CNTRL and sender-owned
 Discord channel1488531129777655985 remain fixed. Sender command is !agclaptop.
 
-POST accepts exactly three fields device_id/state/observed_at. State is online or
-offline; UTC timestamps omit zero fractional seconds or use exactly six digits.
+POST accepts exactly three fields device_id/state/observed_at. State is online, offline or
+unknown; UTC timestamps omit zero fractional seconds or use exactly six digits.
 Canonical sorted compact UTF8 and seven-field ACK match the unchanged vectors
 in tests/fixtures/presence-wire-vectors.json, SHA256
 ee69910c87961a7133fa66829102c7080fa71deead7c65cec761384ef8723bb3.
@@ -16,7 +16,10 @@ ACK fields are accepted,duplicate,payload_sha256,state,observed_at,received_at,
 expires_at. Duplicate ACK changes only duplicate=true; receipt and original
 wall/monotonic expiry never renew. Strict0<=age<180; future rejects. Same-timestamp
 conflicts/stale ordering and previous-lifetime duplicate reject409. GET shows
-Online/Offline only while fresh, otherwise Status unavailable, and writes nothing.
+Online/Offline only while fresh, otherwise Status unavailable, and writes nothing. A newer unknown is accepted,
+ordered and ACKed privately, superseding earlier positive evidence. GET omits
+stable device identity, IP and topology; only fixed project/status/times/meaning
+are displayed.
 
 ## Authoritative startup and private ordering
 
@@ -74,7 +77,7 @@ joins its own authority child. No generic helper/service installer is introduced
 Focused tests exercise unchanged ACK vectors, strict parsing/future/TTL/clock
 rollback, durable failure/no read writes, FIFO/symlink refusal, real spawned
 singleton/restart and concurrent-client duplicate ordering, and route isolation.
-They use dummy credentials and disposable directories only. Focused validation:16 tests and2 subtests PASS, plus AST/browser-module syntax
+They use dummy credentials and disposable directories only. Focused validation:18 tests and2 subtests PASS, plus AST/browser-module syntax
 and unchanged vector hash. The master launcher fixture runs the actual receiver
 child but substitutes uvicorn.run; web-worker factories use TestClient, not a
 real multiworker TCP deployment. Independent review is still required before
