@@ -1,5 +1,25 @@
 # Agent Console
 
+CLI session inspection (`session list`, `inspect`, `tree`, `review`, `context`,
+`group list`, `group show`) and `profile list`/`inspect` do not initialize state,
+migrate the database or reconcile lifecycle records. Session status and attention
+remain stored values; `running`, `live_state`, `observed_status`, `observed_at`,
+`observation_source` and `state_disagreement` describe a separate tmux observation.
+An unavailable observation fails instead of declaring sessions stopped.
+
+The trusted SQL reader uses an isolated Python process and a native Linux x86_64
+libseccomp write guard. It reads supported schema10/11 and current committed WAL
+data without a write fallback. Missing state, unsupported schema, unavailable
+enforcement or unusable WAL sidecars returns an unavailable diagnostic; it does
+not create sidecars or use immutable mode on a live database. This guard is not a
+general sandbox for hostile code. Profile-only reads do not require the database
+or guard. Generic inspection does not expose frozen integration requests or their
+artifacts; use the existing owner-authorized request view.
+
+Other commands retain their existing behavior: in particular `integration
+plan-status` reconciles request state, and `session wait-for-children` records its
+wait. This change does not make all CLI commands read-only.
+
 A unified tmux session manager for AI coding agent orchestration. Manage multiple AI coding tools (Codex, Claude, OpenCode, Hermes) through a web terminal, CLI, and SSH with session isolation, delegation trees, and audit logging.
 
 ## Features
@@ -159,6 +179,27 @@ agentctl skills sync
 agentctl skills doctor
 ```
 
+The catalogue, sync command, and doctor use one provider capability table. Native
+materialization roots are `~/.codex/skills` (Codex and Codex Pro),
+`~/.claude/skills` (Claude), `~/.hermes/skills/homelab` (Hermes), and
+`${XDG_CONFIG_HOME:-~/.config}/opencode/skills` (OpenCode). An explicit `home`
+used by tests or embedding always resolves OpenCode beneath that home and ignores
+ambient XDG variables.
+
+Sync creates canonical-target directory symlinks only. It preserves unrelated
+files, directories, and user symlinks; a canonical-name collision or wrong target
+is reported instead of replaced. If a skill's explicit `tools` allowlist removes a
+provider, sync removes the old link only when it can prove that link still targets
+the same canonical skill. OpenCode mutation is currently verified for version
+`1.18.30`; missing or unknown versions are diagnosed and skipped conservatively.
+Discovery diagnostics scan confirmed global and project roots with a fixed bound,
+report duplicates and shadowing by the frontmatter skill ID, and mark unverified
+ordering or configuration-dependent sources as uncertain. Repeated isolated
+OpenCode 1.18.30 runs selected different winners for identical cross-root duplicate
+fixtures, so OpenCode duplicate precedence remains unverified and no winner is
+claimed. No remote skills are
+downloaded.
+
 Configure which skills to retain:
 
 ```bash
@@ -249,3 +290,7 @@ web/static/        Frontend HTML, JS, CSS
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+### Combined release preparation
+
+The combined candidate is tracked in [issue96](https://github.com/Fadekyun/agent-console/issues/96). See [actual skills and prepared delivery](docs/skill-delivery-audit.md) for the distinction between engine support, existing content, prepared helpers and installed/assigned state. The [schema11 rollback contract](docs/schema-rollback.md) permits a return to schema10 only with disabled planning and no retained request/noninteractive state. Native planning remains disabled/unverified; skill discovery and guarded SQL reads do not establish native provider containment.

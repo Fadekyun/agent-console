@@ -13,4 +13,4 @@ if [[ -r "$AGENT_CONSOLE_ENV_FILE" ]]; then
   source "$AGENT_CONSOLE_ENV_FILE"
   set +a
 fi
-exec python3 -m agent_console.cli "$@"
+exec python3 -B -m agent_console.cli "$@"

@@ -707,6 +707,68 @@ test('profiles view shows profile cards with metadata', async ({ page }, testInf
   await expect(page.locator('.profile-card').first()).toContainText('General');
 });
 
+test('skill diagnostics retain partial sync and doctor results', async ({ page }, testInfo) => {
+  await mockApi(page);
+  await page.route('**/api/skills', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(SKILLS_RESPONSE),
+  }));
+  for (const action of ['sync', 'doctor']) {
+    await page.route(`**/api/skills/${action}`, (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(action === 'sync'
+        ? { ok: false, skills: 2, problems: [], skipped: [{ tool: 'opencode', reason: 'mutation skipped: unverified-version' }] }
+        : { ok: false, skills: 2, problems: ['OpenCode version is unverified; existing files preserved.'] }),
+    }));
+  }
+  const desktop = testInfo.project.name === 'desktop';
+  await page.goto(desktop ? '/desktop#skills' : '/mobile');
+  if (!desktop) await page.locator('[data-mobile-tab="skills"]').click();
+  const prefix = desktop ? '' : 'mobile-';
+  const status = page.locator(desktop ? '#skills-status' : '#mobile-skills-list [role="status"]');
+  await page.locator(`#${prefix}skills-sync`).click();
+  await expect(status).toContainText('Sync needs attention: opencode: mutation skipped: unverified-version');
+  await expect(page.locator(desktop ? '.skill-card' : '.mobile-skill-card')).toHaveCount(2);
+  await page.locator(`#${prefix}skills-doctor`).click();
+  await expect(status).toContainText('Doctor: OpenCode version is unverified');
+  await page.route('**/api/skills/doctor', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, skills: 2, warnings: ['Configured discovery sources were not inspected.'] }),
+  }));
+  await page.locator(`#${prefix}skills-doctor`).click();
+  await expect(status).toContainText('Doctor OK (2 skills). Configured discovery sources were not inspected.');
+});
+
+test('skill diagnostics expose wrong targets and version uncertainty safely', async ({ page }, testInfo) => {
+  await mockApi(page);
+  const fixture = structuredClone(SKILLS_RESPONSE);
+  fixture.providers = [{ tool: 'opencode', discovery: { status: 'uncertain', uncertainty_reasons: ['Configured sources are not inspected.'] } }];
+  fixture.entries[0].synced.push({
+    tool: 'opencode', native_id: 'runtime-skill-id', linked: false, state: 'wrong-target', collision: true,
+    installed_version: '9.0.0', version_state: 'unverified-version',
+    expected_source: '/canonical/test-skill', materialized_path: '/home/test/.config/opencode/skills/test-skill',
+    target: '<img src=x onerror="window.untrustedExecuted=true">',
+    shadowed: true, shadowed_by: ['/project/.opencode/skills/test-skill'],
+  });
+  await page.route('**/api/skills', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(fixture),
+  }));
+  const desktop = testInfo.project.name === 'desktop';
+  await page.goto(desktop ? '/desktop#skills' : '/mobile');
+  if (!desktop) await page.locator('[data-mobile-tab="skills"]').click();
+  const card = page.locator(desktop ? '.skill-card' : '.mobile-skill-card').first();
+  await expect(card).toContainText('opencode: wrong target · shadowed · version unverified');
+  await expect(card).toContainText('discovery uncertain');
+  await card.getByText('opencode diagnostics', { exact: true }).click();
+  await expect(card).toContainText('Version: 9.0.0 (unverified-version)');
+  await expect(card).toContainText('Native skill ID: runtime-skill-id');
+  await expect(card).toContainText('Expected source: /canonical/test-skill');
+  await expect(card).toContainText('Shadowed by: /project/.opencode/skills/test-skill');
+  await expect(card).toContainText('Discovery: Configured sources are not inspected.');
+  await expect(card.locator('img')).toHaveCount(0);
+  expect(await page.evaluate(() => window.untrustedExecuted)).toBeUndefined();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
 test('skills view renders skill cards from catalog with assignments and approval info', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop skills coverage.');
   await mockApi(page);

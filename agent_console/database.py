@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 EVIDENCE_TYPES = frozenset({"review", "verification", "scout"})
@@ -40,6 +40,17 @@ class Database:
 
     def migrate(self) -> None:
         with self.connect() as conn:
+            # Never let an older writer silently relabel a newer schema. An
+            # explicit, guarded maintenance rollback is separate from migration.
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='schema_meta'").fetchone():
+                row = conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()
+                if row is not None:
+                    try:
+                        existing_version = int(row[0])
+                    except (TypeError, ValueError):
+                        raise ValueError("database schema version is invalid") from None
+                    if existing_version < 1 or existing_version > SCHEMA_VERSION:
+                        raise ValueError("database schema version is unsupported by this writer")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -216,6 +227,68 @@ class Database:
                 conn.execute("ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id)")
             if "evidence_capability_hash" not in columns:
                 conn.execute("ALTER TABLE sessions ADD COLUMN evidence_capability_hash TEXT")
+            if "execution_kind" not in columns:
+                conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN execution_kind TEXT NOT NULL DEFAULT 'interactive'"
+                )
+
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS integration_requests (
+                    id TEXT PRIMARY KEY,
+                    integration TEXT NOT NULL,
+                    request_key TEXT NOT NULL,
+                    requester_id TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    canonical_hash TEXT NOT NULL,
+                    canonical_payload_json TEXT NOT NULL,
+                    project_alias TEXT NOT NULL,
+                    project_id TEXT NOT NULL REFERENCES projects(id),
+                    frozen_context TEXT NOT NULL,
+                    context_hash TEXT NOT NULL,
+                    frozen_prompt TEXT NOT NULL,
+                    prompt_hash TEXT NOT NULL,
+                    artifact_dir TEXT NOT NULL,
+                    session_id TEXT NOT NULL UNIQUE REFERENCES sessions(id),
+                    state TEXT NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    accepted_at TEXT NOT NULL,
+                    content_expires_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    terminal_at TEXT,
+                    launch_nonce TEXT NOT NULL,
+                    claimed_at TEXT,
+                    provider_tool TEXT NOT NULL,
+                    auth_context TEXT NOT NULL,
+                    provider_version TEXT,
+                    child_pid INTEGER,
+                    child_start_time TEXT,
+                    child_pgid INTEGER,
+                    child_boot_id TEXT,
+                    thread_id TEXT,
+                    receipt_json TEXT NOT NULL DEFAULT '{}',
+                    acknowledged INTEGER NOT NULL DEFAULT 0,
+                    final_artifact_hash TEXT,
+                    final_artifact_name TEXT,
+                    reason_code TEXT NOT NULL,
+                    admission_held INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(integration, request_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_integration_requests_state
+                    ON integration_requests(integration, state);
+                """
+            )
+            integration_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(integration_requests)").fetchall()
+            }
+            if "content_expires_at" not in integration_columns:
+                conn.execute("ALTER TABLE integration_requests ADD COLUMN content_expires_at TEXT")
+                conn.execute(
+                    "UPDATE integration_requests SET content_expires_at="
+                    "datetime(accepted_at, '+30 days') WHERE content_expires_at IS NULL"
+                )
+            if "child_boot_id" not in integration_columns:
+                conn.execute("ALTER TABLE integration_requests ADD COLUMN child_boot_id TEXT")
 
             plans_columns = {
                 row[1] for row in conn.execute("PRAGMA table_info(plans)").fetchall()
