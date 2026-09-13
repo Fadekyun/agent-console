@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from agent_console.database import Database
-from agent_console.deployer import Deployer, FakeServiceRunner
+from agent_console.deployer import Deployer, FakeServiceRunner, RUNTIME_ASSETS
 from agent_console.schema_compatibility import (
     SchemaCompatibilityError, prepare_database_for_release, release_schema_version,
 )
@@ -122,6 +122,9 @@ class SchemaCompatibilityTests(unittest.TestCase):
         for version in (10,11):
             source=self.root/f'source{version}'; (source/'agent_console').mkdir(parents=True)
             (source/'agent_console'/'database.py').write_text(f'SCHEMA_VERSION = {version}\n')
+            for asset in RUNTIME_ASSETS:
+                path=source/asset; path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_text('isolated runtime asset fixture\n')
             sources.append(deployer.create_release(source,candidate_sha=str(version)*6)['release_name'])
         deployer.select_release(sources[1])
         self.retain_request()
