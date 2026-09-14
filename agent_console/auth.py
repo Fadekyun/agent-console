@@ -27,6 +27,7 @@ def default_registry() -> dict[str, Any]:
             "claude": "default",
             "opencode": "opencode-go-default",
             "hermes": "openrouter-main",
+            "pi": "commandcode-main",
             "shell": "default",
         },
         "contexts": {
@@ -91,6 +92,15 @@ def default_registry() -> dict[str, Any]:
                     "verified": False,
                 }
             },
+            "pi": {
+                "commandcode-main": {
+                    "provider": "commandcode",
+                    "kind": "api-key",
+                    "secret_ref": "commandcode-main",
+                    "enabled": True,
+                    "verified": False,
+                }
+            },
             "shell": {
                 "default": {
                     "provider": "local",
@@ -121,6 +131,10 @@ class AuthRegistry:
         data = self._read()
         codex_pro_contexts = data.setdefault("contexts", {}).setdefault("codex-pro", {})
         dirty = False
+        if "pi" not in data["contexts"]:
+            data["contexts"]["pi"] = default_registry()["contexts"]["pi"]
+            data.setdefault("defaults", {})["pi"] = "commandcode-main"
+            dirty = True
         if "default" not in codex_pro_contexts:
             codex_pro_contexts["default"] = {
                 "provider": "openai",
@@ -239,6 +253,8 @@ class AuthRegistry:
             "default": data.get("defaults", {}).get(tool) == name,
             "status": status,
             "reason": reason,
+            "model": context.get("model"),
+            "models": context.get("models", []),
         }
 
     def _status(self, tool: str, name: str, context: dict[str, Any]) -> tuple[str, str | None]:
@@ -257,8 +273,14 @@ class AuthRegistry:
                 return "setup-required", f"credential {secret_ref} is not configured"
             if secret.stat().st_mode & 0o077:
                 return "error", f"credential {secret_ref} permissions are too broad"
-        if tool == "hermes" and not context.get("verified", False):
-            return "setup-required", "Hermes context is configured but still under acceptance testing"
+        if tool in {"pi", "hermes"} and not context.get("verified", False):
+            return "setup-required", f"{tool} context is configured but still under acceptance testing"
+        if tool in {"pi", "hermes"}:
+            from .commandcode import selected_model
+            try:
+                selected_model(context)
+            except ValueError:
+                return "setup-required", "provision a verified CommandCode context and model"
         return "ready", None
 
     def get_context(self, tool: str, name: str | None = None, *, require_ready: bool = False) -> dict[str, Any]:

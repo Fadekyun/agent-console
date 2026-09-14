@@ -243,16 +243,51 @@ class SessionIntegrationTests(unittest.TestCase):
                 agent_mode="build",
             )
 
+    def configure_commandcode(self):
+        from agent_console.commandcode import BASE_URL, DEFAULT_MODEL
+        data = self.manager.auth._read()
+        data['contexts']['hermes']['commandcode-main'] = {
+            'provider': 'commandcode', 'kind': 'api-key', 'secret_ref': 'commandcode-main',
+            'base_url': BASE_URL, 'model': DEFAULT_MODEL, 'models': [DEFAULT_MODEL],
+            'enabled': True, 'verified': True,
+        }
+        data['defaults']['hermes'] = 'commandcode-main'
+        self.manager.auth._write(data)
+        secret = self.manager.auth.secret_path('commandcode-main')
+        secret.write_text('export CMD_API_KEY=fixture-key\n')
+        secret.chmod(0o600)
+
     def test_hermes_launcher_is_interactive_without_one_shot_prompt(self) -> None:
+        self.configure_commandcode()
         args = self.manager._launcher_args(
             "hermes",
             "general",
             self.workspace,
             "Reply exactly HERMES_OK",
         )
-        self.assertTrue(args[0].endswith("hermes-agent-console-general"))
-        self.assertEqual(args[1:], ["--cli"])
+        self.assertEqual(args[1:], ["chat", "--cli", "--provider", "custom", "--model", "deepseek/deepseek-v4.1-flash"])
         self.assertNotIn("Reply exactly HERMES_OK", args)
+
+    def test_pi_session_persists_commandcode_model_and_rejects_unknown_pin(self):
+        self.configure_commandcode()
+        data = self.manager.auth._read()
+        data['contexts']['pi']['commandcode-main'] = data['contexts']['hermes']['commandcode-main'].copy()
+        self.manager.auth._write(data)
+        with patch.dict(TOOL_BINARIES, {'pi': Path('/usr/bin/true')}):
+            session = self.manager.create(tool='pi', profile='general', name='pi-context-test', repository=str(self.workspace))
+            self.assertEqual(session['provider'], 'commandcode')
+            self.assertEqual(session['model'], 'deepseek/deepseek-v4.1-flash')
+            self.assertEqual(session['permission_mode'], 'unsupported')
+            launcher = (self.manager.settings.state_dir / 'launchers/pi-context-test.sh').read_text()
+            self.assertIn('commandcode-main.env', launcher)
+            self.assertNotIn('fixture-key', launcher)
+            self.assertIn('--append-system-prompt', launcher)
+            with self.assertRaisesRegex(ValueError, 'catalogue'):
+                self.manager.create(tool='pi', profile='general', model='not-in-catalogue')
+            with self.assertRaisesRegex(ValueError, 'unsupported'):
+                self.manager.create(tool='pi', profile='general', agent_mode='plan')
+            with self.assertRaisesRegex(ValueError, 'match provider'):
+                self.manager.create(tool='pi', profile='general', provider='openrouter')
 
     def test_opencode_launcher_defaults_to_plan(self) -> None:
         models = [{
@@ -496,6 +531,7 @@ class SessionIntegrationTests(unittest.TestCase):
         """Hermes provider embeds context path in AGENT_CONSOLE_CONTEXT_FILE; rename of a
         delegated Hermes child must update the env-var value."""
         from agent_console.providers import TOOL_BINARIES
+        self.configure_commandcode()
         original_bin = TOOL_BINARIES.get("hermes")
         TOOL_BINARIES["hermes"] = Path("/usr/bin/zsh")
         try:

@@ -344,11 +344,11 @@ class CapabilityValidationTests(unittest.TestCase):
             self.assertTrue(result["allowed"], f"{profile}+shell should be allowed")
             self.assertEqual(result["enforcement"], "unsupported")
 
-    def test_hermes_is_unverified(self) -> None:
+    def test_hermes_enforcement_is_unsupported(self) -> None:
         for profile in PROFILE_SCHEMA:
             result = validate_profile_capability(profile, "hermes", None)
             self.assertTrue(result["allowed"], f"{profile}+hermes should be allowed")
-            self.assertEqual(result["enforcement"], "unverified")
+            self.assertEqual(result["enforcement"], "unsupported")
 
     def test_release_and_operator_are_pending_approval(self) -> None:
         for profile in ("release", "operator"):

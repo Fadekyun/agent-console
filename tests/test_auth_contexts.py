@@ -76,7 +76,7 @@ class AuthContextTests(unittest.TestCase):
             verified=True,
             make_default=True,
         )
-        self.assertEqual(after["status"], "ready")
+        self.assertEqual(after["status"], "setup-required")
 
     def test_fresh_registry_has_opencode_go_default_with_provider_opencode_go(self) -> None:
         ctx = self.registry.get_context("opencode", "opencode-go-default")
@@ -197,7 +197,7 @@ class AuthContextTests(unittest.TestCase):
             "resume",
             "doctor",
         }
-        for tool in ("codex", "claude", "opencode", "hermes", "shell"):
+        for tool in ("codex", "claude", "opencode", "hermes", "pi", "shell"):
             adapter = provider_adapter(tool, self.registry)
             self.assertTrue(all(callable(getattr(adapter, name, None)) for name in contract))
 

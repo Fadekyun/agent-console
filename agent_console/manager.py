@@ -1375,9 +1375,7 @@ class SessionManager:
         context = self.auth.get_context(tool, auth_context)
         if context["status"] in {"disabled", "error"}:
             raise RuntimeError(f"{tool}/{context['name']} is {context['status']}: {context['reason']}")
-        if context["status"] == "setup-required" and not (
-            tool == "hermes" and "acceptance testing" in (context.get("reason") or "")
-        ):
+        if context["status"] == "setup-required":
             raise RuntimeError(f"{tool}/{context['name']} is setup-required: {context['reason']}")
         if tool == "opencode":
             if reasoning_effort is not None or plan_reasoning_effort is not None:
@@ -1404,6 +1402,15 @@ class SessionManager:
             if not selected_model["selectable"]:
                 raise ValueError("selected OpenCode model is deprecated or unavailable")
             permission_mode = "auto"
+        elif tool in {"pi", "hermes"}:
+            from .commandcode import selected_model
+            if agent_mode or reasoning_effort or plan_reasoning_effort:
+                raise ValueError("Pi/Hermes mode and reasoning enforcement is unsupported")
+            if provider and provider != context.get("provider"):
+                raise ValueError("selected authentication context does not match provider")
+            model = selected_model(context, model)
+            provider = context["provider"]
+            permission_mode = "unsupported"
         elif tool in {"codex", "codex-pro"}:
             profile_read_only = PROFILE_SCHEMA[profile]["read_write_capability"] == "read_only"
             agent_mode = agent_mode or ("plan" if profile_read_only else "auto")
