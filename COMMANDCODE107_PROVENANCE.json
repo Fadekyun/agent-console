@@ -14,5 +14,9 @@
     "tests/test_device_presence.py": "ad771f8b2c0d7f1f677b82b80831fddffada4d28d370ab1b211889e4270d7127",
     "tests/test_presence_bootstrap.py": "d61161e88795cdfcbd3d745c1dd05cd7542cd8d35bc0e404394678609ec5ea55",
     "tests/test_web.py": "9c2388d23c4bb7f6a64ea3479e994f7bb15252ba7e3b56d1e45ffdbb213463e7"
+  },
+  "queue_progress_files": {
+    "agent_console/task_runner.py": "14397ea88e59fe1fd5b1efbdac880a47e17441902bdda21d4721893080857ccf",
+    "tests/test_artifact_review.py": "79eedee738b15147c97223bb100bb667994f1c3735888889ce208c4dc8b58b6b"
   }
 }
