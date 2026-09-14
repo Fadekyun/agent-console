@@ -359,7 +359,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "integration":
             raw = sys.stdin.buffer.read(REQUEST_MAX_BYTES + 1)
             try:
-                service = IntegrationService(SessionManager(), review=args.integration_command.startswith("review-"))
+                service = (IntegrationService(SessionManager(), review=True)
+                           if args.integration_command.startswith("review-")
+                           else IntegrationService(SessionManager()))
                 if args.integration_command in {"plan-request", "review-request"}:
                     response, exit_code = service.submit(raw)
                 else:
