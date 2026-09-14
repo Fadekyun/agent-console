@@ -41,9 +41,11 @@ timestamp, never the key. Rerun to refresh the catalogue or rotate the key.
 
 Session launchers source the selected secret file at runtime. Pi gets a private
 models.json with an environment reference and `--append-system-prompt` pointing
-to Console's context file. Hermes gets a private HERMES_HOME/config.yaml with
-`${CMD_API_KEY}`; its wrapper reads the Console context into
-HERMES_EPHEMERAL_SYSTEM_PROMPT at launch, including after a rename/restart.
+to Console's context file; its `auth.json` is (re)written to the same
+`CMD_API_KEY` reference so a previously stored literal is never kept on disk.
+Hermes gets a private HERMES_HOME/config.yaml with `${CMD_API_KEY}`; its wrapper
+reads the Console context into HERMES_EPHEMERAL_SYSTEM_PROMPT at launch,
+including after a rename/restart.
 The user still sends the stored session brief explicitly in the composer.
 
 Both desktop and mobile expose the selected context's model catalogue. The CLI

@@ -44,15 +44,34 @@ class CommandCodeTests(unittest.TestCase):
             self.assertEqual(spec.environment['AGENT_CONSOLE_CONTEXT_FILE'], str(self.context_path))
             if tool == 'pi':
                 self.assertIn(str(self.context_path), spec.argv)
-                config = Path(spec.environment['PI_CODING_AGENT_DIR']) / 'models.json'
-                models = json.loads(config.read_text())['providers']['commandcode']['models']
+                root = Path(spec.environment['PI_CODING_AGENT_DIR'])
+                provider = json.loads((root / 'models.json').read_text())['providers']['commandcode']
+                models = provider['models']
                 self.assertEqual([m['id'] for m in models], [DEFAULT_MODEL, 'test/alternate'])
                 self.assertTrue(all(m['contextWindow'] == 128000 for m in models))
+                # Credential is an environment-variable reference, never a literal.
+                self.assertEqual(provider['apiKey'], 'CMD_API_KEY')
+                auth = json.loads((root / 'auth.json').read_text())
+                self.assertEqual(auth['commandcode'], {'type': 'api_key', 'key': 'CMD_API_KEY'})
+                config = root / 'models.json'
             else:
                 self.assertEqual(spec.argv[1:5], ['chat', '--cli', '--provider', 'custom'])
                 config = Path(spec.environment['HERMES_HOME']) / 'config.yaml'
+                self.assertIn('${CMD_API_KEY}', config.read_text())
             self.assertIn('CMD_API_KEY', config.read_text())
             self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+    def test_pi_auth_json_is_rewritten_to_environment_reference(self):
+        from agent_console.commandcode import ensure_pi_auth_env_reference
+        path = self.root / 'auth.json'
+        path.write_text(json.dumps({'commandcode': {'type': 'api_key', 'key': 'literal-secret-value'},
+                                    'other-provider': {'type': 'oauth', 'access': 'keep-me'}}))
+        ensure_pi_auth_env_reference(path)
+        data = json.loads(path.read_text())
+        self.assertEqual(data['commandcode'], {'type': 'api_key', 'key': 'CMD_API_KEY'})
+        self.assertEqual(data['other-provider'], {'type': 'oauth', 'access': 'keep-me'})
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn('literal-secret-value', path.read_text())
+
     def test_unavailable_model_does_not_write_anything(self):
         untouched = self.root / 'untouched'
         with patch('agent_console.commandcode.catalogue', side_effect=ValueError('unavailable')):
