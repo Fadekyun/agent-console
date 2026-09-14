@@ -4,6 +4,8 @@ This document tracks the planned and completed development work for Agent Consol
 
 ## Integration in progress
 
+- [x] **Native progress/final separation** (2026-09-14, #105): collect Codex commentary without premature JSON validation; validate final file/last message after complete stream, reject malformed or conflicting verdicts. Focused regressions prepared; live promotion pending.
+
 - [ ] **Native exact-artifact review** (2026-09-14, #103): bounded AGC package/controller review via managed native runner, fixed codex-pro Astra low, durable binding and fail-closed verdict. Source tests prepared; independent review and deployment pending.
 
 - [ ] **Selected-release CLI entrypoints** (2026-09-13, [#98](https://github.com/Fadekyun/agent-console/issues/98)) — Shared manifest/inode/containment validation and writer locking for eight aliases; explicit bootstrap, upgrade and guarded rollback; inert exact-hash authoritative sync patch. Source validation/review pending; no live application.

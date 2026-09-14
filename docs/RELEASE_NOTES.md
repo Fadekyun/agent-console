@@ -1,5 +1,9 @@
 # Release Notes
 
+## 0.6.1 (unreleased)
+
+- 2026-09-14, issue #105: native Codex progress messages no longer abort exact-artifact reviews before the final result. Strict final validation occurs after stream completion and child exit; malformed/conflicting verdicts remain blocked. Configuration/migration: none. Verification: progress-to-final, commentary-only, malformed/contradictory final, existing sequence and runner regressions. Rollback: restore prior task_runner.py in a guarded immutable release; preserve request evidence and do not retry uncertain deliveries.
+
 ## 0.6.0 (unreleased)
 
 - 2026-09-14, issue #103: add native exact-artifact AGC review-request/status, fixed Codex Pro Astra low and read-only execution. Configuration: dedicated review-integration.json and private capability; no DB migration. Verification: focused artifact review and existing integration runner tests; independent review pending. Rollback: disable review integration and guarded-select previous release, preserving request/artifact evidence. See EXACT_ARTIFACT_REVIEW.md.

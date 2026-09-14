@@ -295,6 +295,8 @@ def _prepare_provider(settings: Settings, row: Any) -> tuple[list[str], dict[str
     if not adapter.can_run_planning_task:
         raise RuntimeError("provider task capability unavailable")
     final_output = artifact_dir / "provider-final.txt"
+    if final_output.exists() or final_output.is_symlink():
+        raise RuntimeError("native final output must be fresh")
     argv = adapter.build_planning_task_argv(
         cwd=frozen_dir, output_schema=schema_path, final_output=final_output,
     )
@@ -425,6 +427,7 @@ def run_request(
     turn_completed = False
     provider_failed = False
     final_value: dict[str, Any] | None = None
+    last_agent_message: str | None = None
     failure_reason: str | None = None
     acknowledged = False
     started_at = time.monotonic()
@@ -468,7 +471,7 @@ def run_request(
                 acknowledged = True
 
     def handle_event(raw_line: bytes) -> None:
-        nonlocal thread_id, turn_started, turn_completed, provider_failed, final_value, failure_reason
+        nonlocal thread_id, turn_started, turn_completed, provider_failed, last_agent_message, failure_reason
         try:
             event = json.loads(raw_line.decode("utf-8", errors="strict"), object_pairs_hook=_no_duplicates)
         except Exception:
@@ -517,16 +520,17 @@ def run_request(
         elif event_type == "item.completed":
             item = event.get("item")
             if isinstance(item, dict) and item.get("type") == "agent_message":
-                if not turn_started or turn_completed or final_value is not None:
+                if not turn_started or turn_completed:
                     failure_reason = "invalid_provider_event_sequence"
                     return
                 candidate = item.get("text", item.get("content"))
-                if isinstance(candidate, str) and len(candidate.encode("utf-8")) <= ARTIFACT_MAX_BYTES:
-                    try:
-                        parsed = json.loads(candidate, object_pairs_hook=_no_duplicates)
-                        final_value = _validate_final(parsed, binding)
-                    except Exception:
-                        failure_reason = "invalid_final_output"
+                # Native Codex emits progress commentary as completed agent messages.
+                # Only the last message (or native final-output file) is the result;
+                # never validate commentary or approve an earlier JSON-shaped message.
+                last_agent_message = (
+                    candidate if isinstance(candidate, str)
+                    and len(candidate.encode("utf-8")) <= ARTIFACT_MAX_BYTES else ""
+                )
 
     try:
         while selector.get_map() or process.poll() is None:
@@ -631,16 +635,33 @@ def run_request(
 
     with database.connect() as conn:
         current = conn.execute("SELECT * FROM integration_requests WHERE id=?", (request_uuid,)).fetchone()
-    if final_value is None and final_output.is_file() and not final_output.is_symlink():
-        try:
-            raw_final = final_output.read_bytes()
-            if len(raw_final) > ARTIFACT_MAX_BYTES:
+    # Validate only after the complete event stream and child exit. The native
+    # output-last-message file is authoritative when present; fixtures/older native
+    # transports can provide their last completed agent message instead.
+    try:
+        if final_output.exists() or final_output.is_symlink():
+            fd = os.open(final_output, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                metadata = os.fstat(fd)
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > ARTIFACT_MAX_BYTES:
+                    raise ValueError
+                raw_final = os.read(fd, ARTIFACT_MAX_BYTES + 1)
+            finally:
+                os.close(fd)
+            if len(raw_final) != metadata.st_size:
                 raise ValueError
-            final_value = _validate_final(
-                json.loads(raw_final.decode("utf-8", errors="strict"), object_pairs_hook=_no_duplicates), binding
-            )
-        except Exception:
-            failure_reason = failure_reason or "invalid_final_output"
+            candidate = raw_final.decode("utf-8", errors="strict")
+        else:
+            candidate = last_agent_message
+        if candidate is None:
+            raise ValueError
+        final_value = _validate_final(json.loads(candidate, object_pairs_hook=_no_duplicates), binding)
+        if last_agent_message is not None and candidate != last_agent_message:
+            event_final = _validate_final(json.loads(last_agent_message, object_pairs_hook=_no_duplicates), binding)
+            if event_final != final_value:
+                raise ValueError("conflicting native final results")
+    except Exception:
+        failure_reason = failure_reason or "invalid_final_output"
     if failure_reason or provider_failed or exit_code != 0 or not delivered or not turn_completed or final_value is None:
         reason = failure_reason or (
             "provider_reported_failure" if provider_failed else
