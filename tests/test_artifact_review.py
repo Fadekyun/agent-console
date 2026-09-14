@@ -132,3 +132,80 @@ class ArtifactReviewTests(unittest.TestCase):
                 result=subprocess.run([sys.executable,'-c',script],timeout=2,capture_output=True)
                 self.assertEqual(result.returncode,0,result.stderr.decode())
             path.unlink(); path.write_bytes(original)
+
+    def test_native_progress_message_then_final_review(self):
+        _, request = self.prepare(); row=self.accept(request)
+        final=dict(outcome='approved',summary='checked',steps=['rollout.py'],verification=['digests'],blockers=[],review=request['review'])
+        events=[{'type':'thread.started','thread_id':'t'}, {'type':'turn.started'},
+                {'type':'item.completed','item':{'id':'item_0','type':'agent_message','text':'I will inspect the package and rollback procedure.'}},
+                {'type':'item.completed','item':{'id':'item_1','type':'agent_message','text':json.dumps(final)}},
+                {'type':'turn.completed'}]
+        rc=run_request(row['id'],settings=self.settings,argv_override=self.fake_argv(events=events),env_override={},ack_timeout=2,run_timeout=5)
+        self.assertEqual(rc,0)
+        self.assertEqual(self.service.result(REQUEST_ID),final)
+
+    def test_earlier_json_does_not_approve_malformed_last_message(self):
+        _, request=self.prepare(); row=self.accept(request)
+        final=dict(outcome='approved',summary='checked',steps=['rollout.py'],verification=['digests'],blockers=[],review=request['review'])
+        events=[{'type':'thread.started','thread_id':'t'},{'type':'turn.started'},
+                {'type':'item.completed','item':{'type':'agent_message','text':json.dumps(final)}},
+                {'type':'item.completed','item':{'type':'agent_message','text':'not a valid final result'}},
+                {'type':'turn.completed'}]
+        rc=run_request(row['id'],settings=self.settings,argv_override=self.fake_argv(events=events),env_override={},ack_timeout=2,run_timeout=5)
+        self.assertEqual(rc,1); self.assertEqual(self.row()['reason_code'],'invalid_final_output')
+
+    def test_native_final_file_after_progress_agrees_with_final_message(self):
+        _, request=self.prepare(); row=self.accept(request)
+        final=dict(outcome='approved',summary='checked',steps=['rollout.py'],verification=['digests'],blockers=[],review=request['review'])
+        events=[{'type':'thread.started','thread_id':'t'},{'type':'turn.started'},
+                {'type':'item.completed','item':{'type':'agent_message','text':'Inspecting the package now.'}},
+                {'type':'item.completed','item':{'type':'agent_message','text':json.dumps(final)}},
+                {'type':'turn.completed'}]
+        argv=self.fake_argv(events=events)
+        path=Path(row['artifact_dir'])/'provider-final.txt'
+        argv[-1]=argv[-1].replace('raise SystemExit(0)', 'open('+repr(str(path))+',"w").write('+repr(json.dumps(final))+'); raise SystemExit(0)')
+        self.assertEqual(run_request(row['id'],settings=self.settings,argv_override=argv,env_override={},ack_timeout=2,run_timeout=5),0)
+        self.assertEqual(self.service.result(REQUEST_ID),final)
+
+    def test_malformed_native_final_file_cannot_fall_back_to_earlier_approval(self):
+        _, request=self.prepare(); row=self.accept(request)
+        final=dict(outcome='approved',summary='checked',steps=['rollout.py'],verification=['digests'],blockers=[],review=request['review'])
+        argv=self.fake_argv(final=final)
+        path=Path(row['artifact_dir'])/'provider-final.txt'
+        argv[-1]=argv[-1].replace('raise SystemExit(0)', 'open('+repr(str(path))+',"w").write("invalid final"); raise SystemExit(0)')
+        self.assertEqual(run_request(row['id'],settings=self.settings,argv_override=argv,env_override={},ack_timeout=2,run_timeout=5),1)
+        self.assertEqual(self.row()['reason_code'],'invalid_final_output')
+
+    def test_commentary_only_without_final_result_still_fails(self):
+        _, request=self.prepare(); row=self.accept(request)
+        events=[{'type':'thread.started','thread_id':'t'},{'type':'turn.started'},
+                {'type':'item.completed','item':{'type':'agent_message','text':'Inspecting the package.'}},
+                {'type':'turn.completed'}]
+        self.assertEqual(run_request(row['id'],settings=self.settings,argv_override=self.fake_argv(events=events),env_override={},ack_timeout=2,run_timeout=5),1)
+        self.assertEqual(self.row()['reason_code'],'invalid_final_output')
+
+    def test_conflicting_valid_native_final_file_and_last_message_fail(self):
+        _, request=self.prepare(); row=self.accept(request)
+        final=dict(outcome='approved',summary='checked',steps=['rollout.py'],verification=['digests'],blockers=[],review=request['review'])
+        argv=self.fake_argv(final={**final,'outcome':'rejected','blockers':['unsafe']})
+        path=Path(row['artifact_dir'])/'provider-final.txt'
+        argv[-1]=argv[-1].replace('raise SystemExit(0)', 'open('+repr(str(path))+',"w").write('+repr(json.dumps(final))+'); raise SystemExit(0)')
+        self.assertEqual(run_request(row['id'],settings=self.settings,argv_override=argv,env_override={},ack_timeout=2,run_timeout=5),1)
+        self.assertEqual(self.row()['reason_code'],'invalid_final_output')
+
+    def test_preexisting_native_final_file_rejected_before_spawn(self):
+        _, request=self.prepare(); row=self.accept(request)
+        (Path(row['artifact_dir'])/'provider-final.txt').write_text('{}')
+        with self.assertRaises(RuntimeError): _prepare_provider(self.settings,row)
+
+    def test_invalid_streamed_final_cannot_use_valid_file(self):
+        _, request=self.prepare(); row=self.accept(request)
+        final=dict(outcome='approved',summary='checked',steps=['rollout.py'],verification=['digests'],blockers=[],review=request['review'])
+        events=[{'type':'thread.started','thread_id':'t'},{'type':'turn.started'},
+                {'type':'item.completed','item':{'type':'agent_message','text':None}},
+                {'type':'turn.completed'}]
+        argv=self.fake_argv(events=events)
+        path=Path(row['artifact_dir'])/'provider-final.txt'
+        argv[-1]=argv[-1].replace('raise SystemExit(0)', 'open('+repr(str(path))+',"w").write('+repr(json.dumps(final))+'); raise SystemExit(0)')
+        self.assertEqual(run_request(row['id'],settings=self.settings,argv_override=argv,env_override={},ack_timeout=2,run_timeout=5),1)
+        self.assertEqual(self.row()['reason_code'],'invalid_final_output')
