@@ -99,8 +99,8 @@ def canonical_request(value: dict[str, str]) -> tuple[str, str]:
     return canonical, hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def load_integration_config(config_dir: Path) -> dict[str, Any]:
-    path = config_dir / "plan-integration.json"
+def load_integration_config(config_dir: Path, filename: str = "plan-integration.json") -> dict[str, Any]:
+    path = config_dir / filename
     try:
         metadata = path.lstat()
         if (
@@ -264,13 +264,14 @@ def _build_prompt(request: dict[str, str], snapshot: str) -> str:
 @dataclass
 class IntegrationService:
     manager: Any
+    review: bool = False
 
     @property
     def config_dir(self) -> Path:
         return self.manager.settings.config_dir or self.manager.settings.state_dir / "config"
 
     def _config_and_auth(self) -> dict[str, Any]:
-        config = load_integration_config(self.config_dir)
+        config = load_integration_config(self.config_dir, "review-integration.json" if self.review else "plan-integration.json")
         authenticate_relay(config)
         self.prune_expired_content()
         return config
@@ -355,9 +356,15 @@ class IntegrationService:
             ).fetchone()
 
     def submit(self, raw: bytes) -> tuple[dict[str, Any], int]:
-        parsed = validate_request(parse_json_object(raw, fields=REQUEST_FIELDS))
+        if self.review:
+            from .artifact_review import parse_request
+            parsed = parse_request(raw)
+        else:
+            parsed = validate_request(parse_json_object(raw, fields=REQUEST_FIELDS))
         config = self._config_and_auth()
         _authorized(config, parsed["requester_id"], parsed["channel_id"])
+        if self.review and config["provider"]["tool"] != "codex-pro":
+            raise IntegrationError("review_provider_mismatch", exit_code=4)
         canonical, request_hash = canonical_request(parsed)
         existing = self._lookup(parsed["request_id"])
         if existing is not None:
@@ -385,8 +392,13 @@ class IntegrationService:
         except (KeyError, OSError, RuntimeError, ValueError):
             error = IntegrationError("provider_unavailable", exit_code=4)
             return self.error_response(parsed["request_id"], error), error.exit_code
-        mapping, snapshot, context_hash = _snapshot_context(config, parsed["project"])
-        prompt = _build_prompt(parsed, snapshot)
+        if self.review:
+            from .artifact_review import prepare_context, build_prompt
+            mapping, snapshot, context_hash, bundle = prepare_context(config, parsed)
+            prompt = build_prompt(parsed, snapshot)
+        else:
+            mapping, snapshot, context_hash = _snapshot_context(config, parsed["project"])
+            prompt = _build_prompt(parsed, snapshot)
         prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         name = f"n8n-plan-{parsed['request_id']}"
 
@@ -438,6 +450,9 @@ class IntegrationService:
                     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                     destination.write_text(item["content"], encoding="utf-8")
                     destination.chmod(0o400)
+                if self.review:
+                    from .artifact_review import freeze_bundle
+                    freeze_bundle(bundle, frozen_dir, parsed["review"])
                 for directory in sorted(
                     (path for path in frozen_dir.rglob("*") if path.is_dir()),
                     key=lambda path: len(path.parts), reverse=True,
@@ -453,16 +468,18 @@ class IntegrationService:
                         status, managed, creator_surface, launcher_path, socket_scope,
                         auth_context, agent_mode, provider, permission_mode, project_id,
                         execution_kind
-                    ) VALUES(?, ?, ?, 'planner', ?, ?, ?, 'reserved', 1,
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, 'reserved', 1,
                         'integration:n8n', ?, 'canonical', ?, 'plan', ?, 'read-only', ?,
                         'integration-plan')
                     """,
                     (
-                        session_id, name, config["provider"]["tool"], now, now,
+                        session_id, name, config["provider"]["tool"], "reviewer" if self.review else "planner", now, now,
                         str(frozen_dir), str(launcher), config["provider"]["auth_context"],
                         config["provider"]["tool"], mapping["project_id"],
                     ),
                 )
+                if self.review:
+                    conn.execute("UPDATE sessions SET model=? WHERE id=?", ("gpt-6-astra", session_id))
                 conn.execute(
                     """
                     INSERT INTO integration_requests(
@@ -558,7 +575,20 @@ class IntegrationService:
             return self.error_response(parsed["request_id"], error), error.exit_code
         self.reconcile(parsed["request_id"])
         row = self._lookup(parsed["request_id"])
-        return self._row_response(row), 0
+        response = self._row_response(row)
+        if self.review:
+            binding = json.loads(row["canonical_payload_json"]).get("review")
+            if not binding:
+                raise IntegrationError("request_kind_mismatch")
+            response["review"] = binding
+            response["session_id"] = row["session_id"]
+            response["model"] = "gpt-6-astra"
+            response["reasoning_effort"] = "low"
+            if row["state"] in {"completed", "needs_input"}:
+                from .artifact_review import verify_frozen
+                verify_frozen(Path(row["artifact_dir"]) / "context", binding)
+                response["result"] = self.result(parsed["request_id"])
+        return response, 0
 
     def reconcile(self, request_id: str) -> None:
         row = self._lookup(request_id)

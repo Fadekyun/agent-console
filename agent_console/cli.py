@@ -71,6 +71,8 @@ def parser() -> argparse.ArgumentParser:
     integration_commands = integration.add_subparsers(
         dest="integration_command", required=True
     )
+    integration_commands.add_parser("review-request")
+    integration_commands.add_parser("review-status")
     plan_request = integration_commands.add_parser("plan-request")
     plan_request.add_argument("--stdin", action="store_true", required=True)
     plan_status = integration_commands.add_parser("plan-status")
@@ -357,8 +359,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "integration":
             raw = sys.stdin.buffer.read(REQUEST_MAX_BYTES + 1)
             try:
-                service = IntegrationService(SessionManager())
-                if args.integration_command == "plan-request":
+                service = IntegrationService(SessionManager(), review=args.integration_command.startswith("review-"))
+                if args.integration_command in {"plan-request", "review-request"}:
                     response, exit_code = service.submit(raw)
                 else:
                     response, exit_code = service.status(raw)
