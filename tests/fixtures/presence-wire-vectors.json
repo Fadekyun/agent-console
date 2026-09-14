@@ -1,0 +1,56 @@
+[
+  {
+    "payload": {
+      "device_id": "ngF3guMi1g11CNTRL",
+      "state": "online",
+      "observed_at": "2026-09-13T15:00:00Z"
+    },
+    "canonical_utf8": "{\"device_id\":\"ngF3guMi1g11CNTRL\",\"observed_at\":\"2026-09-13T15:00:00Z\",\"state\":\"online\"}",
+    "payload_sha256": "4d03f490728a66da330c75521f6f25210bebab4a2e1a35c423932c1cb6223003",
+    "ack_initial": {
+      "accepted": true,
+      "duplicate": false,
+      "payload_sha256": "4d03f490728a66da330c75521f6f25210bebab4a2e1a35c423932c1cb6223003",
+      "state": "online",
+      "observed_at": "2026-09-13T15:00:00Z",
+      "received_at": "2026-09-13T15:00:00.500000Z",
+      "expires_at": "2026-09-13T15:03:00Z"
+    },
+    "ack_duplicate": {
+      "accepted": true,
+      "duplicate": true,
+      "payload_sha256": "4d03f490728a66da330c75521f6f25210bebab4a2e1a35c423932c1cb6223003",
+      "state": "online",
+      "observed_at": "2026-09-13T15:00:00Z",
+      "received_at": "2026-09-13T15:00:00.500000Z",
+      "expires_at": "2026-09-13T15:03:00Z"
+    }
+  },
+  {
+    "payload": {
+      "device_id": "ngF3guMi1g11CNTRL",
+      "state": "offline",
+      "observed_at": "2026-09-13T15:00:00.123456Z"
+    },
+    "canonical_utf8": "{\"device_id\":\"ngF3guMi1g11CNTRL\",\"observed_at\":\"2026-09-13T15:00:00.123456Z\",\"state\":\"offline\"}",
+    "payload_sha256": "da4286686f5fc8df2aee7a2b0347d243407b67c0fb29ebd1e5b9e70b9c4b0fba",
+    "ack_initial": {
+      "accepted": true,
+      "duplicate": false,
+      "payload_sha256": "da4286686f5fc8df2aee7a2b0347d243407b67c0fb29ebd1e5b9e70b9c4b0fba",
+      "state": "offline",
+      "observed_at": "2026-09-13T15:00:00.123456Z",
+      "received_at": "2026-09-13T15:00:00.623456Z",
+      "expires_at": "2026-09-13T15:03:00.123456Z"
+    },
+    "ack_duplicate": {
+      "accepted": true,
+      "duplicate": true,
+      "payload_sha256": "da4286686f5fc8df2aee7a2b0347d243407b67c0fb29ebd1e5b9e70b9c4b0fba",
+      "state": "offline",
+      "observed_at": "2026-09-13T15:00:00.123456Z",
+      "received_at": "2026-09-13T15:00:00.623456Z",
+      "expires_at": "2026-09-13T15:03:00.123456Z"
+    }
+  }
+]

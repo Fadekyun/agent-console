@@ -1,0 +1,27 @@
+{
+  "payload": {
+    "device_id": "ngF3guMi1g11CNTRL",
+    "state": "unknown",
+    "observed_at": "2026-09-13T15:00:01Z"
+  },
+  "canonical_utf8": "{\"device_id\":\"ngF3guMi1g11CNTRL\",\"observed_at\":\"2026-09-13T15:00:01Z\",\"state\":\"unknown\"}",
+  "payload_sha256": "4d6fbc25a4e95d8092c766ef238a8e797205db16e5b71bc832bf45e0ae555410",
+  "ack_initial": {
+    "accepted": true,
+    "duplicate": false,
+    "payload_sha256": "4d6fbc25a4e95d8092c766ef238a8e797205db16e5b71bc832bf45e0ae555410",
+    "state": "unknown",
+    "observed_at": "2026-09-13T15:00:01Z",
+    "received_at": "2026-09-13T15:00:01.500000Z",
+    "expires_at": "2026-09-13T15:03:01Z"
+  },
+  "ack_duplicate": {
+    "accepted": true,
+    "duplicate": true,
+    "payload_sha256": "4d6fbc25a4e95d8092c766ef238a8e797205db16e5b71bc832bf45e0ae555410",
+    "state": "unknown",
+    "observed_at": "2026-09-13T15:00:01Z",
+    "received_at": "2026-09-13T15:00:01.500000Z",
+    "expires_at": "2026-09-13T15:03:01Z"
+  }
+}

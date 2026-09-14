@@ -1062,6 +1062,18 @@ class WebTests(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 400)
 
+    def test_presence_routes_do_not_use_manager_or_scoped_writer_as_identity(self):
+        from agent_console.device_presence import GET, POST
+        token = 'FixtureOnlyPresenceWriter00000000000001'
+        with patch.object(self.manager, 'list_sessions', side_effect=AssertionError('manager called')), \
+                patch.object(self.manager.database, 'audit', side_effect=AssertionError('read audited')):
+            self.assertEqual(self.client.get(GET, headers=self.headers).status_code, 503)
+            self.assertEqual(self.client.get(GET, headers={'Tailscale-User-Login': 'wrong'}).status_code, 403)
+            self.assertEqual(self.client.get(GET).status_code, 403)
+            for path in (GET, '/api/sessions', '/api/projects', '/api/integrations/plan-status'):
+                self.assertEqual(self.client.get(path, headers={**self.headers, 'X-AGC-Presence-Writer': token}).status_code, 403)
+            self.assertEqual(self.client.post(POST, content='{}', headers={'Content-Type':'application/json','X-AGC-Presence-Writer':token}).status_code,503)
+
 
 if __name__ == "__main__":
     unittest.main()
