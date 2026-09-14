@@ -154,8 +154,8 @@ def terminate_owned_group(
     return _active_group_members(pgid) == {}
 
 
-def _schema() -> dict[str, Any]:
-    return {
+def _schema(binding=None) -> dict[str, Any]:
+    schema = {
         "type": "object",
         "additionalProperties": False,
         "required": sorted(FINAL_FIELDS),
@@ -168,11 +168,23 @@ def _schema() -> dict[str, Any]:
         },
     }
 
+    if binding is not None:
+        schema["required"].append("review")
+        schema["properties"]["review"] = {
+            "type": "object", "additionalProperties": False,
+            "required": sorted(binding),
+            "properties": {key: {"type": "string", "enum": [value]} for key, value in binding.items()},
+        }
+        schema["properties"]["outcome"]["enum"] = ["approved", "rejected", "needs_input"]
+    return schema
 
-def _validate_final(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict) or frozenset(value) != FINAL_FIELDS:
+
+def _validate_final(value: Any, binding=None) -> dict[str, Any]:
+    if not isinstance(value, dict) or frozenset(value) != (FINAL_FIELDS | {"review"} if binding else FINAL_FIELDS):
         raise ValueError("invalid final fields")
-    if value["outcome"] not in {"plan", "needs_input"}:
+    if binding is not None and value.get("review") != binding:
+        raise ValueError("review binding mismatch")
+    if value["outcome"] not in ({"approved", "rejected", "needs_input"} if binding else {"plan", "needs_input"}):
         raise ValueError("invalid outcome")
     if not isinstance(value["summary"], str) or len(value["summary"]) > 32_000:
         raise ValueError("invalid summary")
@@ -182,6 +194,8 @@ def _validate_final(value: Any) -> dict[str, Any]:
             raise ValueError("invalid list")
         if any(not isinstance(item, str) or len(item) > 32_000 for item in items):
             raise ValueError("invalid list item")
+    if binding is not None and value["outcome"] == "approved" and (value["blockers"] or not value["verification"] or not value["steps"]):
+        raise ValueError("approval without sufficient evidence")
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     if len(encoded) > ARTIFACT_MAX_BYTES:
         raise ValueError("final too large")
@@ -251,7 +265,12 @@ def _prepare_provider(settings: Settings, row: Any) -> tuple[list[str], dict[str
     if artifact_dir.is_symlink() or frozen_dir.is_symlink() or not frozen_dir.is_dir():
         raise RuntimeError("unsafe frozen context")
     schema_path = artifact_dir / "output-schema.json"
-    _atomic_write(schema_path, json.dumps(_schema(), sort_keys=True, separators=(",", ":")).encode())
+    from .artifact_review import binding_from_row
+    binding = binding_from_row(row)
+    if binding is not None:
+        from .artifact_review import verify_frozen
+        verify_frozen(frozen_dir, binding)
+    _atomic_write(schema_path, json.dumps(_schema(binding), sort_keys=True, separators=(",", ":")).encode())
     job_home = artifact_dir / "home"
     codex_home = job_home / ".codex"
     codex_home.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -279,6 +298,11 @@ def _prepare_provider(settings: Settings, row: Any) -> tuple[list[str], dict[str
     argv = adapter.build_planning_task_argv(
         cwd=frozen_dir, output_schema=schema_path, final_output=final_output,
     )
+    if binding is not None:
+        if row["provider_tool"] != "codex-pro":
+            raise RuntimeError("review provider mismatch")
+        argv[1:1] = ["-c", 'model="gpt-6-astra"', "-c", 'model_reasoning_effort="low"',
+                     "-c", 'plan_mode_reasoning_effort="low"']
     return argv, _clean_provider_environment(job_home, codex_home), final_output
 
 
@@ -327,6 +351,8 @@ def run_request(
             return 0
         row = conn.execute("SELECT * FROM integration_requests WHERE id=?", (request_uuid,)).fetchone()
 
+    from .artifact_review import binding_from_row
+    binding = binding_from_row(row)
     try:
         argv, env, final_output = _prepare_provider(settings, row)
         if argv_override is not None:
@@ -498,7 +524,7 @@ def run_request(
                 if isinstance(candidate, str) and len(candidate.encode("utf-8")) <= ARTIFACT_MAX_BYTES:
                     try:
                         parsed = json.loads(candidate, object_pairs_hook=_no_duplicates)
-                        final_value = _validate_final(parsed)
+                        final_value = _validate_final(parsed, binding)
                     except Exception:
                         failure_reason = "invalid_final_output"
 
@@ -611,7 +637,7 @@ def run_request(
             if len(raw_final) > ARTIFACT_MAX_BYTES:
                 raise ValueError
             final_value = _validate_final(
-                json.loads(raw_final.decode("utf-8", errors="strict"), object_pairs_hook=_no_duplicates)
+                json.loads(raw_final.decode("utf-8", errors="strict"), object_pairs_hook=_no_duplicates), binding
             )
         except Exception:
             failure_reason = failure_reason or "invalid_final_output"
@@ -632,6 +658,9 @@ def run_request(
     artifact_dir = Path(row["artifact_dir"])
     plan_raw = json.dumps(final_value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     try:
+        if binding is not None:
+            from .artifact_review import verify_frozen
+            verify_frozen(artifact_dir / "context", binding)
         _atomic_write(artifact_dir / "plan.json", plan_raw)
         _atomic_write(artifact_dir / "plan.md", _render_markdown(final_value))
     except Exception:
@@ -640,7 +669,7 @@ def run_request(
             "terminal_at": utc_now(),
         }, expected=("started", "delivery_unknown"))
         return 1
-    outcome = "completed" if final_value["outcome"] == "plan" else "needs_input"
+    outcome = "completed" if final_value["outcome"] in {"plan", "approved", "rejected"} else "needs_input"
     _update(database, request_uuid, {
         "state": outcome, "reason_code": outcome, "admission_held": 0,
         "terminal_at": utc_now(), "final_artifact_name": "plan.json",

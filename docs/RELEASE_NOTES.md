@@ -1,5 +1,9 @@
 # Release Notes
 
+## 0.6.0 (unreleased)
+
+- 2026-09-14, issue #103: add native exact-artifact AGC review-request/status, fixed Codex Pro Astra low and read-only execution. Configuration: dedicated review-integration.json and private capability; no DB migration. Verification: focused artifact review and existing integration runner tests; independent review pending. Rollback: disable review integration and guarded-select previous release, preserving request/artifact evidence. See EXACT_ARTIFACT_REVIEW.md.
+
 All entries from 0.1.1 onward include: date, issue/PR, impact, configuration/migration, verification, and rollback guidance. Entries for historic unpublished baselines may omit fields that are not applicable.
 
 ## 0.4.1 (Unreleased)
