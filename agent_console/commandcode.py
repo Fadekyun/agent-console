@@ -17,6 +17,9 @@ from typing import Any
 
 BASE_URL = "https://api.commandcode.ai/provider/v1"
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
+# Native harnesses read the credential from this environment variable; the value
+# itself only ever lives in the host-local secret file sourced by the launcher.
+COMMANDCODE_ENV_VAR = "CMD_API_KEY"
 # Used only when the catalogue omits a usable context_length; the API reports the
 # authoritative value for every CommandCode model, so this should rarely apply.
 FALLBACK_CONTEXT_WINDOW = 128000
@@ -65,6 +68,25 @@ def write_private_json(path: Path, value: dict) -> None:
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+
+
+def ensure_pi_auth_env_reference(path: Path) -> None:
+    """Keep pi's native `auth.json` pointed at the env var, never a literal key.
+
+    Pi resolves an `api_key` entry through `resolveConfigValue`, which returns
+    `process.env[key]` when the stored string names an environment variable. A
+    previously stored literal is replaced while unrelated providers are kept.
+    """
+    data: dict[str, Any] = {}
+    if path.is_file():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            existing = None
+        if isinstance(existing, dict):
+            data = existing
+    data["commandcode"] = {"type": "api_key", "key": COMMANDCODE_ENV_VAR}
+    write_private_json(path, data)
 
 
 def catalogue(key: str) -> list[dict[str, Any]]:
@@ -147,7 +169,7 @@ def provision(config_dir: Path, key: str) -> dict:
     fd, tmp = tempfile.mkstemp(dir=secret.parent, prefix=".commandcode-")
     try:
         with os.fdopen(fd, "w") as f:
-            f.write("export CMD_API_KEY=" + shlex.quote(key) + "\n")
+            f.write("export " + COMMANDCODE_ENV_VAR + "=" + shlex.quote(key) + "\n")
         os.replace(tmp, secret)
     finally:
         if os.path.exists(tmp):
