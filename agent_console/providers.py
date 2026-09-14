@@ -263,7 +263,7 @@ class CommandCodeAdapter(ProviderAdapter):
     """Native harness configuration contains references, never credential values."""
 
     def build_launch_spec(self, **kwargs: Any) -> LaunchSpec:
-        from .commandcode import selected_model, write_private_json
+        from .commandcode import pi_model_entries, selected_model, write_private_json
 
         context = kwargs["context"]
         model = selected_model(context, kwargs.get("model"))
@@ -276,8 +276,7 @@ class CommandCodeAdapter(ProviderAdapter):
                 "baseUrl": context["base_url"], "api": "openai-completions",
                 "apiKey": "CMD_API_KEY", "authHeader": True,
                 "headers": {"User-Agent": "agent-console-commandcode/1.0"},
-                "models": [{"id": model, "name": model, "contextWindow": 128000,
-                            "maxTokens": 8192, "compat": {"supportsDeveloperRole": False}}],
+                "models": pi_model_entries(context, selected=model),
             }}})
             environment["PI_CODING_AGENT_DIR"] = str(root)
             argv = [str(self.binary), "--provider", "commandcode", "--model", model,

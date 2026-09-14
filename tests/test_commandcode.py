@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from agent_console.auth import AuthRegistry
-from agent_console.commandcode import BASE_URL, DEFAULT_MODEL, catalogue, provision, selected_model
+from agent_console.commandcode import (BASE_URL, DEFAULT_MODEL, catalogue, pi_model_entries,
+                                       provision, selected_model)
 from agent_console.providers import provider_adapter
 from agent_console.profiles import validate_profile_capability
 from agent_console.validation import validate_tool
@@ -44,6 +45,9 @@ class CommandCodeTests(unittest.TestCase):
             if tool == 'pi':
                 self.assertIn(str(self.context_path), spec.argv)
                 config = Path(spec.environment['PI_CODING_AGENT_DIR']) / 'models.json'
+                models = json.loads(config.read_text())['providers']['commandcode']['models']
+                self.assertEqual([m['id'] for m in models], [DEFAULT_MODEL, 'test/alternate'])
+                self.assertTrue(all(m['contextWindow'] == 128000 for m in models))
             else:
                 self.assertEqual(spec.argv[1:5], ['chat', '--cli', '--provider', 'custom'])
                 config = Path(spec.environment['HERMES_HOME']) / 'config.yaml'
@@ -56,15 +60,34 @@ class CommandCodeTests(unittest.TestCase):
         self.assertFalse(untouched.exists())
     def test_provisioning_backup_permissions_and_redaction(self):
         key = 'fixture-key-do-not-publish-12345'
+        catalogue_entry = {'id': DEFAULT_MODEL, 'name': 'DeepSeek V4.1 Flash', 'context_length': 1000000}
         original = self.registry.registry_path.read_text()
-        with patch('agent_console.commandcode.catalogue', return_value=[DEFAULT_MODEL]):
+        with patch('agent_console.commandcode.catalogue', return_value=[catalogue_entry]):
             result = provision(self.registry.config_dir, key)
         self.assertEqual((Path(result['backup'])/'auth-contexts.json').read_text(), original)
         self.assertEqual(self.registry.secret_path('commandcode-main').stat().st_mode & 0o777, 0o600)
         public = json.dumps(self.registry.list_contexts()) + json.dumps(result) + self.registry.registry_path.read_text()
         self.assertNotIn(key, public)
         for tool in ('pi', 'hermes'):
-            self.assertEqual(self.registry.get_context(tool, require_ready=True)['model'], DEFAULT_MODEL)
+            context = self.registry.get_context(tool, require_ready=True)
+            self.assertEqual(context['model'], DEFAULT_MODEL)
+            self.assertEqual(context['models'], [DEFAULT_MODEL])
+            self.assertEqual(context['model_catalogue'], [catalogue_entry])
+
+    def test_pi_models_expose_full_catalogue_with_real_context_windows(self):
+        context = {**self.context, 'models': ['a/b', 'c/d'], 'model_catalogue': [
+            {'id': 'a/b', 'name': 'A B', 'context_length': 1000000},
+            {'id': 'c/d', 'name': 'C D', 'context_length': 256000},
+            {'id': 'a/b', 'name': 'duplicate ignored', 'context_length': 1},
+        ]}
+        entries = pi_model_entries(context, selected='c/d')
+        self.assertEqual([e['id'] for e in entries], ['a/b', 'c/d'])
+        self.assertEqual(entries[0]['contextWindow'], 1000000)
+        self.assertEqual(entries[1]['contextWindow'], 256000)
+        self.assertEqual(entries[0]['name'], 'A B')
+        self.assertEqual(entries[0]['maxTokens'], 8192)
+        self.assertEqual(entries[0]['compat'], {'supportsDeveloperRole': False})
+
     def test_catalogue_requires_exact_v41_model(self):
         from io import BytesIO
         with patch('urllib.request.urlopen', return_value=BytesIO(json.dumps({'data':[{'id':'deepseek/deepseek-v4-flash'}]}).encode())):

@@ -3,6 +3,13 @@
 The CT115 default is `deepseek/deepseek-v4.1-flash`, validated against the
 69-model authenticated catalogue on 2026-09-14. V4 Flash is a separate model;
 the provisioner refuses to configure defaults if V4.1 Flash is missing.
+Pi's private `models.json` exposes the **entire** authenticated catalogue, not
+just the default: each entry carries the API-reported `context_length` as
+`contextWindow` (for example V4.1 Flash is 1000000, not the old 128000 pin), so
+`/model` can switch to any CommandCode model without editing the file. Pi reloads
+`models.json` whenever `/model` opens, so a refreshed catalogue takes effect in
+an existing session. Output remains pinned to a conservative `maxTokens=8192`;
+Hermes already accepted any catalogue model id, so this only changed Pi.
 
 ## Installation and credential provisioning
 
