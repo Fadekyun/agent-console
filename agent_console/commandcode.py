@@ -27,6 +27,78 @@ FALLBACK_CONTEXT_WINDOW = 128000
 # conservative value for every model rather than guessing per-model output limits.
 MAX_OUTPUT_TOKENS = 8192
 
+# Hermes starts CommandCode sessions with this reasoning level. It is only
+# written for models in REASONING_MODELS; Hermes' bundled "custom" profile
+# turns it into a top-level ``reasoning_effort`` request field.
+COMMANDCODE_DEFAULT_REASONING_EFFORT = "high"
+
+# CommandCode's OpenAI-compatible endpoint only honours the *top-level*
+# ``reasoning_effort`` field and validates it against
+# {"low", "medium", "high", "xhigh", "max"}: "none"/"minimal" return HTTP
+# 400, while a nested ``reasoning`` object or a ``think`` flag is silently
+# ignored. The ``/models`` catalogue carries no capability metadata, so support
+# is an explicit, evidence-probed allowlist. Models absent here stay
+# non-reasoning: pi does not advertise thinking levels and Hermes does not send
+# ``reasoning_effort`` (which would 400 for e.g. the Claude entries).
+#
+# Probed 2026-09-15 against the live catalogue with the configured key: each
+# listed model accepted ``reasoning_effort:"high"`` and returned reasoning
+# tokens. Re-probe and update if CommandCode changes its catalogue.
+REASONING_MODELS = frozenset({
+    "MiniMaxAI/MiniMax-M2.5",
+    "MiniMaxAI/MiniMax-M3",
+    "Qwen/Qwen3.6-Max-Preview",
+    "Qwen/Qwen3.6-Plus",
+    "Qwen/Qwen3.7-Flash",
+    "Qwen/Qwen3.7-Max",
+    "Qwen/Qwen3.7-Plus",
+    "Qwen/Qwen3.8-27B",
+    "Qwen/Qwen3.8-Flash",
+    "Qwen/Qwen3.8-Max",
+    "Qwen/Qwen3.8-Max-0902",
+    "deepseek/deepseek-v4-flash",
+    "deepseek/deepseek-v4-flash-fast",
+    "deepseek/deepseek-v4-flash-vision-exp",
+    "deepseek/deepseek-v4-pro",
+    "deepseek/deepseek-v4.1-flash",
+    "google/gemini-3.7-flash",
+    "google/gemini-3.8-flash",
+    "inclusionai/ling-3.0-flash-sante:free",
+    "meituan/LongCat-2.0:free",
+    "meta/muse-spark-1.2",
+    "meta/muse-spark-1.2-contributor",
+    "meta/muse-spark-1.3",
+    "meta/muse-spark-1.3-contributor",
+    "moonshotai/Kimi-K2.6",
+    "moonshotai/Kimi-K2.7-Code",
+    "moonshotai/Kimi-K2.7-Code-Highspeed",
+    "nvidia/nemotron-3-ultra-550b-a55b",
+    "stepfun/Step-3.7-Flash",
+    "tencent/hy3-paid",
+    "tencent/hy4-preview",
+    "thinkingmachines/inkling",
+    "thinkingmachines/inkling-small",
+    "xai/grok-4.5",
+    "xai/grok-4.6",
+    "xiaomi/mimo-v2.5",
+    "xiaomi/mimo-v2.5-pro",
+    "z-ai/glm-5.3-flash",
+    "zai-org/GLM-5.1",
+    "zai-org/GLM-5.2",
+    "zai-org/GLM-5.3",
+})
+
+# pi thinking levels hidden/mapped for CommandCode. ``minimal`` is dropped
+# because the endpoint 400s on it; ``off`` stays unmapped (pi sends nothing and
+# the model keeps its own default); ``xhigh`` is mapped explicitly so the level
+# is offered at all (pi only lists xhigh when the map defines it).
+REASONING_THINKING_LEVEL_MAP = {"minimal": None, "xhigh": "xhigh"}
+
+
+def supports_reasoning(model_id: str | None) -> bool:
+    """Return True when CommandCode accepts reasoning_effort for *model_id*."""
+    return bool(model_id) and model_id in REASONING_MODELS
+
 
 def _positive_int(value: Any, fallback: int) -> int:
     if isinstance(value, bool):
@@ -136,20 +208,30 @@ def pi_model_entries(
             continue
         seen.add(model_id)
         name = raw.get("name")
-        entries.append({
-            "id": model_id,
-            "name": name if isinstance(name, str) and name.strip() else model_id,
-            "contextWindow": _positive_int(raw.get("context_length"), FALLBACK_CONTEXT_WINDOW),
-            "maxTokens": max_tokens,
-            "compat": {"supportsDeveloperRole": False},
-        })
+        entries.append(_pi_model_entry(
+            model_id,
+            name if isinstance(name, str) and name.strip() else model_id,
+            _positive_int(raw.get("context_length"), FALLBACK_CONTEXT_WINDOW),
+            max_tokens,
+        ))
     if selected and selected not in seen:
-        entries.append({
-            "id": selected, "name": selected,
-            "contextWindow": FALLBACK_CONTEXT_WINDOW, "maxTokens": max_tokens,
-            "compat": {"supportsDeveloperRole": False},
-        })
+        entries.append(_pi_model_entry(selected, selected, FALLBACK_CONTEXT_WINDOW, max_tokens))
     return entries
+
+
+def _pi_model_entry(model_id: str, name: str, context_window: int, max_tokens: int) -> dict[str, Any]:
+    """Build one pi model entry, advertising thinking only when supported."""
+    entry: dict[str, Any] = {
+        "id": model_id,
+        "name": name,
+        "contextWindow": context_window,
+        "maxTokens": max_tokens,
+        "compat": {"supportsDeveloperRole": False},
+    }
+    if supports_reasoning(model_id):
+        entry["reasoning"] = True
+        entry["thinkingLevelMap"] = dict(REASONING_THINKING_LEVEL_MAP)
+    return entry
 
 
 def provision(config_dir: Path, key: str) -> dict:
