@@ -134,6 +134,68 @@ class CommandCodeTests(unittest.TestCase):
             if expected:
                 self.assertIn('"high"', config)
 
+    def test_hermes_reasoning_gate_is_model_aware(self):
+        # Regression for the /model-switch hazard: the session-level effort must
+        # not be sent for a model that rejects reasoning_effort.
+        import importlib.util
+        import sys
+        import types
+        from agent_console.commandcode import REASONING_MODELS
+        supported = next(iter(sorted(REASONING_MODELS)))
+        spec = provider_adapter('hermes', self.registry).build_launch_spec(
+            context={**self.context, 'models': [DEFAULT_MODEL, 'claude-sonnet-5']},
+            context_path=self.context_path, model=DEFAULT_MODEL, role='Profile: general',
+            profile='general', cwd=self.root, read_only=False, agent_mode=None)
+        root = Path(spec.environment['HERMES_HOME'])
+        plugin = root / 'plugins/model-providers/commandcode/__init__.py'
+        self.assertTrue(plugin.is_file())
+        self.assertTrue((plugin.parent / 'plugin.yaml').is_file())
+        self.assertEqual(plugin.stat().st_mode & 0o777, 0o600)
+        payload = json.loads((root / 'reasoning-models.json').read_text())
+        self.assertEqual(payload['models'], sorted(REASONING_MODELS))
+        self.assertEqual(payload['default_effort'], 'high')
+
+        registered = []
+
+        class _Base:
+            name = 'custom'
+
+            def build_api_kwargs_extras(self, *, reasoning_config=None, model=None, **kwargs):
+                if reasoning_config and reasoning_config.get('effort'):
+                    return {}, {'reasoning_effort': reasoning_config['effort']}
+                return {}, {}
+
+        base = _Base()
+        providers_stub = types.ModuleType('providers')
+        providers_stub.get_provider_profile = lambda name: base if name == 'custom' else None
+        providers_stub.register_provider = registered.append
+        base_stub = types.ModuleType('providers.base')
+        base_stub.ProviderProfile = _Base
+        constants_stub = types.ModuleType('hermes_constants')
+        constants_stub.get_hermes_home = lambda: root
+        saved = {key: sys.modules.get(key) for key in ('providers', 'providers.base', 'hermes_constants')}
+        sys.modules.update({'providers': providers_stub, 'providers.base': base_stub,
+                            'hermes_constants': constants_stub})
+        try:
+            module_spec = importlib.util.spec_from_file_location('cc_gate_under_test', plugin)
+            module = importlib.util.module_from_spec(module_spec)
+            module_spec.loader.exec_module(module)
+            self.assertEqual(len(registered), 1)
+            profile = registered[0]
+
+            def effort(model, level):
+                return profile.build_api_kwargs_extras(
+                    reasoning_config={'enabled': True, 'effort': level}, model=model)[1]
+
+            self.assertEqual(effort(supported, 'high')['reasoning_effort'], 'high')
+            self.assertEqual(effort(supported, 'minimal')['reasoning_effort'], 'low')
+            self.assertEqual(effort(supported, 'bogus'), {})
+            self.assertEqual(effort('claude-sonnet-5', 'high'), {})
+            self.assertEqual(effort(None, 'high'), {})
+        finally:
+            for key, value in saved.items():
+                sys.modules.pop(key, None) if value is None else sys.modules.update({key: value})
+
     def test_catalogue_requires_exact_v41_model(self):
         from io import BytesIO
         with patch('urllib.request.urlopen', return_value=BytesIO(json.dumps({'data':[{'id':'deepseek/deepseek-v4-flash'}]}).encode())):
