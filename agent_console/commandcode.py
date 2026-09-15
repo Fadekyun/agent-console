@@ -219,6 +219,27 @@ def pi_model_entries(
     return entries
 
 
+def install_hermes_reasoning_gate(root: Path) -> None:
+    """Install the model-aware reasoning gate into a Hermes session home.
+
+    Hermes keeps ``agent.reasoning_effort`` for the whole session, so the
+    gate re-checks the current request's model against the allowlist and drops
+    the field for models that would reject it (e.g. after a ``/model`` switch).
+    """
+    source = Path(__file__).resolve().parent / "hermes_provider_plugins" / "commandcode"
+    target = root / "plugins" / "model-providers" / "commandcode"
+    target.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target.chmod(0o700)
+    for name in ("__init__.py", "plugin.yaml"):
+        destination = target / name
+        shutil.copyfile(source / name, destination)
+        destination.chmod(0o600)
+    write_private_json(root / "reasoning-models.json", {
+        "models": sorted(REASONING_MODELS),
+        "default_effort": COMMANDCODE_DEFAULT_REASONING_EFFORT,
+    })
+
+
 def _pi_model_entry(model_id: str, name: str, context_window: int, max_tokens: int) -> dict[str, Any]:
     """Build one pi model entry, advertising thinking only when supported."""
     entry: dict[str, Any] = {

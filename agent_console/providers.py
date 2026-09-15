@@ -264,8 +264,9 @@ class CommandCodeAdapter(ProviderAdapter):
 
     def build_launch_spec(self, **kwargs: Any) -> LaunchSpec:
         from .commandcode import (COMMANDCODE_DEFAULT_REASONING_EFFORT, COMMANDCODE_ENV_VAR,
-                                 ensure_pi_auth_env_reference, pi_model_entries, selected_model,
-                                 supports_reasoning, write_private_json)
+                                 ensure_pi_auth_env_reference, install_hermes_reasoning_gate,
+                                 pi_model_entries, selected_model, supports_reasoning,
+                                 write_private_json)
 
         context = kwargs["context"]
         model = selected_model(context, kwargs.get("model"))
@@ -298,6 +299,9 @@ class CommandCodeAdapter(ProviderAdapter):
                     "reasoning_effort": COMMANDCODE_DEFAULT_REASONING_EFFORT,
                 }
             write_private_json(root / "config.yaml", hermes_config)
+            # Gate the session-level effort by the current request's model so a
+            # /model switch to an unsupported model cannot inherit it (HTTP 400).
+            install_hermes_reasoning_gate(root)
             environment["HERMES_HOME"] = str(root)
             argv = [str(self.binary), "chat", "--cli", "--provider", "custom", "--model", model]
         return LaunchSpec(argv, environment, self.secret_files(context))
