@@ -11,10 +11,13 @@ The trusted SQL reader uses an isolated Python process and a native Linux x86_64
 libseccomp write guard. It reads supported schema10/11 and current committed WAL
 data without a write fallback. Missing state, unsupported schema, unavailable
 enforcement or unusable WAL sidecars returns an unavailable diagnostic; it does
-not create sidecars or use immutable mode on a live database. This guard is not a
-general sandbox for hostile code. Profile-only reads do not require the database
-or guard. Generic inspection does not expose frozen integration requests or their
-artifacts; use the existing owner-authorized request view.
+not create sidecars or use immutable mode on a live database. The long-running
+service holds one writer connection for its lifetime so live WAL sidecars stay
+materialized for these routes; inspection still fails closed when no writer holds
+the database. This guard is not a general sandbox for hostile code. Profile-only
+reads do not require the database or guard. Generic inspection does not expose
+frozen integration requests or their artifacts; use the existing owner-authorized
+request view.
 
 Other commands retain their existing behavior: in particular `integration
 plan-status` reconciles request state, and `session wait-for-children` records its

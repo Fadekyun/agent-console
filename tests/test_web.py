@@ -79,6 +79,20 @@ class WebTests(unittest.TestCase):
             os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
         self.temp.cleanup()
 
+    def test_lifespan_keeps_live_wal_sidecars_for_guarded_inspection(self) -> None:
+        from agent_console.inspection import InspectionUnavailable, read_session_snapshot
+
+        database = self.manager.settings.database_path
+        # The manager's migrate() closes its last connection, so the guarded
+        # read-only reader correctly refuses before the service holds a writer.
+        with self.assertRaises(InspectionUnavailable):
+            read_session_snapshot(database)
+        with patch("agent_console.web.Settings.from_env", return_value=self.manager.settings):
+            with TestClient(create_app(self.manager)):
+                self.assertTrue(read_session_snapshot(database)["ok"])
+        with self.assertRaises(InspectionUnavailable):
+            read_session_snapshot(database)
+
     def test_health_and_identity_gate(self) -> None:
         self.assertEqual(self.client.get("/healthz").text, "ok\n")
         self.assertEqual(self.client.get("/api/sessions").status_code, 403)
