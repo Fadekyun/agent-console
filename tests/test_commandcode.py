@@ -107,6 +107,33 @@ class CommandCodeTests(unittest.TestCase):
         self.assertEqual(entries[0]['maxTokens'], 8192)
         self.assertEqual(entries[0]['compat'], {'supportsDeveloperRole': False})
 
+    def test_pi_advertises_thinking_only_for_supported_models(self):
+        from agent_console.commandcode import REASONING_MODELS
+        supported = next(iter(sorted(REASONING_MODELS)))
+        context = {**self.context, 'models': [supported, 'claude-sonnet-5'], 'model_catalogue': [
+            {'id': supported, 'name': 'Supported', 'context_length': 1000},
+            {'id': 'claude-sonnet-5', 'name': 'Unsupported', 'context_length': 1000},
+        ]}
+        entries = {e['id']: e for e in pi_model_entries(context)}
+        self.assertTrue(entries[supported]['reasoning'])
+        self.assertEqual(entries[supported]['thinkingLevelMap'], {'minimal': None, 'xhigh': 'xhigh'})
+        self.assertNotIn('reasoning', entries['claude-sonnet-5'])
+        self.assertNotIn('thinkingLevelMap', entries['claude-sonnet-5'])
+
+    def test_hermes_sets_reasoning_effort_only_for_supported_models(self):
+        from agent_console.commandcode import REASONING_MODELS
+        supported = next(iter(sorted(REASONING_MODELS)))
+        for model, expected in ((DEFAULT_MODEL, True), ('claude-sonnet-5', False)):
+            context = {**self.context, 'models': [DEFAULT_MODEL, 'claude-sonnet-5']}
+            spec = provider_adapter('hermes', self.registry).build_launch_spec(
+                context=context, context_path=self.context_path, model=model,
+                role='Profile: general', profile='general', cwd=self.root,
+                read_only=False, agent_mode=None)
+            config = (Path(spec.environment['HERMES_HOME']) / 'config.yaml').read_text()
+            self.assertEqual('reasoning_effort' in config, expected, config)
+            if expected:
+                self.assertIn('"high"', config)
+
     def test_catalogue_requires_exact_v41_model(self):
         from io import BytesIO
         with patch('urllib.request.urlopen', return_value=BytesIO(json.dumps({'data':[{'id':'deepseek/deepseek-v4-flash'}]}).encode())):

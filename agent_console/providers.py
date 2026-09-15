@@ -263,8 +263,9 @@ class CommandCodeAdapter(ProviderAdapter):
     """Native harness configuration contains references, never credential values."""
 
     def build_launch_spec(self, **kwargs: Any) -> LaunchSpec:
-        from .commandcode import (COMMANDCODE_ENV_VAR, ensure_pi_auth_env_reference,
-                                 pi_model_entries, selected_model, write_private_json)
+        from .commandcode import (COMMANDCODE_DEFAULT_REASONING_EFFORT, COMMANDCODE_ENV_VAR,
+                                 ensure_pi_auth_env_reference, pi_model_entries, selected_model,
+                                 supports_reasoning, write_private_json)
 
         context = kwargs["context"]
         model = selected_model(context, kwargs.get("model"))
@@ -284,11 +285,19 @@ class CommandCodeAdapter(ProviderAdapter):
             argv = [str(self.binary), "--provider", "commandcode", "--model", model,
                     "--append-system-prompt", str(context_path)]
         else:
-            write_private_json(root / "config.yaml", {
+            hermes_config: dict[str, Any] = {
                 "model": {"provider": "custom", "default": model,
                           "base_url": context["base_url"],
                           "api_key": "${" + COMMANDCODE_ENV_VAR + "}"},
-            })
+            }
+            if supports_reasoning(model):
+                # CommandCode only honours a top-level reasoning_effort; Hermes'
+                # bundled "custom" profile emits it from agent.reasoning_effort.
+                # Non-reasoning models must omit it (the endpoint 400s for them).
+                hermes_config["agent"] = {
+                    "reasoning_effort": COMMANDCODE_DEFAULT_REASONING_EFFORT,
+                }
+            write_private_json(root / "config.yaml", hermes_config)
             environment["HERMES_HOME"] = str(root)
             argv = [str(self.binary), "chat", "--cli", "--provider", "custom", "--model", model]
         return LaunchSpec(argv, environment, self.secret_files(context))
