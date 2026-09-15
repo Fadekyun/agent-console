@@ -16,6 +16,7 @@ DIRECT_NAMES = {
     "claude": "claude",
     "opencode": "opencode",
     "hermes": "hermes",
+    "pi": "pi",
 }
 
 

@@ -874,12 +874,24 @@ function updateNewToolFields() {
   updateContextSelect(newForm.elements.tool, newForm.elements.auth_context);
   updateAgentModeField();
   $('#provider-field').hidden = tool !== 'opencode'; newForm.elements.provider.disabled = tool !== 'opencode';
-  $('#model-field').hidden = tool !== 'opencode'; newForm.elements.model.disabled = tool !== 'opencode';
+  const nativeModel = tool === 'pi' || tool === 'hermes';
+  $('#model-field').hidden = tool !== 'opencode' && !nativeModel; newForm.elements.model.disabled = tool !== 'opencode' && !nativeModel;
+  $('#model-cost-details').hidden = nativeModel;
+  if (nativeModel) updateNativeModel();
   $('#codex-model-field').hidden = !codexLike; newForm.elements.codex_model.disabled = !codexLike;
   $('#codex-effort-field').hidden = !codexLike; newForm.elements.codex_effort.disabled = !codexLike;
   $('#codex-plan-effort-field').hidden = !codexLike; newForm.elements.codex_plan_effort.disabled = !codexLike;
   if (tool === 'opencode') loadModels();
   formStatus.textContent = catalog?.status === 'ready' ? '' : `${catalog?.status || 'unknown'}: ${catalog?.reason || 'configuration required'}`;
+}
+
+function updateNativeModel() {
+  const tool = newForm.elements.tool.value;
+  if (!['pi', 'hermes'].includes(tool)) return;
+  const context = state.identity.auth_contexts.find(x => x.tool === tool && x.name === newForm.elements.auth_context.value);
+  newForm.elements.model.value = context?.model || '';
+  $('#model-options').replaceChildren(...(context?.models || []).map(id => new Option(id, id)));
+  $('#model-status').textContent = 'Authenticated context catalogue. Sandbox and approval enforcement unsupported.';
 }
 
 function renderProviderContexts() {
@@ -976,6 +988,7 @@ async function start() {
   $('#filter-profile').append(...state.identity.profiles.map((p) => new Option(p.display_name || p.name, p.name)));
   newForm.elements.tool.onchange = updateNewToolFields;
   newForm.elements.provider.onchange = loadModels;
+  newForm.elements.auth_context.onchange = updateNativeModel;
   $('#estimate-models').onclick = estimateModelUsage;
   const presets = {
     small: [4000, 500, 1000, 0],

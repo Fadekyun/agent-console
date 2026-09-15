@@ -1,5 +1,15 @@
 # Release Notes
 
+## 0.7.0 (Unreleased)
+
+- **Date**: 2026-09-14
+- **Issue/PR**: #107 / pending
+- **Impact**: Adds Pi to session creation, authentication contexts, selectors and status. Hermes uses the selected CommandCode context/model instead of hardcoded OpenRouter settings. Both deliver Console profile and session context through native system-prompt inputs; sandbox, read-only and approval enforcement remain unsupported.
+- **Configuration/Migration**: Run the value-blind `python -m agent_console.commandcode` provisioner with the key on stdin. It requires the authenticated catalogue to contain `deepseek/deepseek-v4.1-flash` before writing a 0600 credential or defaults. Install Pi 0.73.1 and use the supplied wrappers. Existing Hermes OpenRouter contexts are retained but the new adapter requires CommandCode. See `docs/PI_HERMES_COMMANDCODE.md`.
+- **Verification**: Unit/integration/UI checks and bounded authenticated native smokes for both harnesses, each returning the Console context marker and a random local file value via a harmless tool call. No credential values in launchers, configuration JSON, public status or committed evidence.
+- **Rollback**: Restore the previous selected release and backed-up runtime.env/auth-contexts.json/credential/wrappers. Existing sessions retain their launchers. CT115 deployment retains its live presence integration and queue-review features.
+
+
 ## 0.6.1 (unreleased)
 
 - 2026-09-14, issue #105: native Codex progress messages no longer abort exact-artifact reviews before the final result. Strict final validation occurs after stream completion and child exit; malformed/conflicting verdicts remain blocked. Configuration/migration: none. Verification: progress-to-final, commentary-only, malformed/contradictory final, existing sequence and runner regressions. Rollback: restore prior task_runner.py in a guarded immutable release; preserve request evidence and do not retry uncertain deliveries.

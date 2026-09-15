@@ -79,6 +79,20 @@ class WebTests(unittest.TestCase):
             os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
         self.temp.cleanup()
 
+    def test_lifespan_keeps_live_wal_sidecars_for_guarded_inspection(self) -> None:
+        from agent_console.inspection import InspectionUnavailable, read_session_snapshot
+
+        database = self.manager.settings.database_path
+        # The manager's migrate() closes its last connection, so the guarded
+        # read-only reader correctly refuses before the service holds a writer.
+        with self.assertRaises(InspectionUnavailable):
+            read_session_snapshot(database)
+        with patch("agent_console.web.Settings.from_env", return_value=self.manager.settings):
+            with TestClient(create_app(self.manager)):
+                self.assertTrue(read_session_snapshot(database)["ok"])
+        with self.assertRaises(InspectionUnavailable):
+            read_session_snapshot(database)
+
     def test_health_and_identity_gate(self) -> None:
         self.assertEqual(self.client.get("/healthz").text, "ok\n")
         self.assertEqual(self.client.get("/api/sessions").status_code, 403)
@@ -1061,6 +1075,18 @@ class WebTests(unittest.TestCase):
             },
         )
         self.assertEqual(resp.status_code, 400)
+
+    def test_presence_routes_do_not_use_manager_or_scoped_writer_as_identity(self):
+        from agent_console.device_presence import GET, POST
+        token = 'FixtureOnlyPresenceWriter00000000000001'
+        with patch.object(self.manager, 'list_sessions', side_effect=AssertionError('manager called')), \
+                patch.object(self.manager.database, 'audit', side_effect=AssertionError('read audited')):
+            self.assertEqual(self.client.get(GET, headers=self.headers).status_code, 503)
+            self.assertEqual(self.client.get(GET, headers={'Tailscale-User-Login': 'wrong'}).status_code, 403)
+            self.assertEqual(self.client.get(GET).status_code, 403)
+            for path in (GET, '/api/sessions', '/api/projects', '/api/integrations/plan-status'):
+                self.assertEqual(self.client.get(path, headers={**self.headers, 'X-AGC-Presence-Writer': token}).status_code, 403)
+            self.assertEqual(self.client.post(POST, content='{}', headers={'Content-Type':'application/json','X-AGC-Presence-Writer':token}).status_code,503)
 
 
 if __name__ == "__main__":

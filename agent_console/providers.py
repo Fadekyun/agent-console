@@ -27,6 +27,7 @@ TOOL_BINARIES = {
     "codex-pro": Path(os.getenv("AGCONSOLE_CODEX_PRO_BIN", str(_resolve_binary("AGCONSOLE_CODEX_BIN", "codex")))),
     "claude": _resolve_binary("AGCONSOLE_CLAUDE_BIN", "claude"),
     "opencode": _resolve_binary("AGCONSOLE_OPENCODE_BIN", "opencode"),
+    "pi": _resolve_binary("AGCONSOLE_PI_BIN", "pi"),
     "hermes": _resolve_binary("AGCONSOLE_HERMES_BIN", "hermes"),
     "shell": Path(os.getenv("AGCONSOLE_SHELL_BIN", "/usr/bin/zsh")),
 }
@@ -258,24 +259,63 @@ class OpenCodeAdapter(ProviderAdapter):
         return LaunchSpec(spec.argv, environment, spec.secret_files)
 
 
-class HermesAdapter(ProviderAdapter):
-    tool = "hermes"
+class CommandCodeAdapter(ProviderAdapter):
+    """Native harness configuration contains references, never credential values."""
 
     def build_launch_spec(self, **kwargs: Any) -> LaunchSpec:
+        from .commandcode import (COMMANDCODE_DEFAULT_REASONING_EFFORT, COMMANDCODE_ENV_VAR,
+                                 ensure_pi_auth_env_reference, install_hermes_reasoning_gate,
+                                 pi_model_entries, selected_model, supports_reasoning,
+                                 write_private_json)
+
         context = kwargs["context"]
-        alias = Path.home() / ".local" / "bin" / f"hermes-agent-console-{kwargs['profile']}"
-        environment = {
-            "HERMES_INFERENCE_PROVIDER": str(context.get("provider") or "openrouter"),
-            "HERMES_INFERENCE_MODEL": "openai/gpt-4o-mini",
-            "AGENT_CONSOLE_CONTEXT_FILE": str(kwargs["context_path"]),
-        }
-        return LaunchSpec(
-            [str(alias), "--cli"], environment, self.secret_files(context)
-        )
+        model = selected_model(context, kwargs.get("model"))
+        context_path = kwargs["context_path"]
+        root = context_path.parent / (context_path.stem + "-" + self.tool)
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        environment = {"AGENT_CONSOLE_CONTEXT_FILE": str(context_path)}
+        if self.tool == "pi":
+            write_private_json(root / "models.json", {"providers": {"commandcode": {
+                "baseUrl": context["base_url"], "api": "openai-completions",
+                "apiKey": COMMANDCODE_ENV_VAR, "authHeader": True,
+                "headers": {"User-Agent": "agent-console-commandcode/1.0"},
+                "models": pi_model_entries(context, selected=model),
+            }}})
+            ensure_pi_auth_env_reference(root / "auth.json")
+            environment["PI_CODING_AGENT_DIR"] = str(root)
+            argv = [str(self.binary), "--provider", "commandcode", "--model", model,
+                    "--append-system-prompt", str(context_path)]
+        else:
+            hermes_config: dict[str, Any] = {
+                "model": {"provider": "custom", "default": model,
+                          "base_url": context["base_url"],
+                          "api_key": "${" + COMMANDCODE_ENV_VAR + "}"},
+            }
+            if supports_reasoning(model):
+                # CommandCode only honours a top-level reasoning_effort; Hermes'
+                # bundled "custom" profile emits it from agent.reasoning_effort.
+                # Non-reasoning models must omit it (the endpoint 400s for them).
+                hermes_config["agent"] = {
+                    "reasoning_effort": COMMANDCODE_DEFAULT_REASONING_EFFORT,
+                }
+            write_private_json(root / "config.yaml", hermes_config)
+            # Gate the session-level effort by the current request's model so a
+            # /model switch to an unsupported model cannot inherit it (HTTP 400).
+            install_hermes_reasoning_gate(root)
+            environment["HERMES_HOME"] = str(root)
+            argv = [str(self.binary), "chat", "--cli", "--provider", "custom", "--model", model]
+        return LaunchSpec(argv, environment, self.secret_files(context))
 
     def build_argv(self, **kwargs: Any) -> list[str]:
-        alias = Path.home() / ".local" / "bin" / f"hermes-agent-console-{kwargs['profile']}"
-        return [str(alias), "--cli"]
+        return self.build_launch_spec(**kwargs).argv
+
+
+class HermesAdapter(CommandCodeAdapter):
+    tool = "hermes"
+
+
+class PiAdapter(CommandCodeAdapter):
+    tool = "pi"
 
 
 class ShellAdapter(ProviderAdapter):
@@ -291,6 +331,7 @@ ADAPTERS = {
     "claude": ClaudeAdapter,
     "opencode": OpenCodeAdapter,
     "hermes": HermesAdapter,
+    "pi": PiAdapter,
     "shell": ShellAdapter,
 }
 

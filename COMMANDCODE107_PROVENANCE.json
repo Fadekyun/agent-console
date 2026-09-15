@@ -1,0 +1,22 @@
+{
+  "feature_sha": "067859a2bc7f6dc287f117f78f53c5b67f624a42",
+  "preserved_release": "/home/agentstage/.local/share/agent-console/releases/release-20260914-queue55-decc1ad2be52",
+  "preserved_manifest_sha256": "afa9482c5b03b2c756801be89dd260fad13c6155e6756dbc1006e00e03e4cf61",
+  "preserved_files": {
+    "agent_console/device_presence.py": "0bb9af19a0f12b883ebf4ef82d07fb35c594652f8af3e0da2db88fae50a59c5a",
+    "agent_console/presence_routes.py": "274b6806760a9b3b24131d8efdc380619de7868004d1919ed671f70f36b9f35e",
+    "agent_console/presence_server.py": "902089df35b3b324fca34a55f6af83bcd331ab0239d6dc140fb7019315d3e240",
+    "agent_console/presence_service.py": "e3f123d505fb6b547234423ac4791750d45fb8a627c814b89eefd73b684bc95d",
+    "agent_console/web.py": "3faa80106ad451142bfac0ebff409031a5eb250191fbb620d7e291233064fa68",
+    "docs/AGC_LAPTOP_PRESENCE.md": "c5c829803dee8f03ded4433e915ccad3ad74f4e95f67961485275767549e94e0",
+    "tests/fixtures/presence-unknown-vector.json": "d39322b3795455f6e1339149dcf464bb5c1c3de93b1a7b33326fc30efd532eaf",
+    "tests/fixtures/presence-wire-vectors.json": "ee69910c87961a7133fa66829102c7080fa71deead7c65cec761384ef8723bb3",
+    "tests/test_device_presence.py": "ad771f8b2c0d7f1f677b82b80831fddffada4d28d370ab1b211889e4270d7127",
+    "tests/test_presence_bootstrap.py": "d61161e88795cdfcbd3d745c1dd05cd7542cd8d35bc0e404394678609ec5ea55",
+    "tests/test_web.py": "9c2388d23c4bb7f6a64ea3479e994f7bb15252ba7e3b56d1e45ffdbb213463e7"
+  },
+  "queue_progress_files": {
+    "agent_console/task_runner.py": "14397ea88e59fe1fd5b1efbdac880a47e17441902bdda21d4721893080857ccf",
+    "tests/test_artifact_review.py": "79eedee738b15147c97223bb100bb667994f1c3735888889ce208c4dc8b58b6b"
+  }
+}

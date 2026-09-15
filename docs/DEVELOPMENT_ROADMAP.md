@@ -52,3 +52,5 @@ This document tracks the planned and completed development work for Agent Consol
 - [ ] Multi-user support
 - [ ] Webhook integrations
 - [ ] Plugin system
+
+- [x] #107 — Pi harness and Hermes CommandCode contexts, exact authenticated DeepSeek V4.1 Flash defaults, native profile/session prompt delivery, runtime secret references, and explicit unsupported enforcement reporting (v0.7.0).

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n "${AGENT_CONSOLE_CONTEXT_FILE:-}" ]]; then
+  : "${CMD_API_KEY:?selected CommandCode credential is missing}"
+fi
+pi_node="${AGCONSOLE_PI_NODE:-$HOME/.local/share/agent-console/pi-runtime/node_modules/node/bin/node}"
+pi_cli="${AGCONSOLE_PI_CLI:-$HOME/.local/lib/node_modules/@mariozechner/pi-coding-agent/dist/cli.js}"
+exec "$pi_node" "$pi_cli" "$@"

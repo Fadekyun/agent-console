@@ -12,7 +12,7 @@ import struct
 import subprocess
 import termios
 from collections import defaultdict
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +25,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 
 from .config import Settings
+from .database import Database
 from .logging_config import configure_logging, configure_uvicorn_logging
 from .manager import SessionManager
 from .integration_requests import IntegrationService
@@ -54,7 +55,14 @@ async def lifespan(app: FastAPI):
     s = Settings.from_env()
     configure_logging(log_dir=s.log_dir, retention_days=s.log_retention_days, backup_count=s.log_backup_count)
     configure_uvicorn_logging()
-    yield
+    # Hold one writer connection for the service lifetime so live WAL sidecars
+    # stay materialized for the guarded read-only CLI inspection routes, which
+    # must not create or change them. Skipped until the database exists so the
+    # lifespan never creates state.
+    with ExitStack() as stack:
+        if s.database_path.is_file():
+            stack.enter_context(Database(s.database_path).keepalive())
+        yield
 
 
 configure_logging()
@@ -239,6 +247,27 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             )
             raise HTTPException(status_code=403, detail="Tailscale identity or trusted LAN is required")
         return AuthContext(actor=client_host, access_surface="local-lan")
+
+    # Presence reads use the existing identity policy without authentication audit
+    # writes or any session/database manager call on this inspection route.
+    def presence_identity(request: Request, tailscale_user_login: str | None = Header(default=None)):
+        if not EXPECTED_LOGIN:
+            raise HTTPException(status_code=503, detail="Presence identity unavailable")
+        login = (tailscale_user_login or "").strip().lower()
+        if login:
+            if login != EXPECTED_LOGIN:
+                raise HTTPException(status_code=403, detail="Presence identity denied")
+            return AuthContext(actor=login, access_surface="tailscale")
+        try:
+            local = ipaddress.ip_address(request.client.host if request.client else "") in LAN_NETWORK
+        except ValueError:
+            local = False
+        if not local:
+            raise HTTPException(status_code=403, detail="Presence identity denied")
+        return AuthContext(actor=request.client.host, access_surface="local-lan")
+
+    from .presence_routes import install as install_presence
+    install_presence(app, presence_identity)
 
     @app.get("/healthz", response_class=PlainTextResponse)
     async def healthz() -> str:

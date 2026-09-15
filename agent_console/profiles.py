@@ -211,12 +211,12 @@ def validate_profile_capability(
             "enforcement": "unsupported",
         }
 
-    # Hermes — context-file delivery is unverified
-    if tool == "hermes":
+    # Prompt delivery does not enforce host permissions or approval policy.
+    if tool in {"hermes", "pi"}:
         return {
             "allowed": True,
-            "reason": "Hermes context-file delivery is unverified; profile instructions may not reach the agent through the declared channel",
-            "enforcement": "unverified",
+            "reason": f"{tool} receives profile instructions; sandbox, read-only and approval enforcement are unsupported",
+            "enforcement": "unsupported",
         }
 
     # Release / orchestrator — human-approval gate is pending
