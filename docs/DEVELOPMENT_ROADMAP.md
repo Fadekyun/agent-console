@@ -14,6 +14,8 @@ This document tracks the planned and completed development work for Agent Consol
 
 ## Completed
 
+- [x] **Live-WAL guarded inspection** (2026-09-15, [#109](https://github.com/Fadekyun/agent-console/issues/109)) — One writer connection is held for the web-service lifetime so the guarded read-only CLI routes keep working while the service runs; the reader still creates/changes nothing and still fails closed when no writer holds the database. Shipped in v0.7.1.
+
 - [x] **Non-mutating CLI session inspection** (2026-09-13, [#93](https://github.com/Fadekyun/agent-console/issues/93)) — Nine session/profile read routes bypass writer initialization. Guarded schema10/11 snapshots and bounded tmux observations preserve stored lifecycle state, report observation failures honestly and keep integration content private. All integration operations remain writer-owned.
 
 - [x] **Disabled-by-default safe planning request protocol** (2026-09-13, [#91](https://github.com/Fadekyun/agent-console/issues/91)) — Adds a strict authenticated local request/status contract, frozen prepared context, durable idempotency and launch receipts, a native noninteractive read-only task runner, shared admission serialization, view-only request sessions, and owner-only bounded results. Activation remains gated on prepared project mappings and real provider/containment verification.

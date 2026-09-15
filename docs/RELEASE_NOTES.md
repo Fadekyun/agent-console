@@ -1,5 +1,14 @@
 # Release Notes
 
+## 0.7.1 (Unreleased)
+
+- **Date**: 2026-09-15
+- **Issue/PR**: [#109](https://github.com/Fadekyun/agent-console/issues/109) / [#111](https://github.com/Fadekyun/agent-console/pull/111)
+- **Impact**: Guarded read-only CLI inspection no longer returns `state-unavailable` during normal operation. One writer connection is held for the lifetime of the web service (`Database.keepalive()` plus the web lifespan) so the live WAL `-wal`/`-shm` sidecars stay materialized and `agentctl session context/list/tree/review` and `plan` reads work while the service runs. The guarded reader, its libseccomp write fence and its fail-closed behaviour are unchanged: the reader still creates and changes nothing, and inspection still returns `state-unavailable` when no writer holds the database.
+- **Configuration/Migration**: None. No schema change. The web service holds one idle writer connection for its lifetime.
+- **Verification**: `python3 -m pytest tests/test_inspection.py tests/test_cli_inspection.py tests/test_core.py tests/test_web.py tests/test_logging.py tests/test_commandcode.py tests/test_auth_contexts.py tests/test_profile_schema.py tests/test_version.py -q` (all pass). Isolated canary `127.0.0.1:33100` `/healthz` 200. Live check after promotion: `agentctl session context --current` 20/20 with the host stopgap service disabled. Independent read-only session review APPROVE on `75d7f38` / PR #111.
+- **Rollback**: Revert the commit or re-select the previous release (`release-20260915-213629-41f9089fa385`). No data or configuration changes persist.
+
 ## 0.7.0 (Unreleased)
 
 - **Date**: 2026-09-14
