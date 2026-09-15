@@ -54,6 +54,9 @@ rollback. Direct manual execution of historical absolute paths remains unsupport
 This change does not make live read-only WAL snapshots available when SQLite
 sidecars are missing. Correct CLI inspection can still return state-unavailable;
 that diagnostic must never trigger a legacy writer or an unguarded read fallback.
+The long-running service now holds one writer connection for its lifetime so the
+live sidecars stay present during normal operation; the reader itself still
+creates and changes nothing.
 
 The generated stable web runner has no checkout/package fallback. Missing, broken,
 escaped or incomplete current releases refuse startup; initial install prepares,

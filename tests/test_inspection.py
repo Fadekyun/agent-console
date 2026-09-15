@@ -171,6 +171,29 @@ class InspectionFixtureTests(unittest.TestCase):
             read_session_snapshot(self.db)
         self.assertEqual(fingerprint(self.root), before)
 
+    def test_writer_keepalive_restores_readable_sidecars_without_reader_creation(self):
+        self.session()
+        self.writer.close()  # Last writer: SQLite checkpoints and removes sidecars.
+        with self.assertRaisesRegex(InspectionUnavailable, "state-unavailable"):
+            read_session_snapshot(self.db)
+        with Database(self.db).keepalive():
+            before = fingerprint(self.root)
+            result = read_session_snapshot(self.db)
+            self.assertEqual(len(result["sessions"]), 1)
+            self.assertEqual(result["sessions"][0]["status"], "reserved")
+            # The reader must neither create nor change any source files.
+            self.assertEqual(fingerprint(self.root), before)
+
+    def test_writer_keepalive_commits_no_data_change(self):
+        self.session()
+        with Database(self.db).keepalive():
+            self.assertEqual(
+                self.writer.execute("SELECT count(*) FROM sessions").fetchone()[0], 1
+            )
+            self.assertEqual(
+                self.writer.execute("SELECT count(*) FROM audit_events").fetchone()[0], 0
+            )
+
     def test_existing_rollback_journal_database_needs_no_sidecars(self):
         self.session(); self.writer.close()
         setup = sqlite3.connect(self.db)

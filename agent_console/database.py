@@ -38,6 +38,37 @@ class Database:
         finally:
             conn.close()
 
+    @contextmanager
+    def keepalive(self) -> Iterator[sqlite3.Connection]:
+        """Hold one writer connection so live WAL sidecars stay materialized.
+
+        The guarded CLI inspection reader opens the database read-only and, by
+        design, must not create or change WAL sidecars. SQLite cannot serve a
+        read-only connection to a WAL database whose ``-shm`` file is absent, so
+        inspection correctly returns ``state-unavailable`` whenever no writer
+        holds the database open. Regular connections are short-lived, so a
+        long-running writer holds this connection for its lifetime to keep the
+        sidecars present without the reader creating them.
+
+        The initial transaction is empty: ``BEGIN IMMEDIATE``/``ROLLBACK`` only
+        materializes ``-shm`` and commits no data change.
+        """
+        conn = sqlite3.connect(self.path, timeout=5)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            conn.close()
+            raise
+        try:
+            yield conn
+        finally:
+            conn.close()
+
     def migrate(self) -> None:
         with self.connect() as conn:
             # Never let an older writer silently relabel a newer schema. An
