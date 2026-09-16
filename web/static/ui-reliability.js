@@ -3,20 +3,29 @@ const mobilePage = document.body.classList.contains('mobile-console');
 const terminalPage = document.body.classList.contains('terminal-page');
 const desktopPage = document.body.classList.contains('app-page');
 
-function rewriteMobileSessionsRequest(input) {
-  if (!mobilePage) return input;
-  const marker = '/api/sessions?state=all';
-  if (typeof input === 'string') {
-    return input.includes(marker) ? input.replace(marker, '/api/sessions?state=active') : input;
+async function filterMobileSessions(input, init) {
+  const response = await nativeFetch(input, init);
+  if (!mobilePage) return response;
+  const url = typeof input === 'string' ? input : input instanceof Request ? input.url : '';
+  if (!url.includes('/api/sessions?state=all') || !response.ok) return response;
+  try {
+    const body = await response.clone().json();
+    if (!Array.isArray(body)) return response;
+    const active = body.filter((session) => session.running !== false);
+    const headers = new Headers(response.headers);
+    headers.delete('content-length');
+    return new Response(JSON.stringify(active), {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  } catch {
+    return response;
   }
-  if (input instanceof Request && input.url.includes(marker)) {
-    return new Request(input.url.replace(marker, '/api/sessions?state=active'), input);
-  }
-  return input;
 }
 
 if (mobilePage) {
-  window.fetch = (input, init) => nativeFetch(rewriteMobileSessionsRequest(input), init);
+  window.fetch = filterMobileSessions;
 }
 
 const style = document.createElement('style');
