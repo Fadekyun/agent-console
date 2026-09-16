@@ -82,7 +82,7 @@ def environment_catalog(environ: Mapping[str, str] | None = None) -> list[dict[s
     ]
 
 
-def validate_requested_names(
+def validate_allowlisted_names(
     names: Sequence[str],
     *,
     environ: Mapping[str, str] | None = None,
@@ -98,12 +98,22 @@ def validate_requested_names(
         if name not in seen:
             result.append(name)
             seen.add(name)
+    return tuple(result)
+
+
+def validate_requested_names(
+    names: Sequence[str],
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    source = os.environ if environ is None else environ
+    result = validate_allowlisted_names(names, environ=source)
     missing = [name for name in result if name not in source]
     if missing:
         raise EnvironmentBindingError(
             "allowlisted environment variable(s) are unavailable: " + ", ".join(missing)
         )
-    return tuple(result)
+    return result
 
 
 def resolve_requested_values(
