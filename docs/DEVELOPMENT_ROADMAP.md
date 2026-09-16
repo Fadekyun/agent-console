@@ -4,6 +4,8 @@ This document tracks the planned and completed development work for Agent Consol
 
 ## Integration in progress
 
+- [ ] **Mobile/desktop UI reliability** (2026-09-16, [#114](https://github.com/Fadekyun/agent-console/issues/114)) — Repair mobile active-session filtering and parent-aware delegation, make the seven-item mobile navigation usable at narrow widths, restore touch-terminal input and conventional copy/paste behavior, adapt desktop session rows at scaled intermediate widths, and retain terminal-dock proportions across viewport changes. Source/browser regression work prepared; human review remains required before merge or deployment.
+
 - [x] **Native progress/final separation** (2026-09-14, #105): collect Codex commentary without premature JSON validation; validate final file/last message after complete stream, reject malformed or conflicting verdicts. Focused regressions prepared; live promotion pending.
 
 - [ ] **Native exact-artifact review** (2026-09-14, #103): bounded AGC package/controller review via managed native runner, fixed codex-pro Astra low, durable binding and fail-closed verdict. Source tests prepared; independent review and deployment pending.
