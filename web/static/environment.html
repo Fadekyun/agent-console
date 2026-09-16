@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Agent Console Environment</title>
+  <script>document.documentElement.dataset.theme=localStorage.getItem('agent-console-theme')||'system';</script>
+  <link rel="stylesheet" href="/static/styles.css?v=9">
+  <style>
+    .env-page{width:min(920px,100%);margin:0 auto;padding:clamp(14px,3vw,30px);display:grid;gap:16px}
+    .env-header,.env-actions,.env-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+    .env-panel{border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);padding:16px;display:grid;gap:12px}
+    .env-list{display:grid;gap:8px}.env-row{padding:9px 0;border-bottom:1px solid var(--border)}.env-row:last-child{border-bottom:0}
+    .env-row label{display:flex;align-items:center;gap:9px;min-width:0}.env-row input{min-height:auto;width:20px;height:20px}
+    .env-name{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
+    .env-status{font-size:.78rem;color:var(--muted)}.env-status.ready{color:var(--success)}.env-status.missing{color:var(--danger)}
+    .mcp-card{border:1px solid var(--border);border-radius:9px;padding:12px;display:grid;gap:6px}.mcp-card p{margin:0}
+    .env-session{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}.env-session label{min-width:0}
+    #env-notice{min-height:1.4em;margin:0}
+    @media(max-width:620px){.env-session{grid-template-columns:1fr}.env-actions>*{flex:1 1 auto}}
+  </style>
+</head>
+<body>
+  <main class="env-page">
+    <header class="env-header"><div><h1>Runtime environment</h1><p class="muted">Bind allowlisted Docker environment variables to a managed session. Values are never displayed.</p></div><a class="button" href="/">Dashboard</a></header>
+
+    <section class="env-panel">
+      <div class="env-session"><label>Managed session<select id="env-session"><option value="">Select an active session…</option></select></label><button id="env-refresh" type="button">Refresh</button></div>
+      <div><h2>Allowlisted variables</h2><p class="muted">Only names configured by <code>AGENT_CONSOLE_SESSION_ENV_ALLOWLIST</code> appear here.</p></div>
+      <div id="env-list" class="env-list"></div>
+      <div class="env-actions"><button id="env-apply" type="button">Apply for next restart</button><button id="env-apply-restart" type="button" class="primary">Apply &amp; restart agent</button></div>
+      <p id="env-notice" role="status"></p>
+    </section>
+
+    <section class="env-panel">
+      <div><h2>MCP descriptors</h2><p class="muted">Names-only server descriptors. Harness-specific installation remains owned by MCP integration work.</p></div>
+      <div id="mcp-list" class="env-list"></div>
+    </section>
+  </main>
+  <script type="module" src="/static/environment.js?v=1"></script>
+</body>
+</html>
