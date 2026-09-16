@@ -126,6 +126,17 @@ class Tmux:
         current_path = self.run(
             "list-panes", "-t", name, "-F", "#{pane_current_path}"
         ).stdout.splitlines()[0]
+
+        # The tmux session stores binding NAMES only. Re-resolve their current
+        # values from the Console process environment before the old pane is
+        # killed so credential rotation is fail-closed and takes effect on the
+        # next agent process without rewriting launchers or SQLite rows.
+        from .runtime_environment import current_bindings, resolve_requested_values
+        selected = current_bindings(self, name)
+        values = resolve_requested_values(selected) if selected else {}
+        for key, value in values.items():
+            self.run("set-environment", "-t", name, key, value)
+
         self.run("respawn-pane", "-k", "-t", name, "-c", current_path)
         self._run_launcher(name, launcher)
 
