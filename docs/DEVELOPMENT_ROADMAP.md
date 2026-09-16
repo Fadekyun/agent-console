@@ -4,6 +4,8 @@ This document tracks the planned and completed development work for Agent Consol
 
 ## Integration in progress
 
+- [ ] **Fail-closed tmux lifecycle observation** (2026-09-16, [#117](https://github.com/Fadekyun/agent-console/issues/117)) — Distinguish an authoritative empty tmux server from observation/parse failure so transient socket/command errors cannot persist false `process-exited` or delegation-completed state. Source regression prepared; human review and test execution remain required before merge/deployment.
+
 - [x] **Native progress/final separation** (2026-09-14, #105): collect Codex commentary without premature JSON validation; validate final file/last message after complete stream, reject malformed or conflicting verdicts. Focused regressions prepared; live promotion pending.
 
 - [ ] **Native exact-artifact review** (2026-09-14, #103): bounded AGC package/controller review via managed native runner, fixed codex-pro Astra low, durable binding and fail-closed verdict. Source tests prepared; independent review and deployment pending.
