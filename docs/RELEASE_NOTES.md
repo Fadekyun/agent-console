@@ -1,5 +1,14 @@
 # Release Notes
 
+## 0.7.2 (Unreleased)
+
+- **Date**: 2026-09-16
+- **Issue/PR**: [#114](https://github.com/Fadekyun/agent-console/issues/114) / pending
+- **Impact**: Repairs the operator-facing web console without changing session or provider semantics. Mobile now suppresses stopped sessions from the Active sessions view, uses the real parent session/profile when building delegation choices, exposes the seven primary destinations as a horizontally scrollable touch navigation, and makes a touch terminal enter Type mode instead of appearing inert. Desktop session rows switch to a labelled card layout at intermediate/scaled widths. Terminal Ctrl/Cmd+C copies an existing xterm selection while unselected Ctrl-C remains an interrupt; Ctrl/Cmd+V inserts clipboard text into the reviewable composer with the existing manual fallback retained. Terminal-dock height is migrated from fixed pixels to a bounded viewport ratio so resize/zoom/display changes do not restore stale geometry.
+- **Configuration/Migration**: None. No database or environment migration. Existing clipboard fallbacks and saved dock-height pixels remain compatible; the first responsive dock use derives a proportional value from the old setting.
+- **Verification**: Added `tests/ui/reliability.spec.mjs` covering stopped-session filtering, 360px navigation, parent-profile delegation, touch Type mode, conventional copy/paste-to-composer behavior, and the intermediate-width desktop layout. Run the focused Playwright UI suite plus `tests/test_version.py` and the existing web/mobile regressions before merge. No live deployment is included in this PR.
+- **Rollback**: Revert the #114 change set and restore v0.7.1. No state/database changes persist; removing the new proportional localStorage key is optional because older versions ignore it.
+
 ## 0.7.1 (Unreleased)
 
 - **Date**: 2026-09-15
