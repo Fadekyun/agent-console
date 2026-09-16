@@ -28,6 +28,11 @@ class ScopedWriterBoundary:
 
 
 def install(app, read_identity, *, directory=None, generation=None):
+    # Runtime env/MCP reads and managed-session binding writes share the normal
+    # Console identity policy. The presence header remains scoped to presence only.
+    from .runtime_routes import install as install_runtime_routes
+    install_runtime_routes(app, read_identity)
+
     # Explicit injected dummy configuration is for isolated application fixtures.
     enabled = os.environ.get('AGCONSOLE_DEVICE_PRESENCE') == '1'
     if directory is None:
