@@ -5,7 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .runtime_environment import configured_allowlist, environment_catalog, validate_requested_names
+from .runtime_environment import (
+    configured_allowlist,
+    environment_catalog,
+    validate_allowlisted_names,
+)
 
 
 class McpDescriptorError(ValueError):
@@ -64,8 +68,9 @@ def _parse_server(name: str, raw: Any) -> McpServerDescriptor:
         headers=headers,
         access=access,
     )
-    # Reuse the environment allowlist as the only credential/reference boundary.
-    validate_requested_names(descriptor.required_environment_names())
+    # Descriptor files contain names only. A referenced name must be operator-
+    # allowlisted, but it may be unavailable so the UI can report that state.
+    validate_allowlisted_names(descriptor.required_environment_names())
     return descriptor
 
 
