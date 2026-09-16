@@ -14,7 +14,7 @@ Every PR targeting `main` MUST:
 5. Work in an **isolated worktree** — never commit directly to `main` or a shared branch.
 6. Include or update relevant tests.
 7. Contain no secrets, tokens, passwords, or credentials.
-8. Receive **human approval** before merge, release, or deployment.
+8. Receive **human approval** before pushing a PR to master. No human approval is required for actions before pushing PR to branches, testing and more.
 
 ## Workflow
 
@@ -22,4 +22,4 @@ Every PR targeting `main` MUST:
 - Create a branch and worktree from the base commit.
 - Implement, test, commit.
 - Open a PR for review.
-- Do not merge, deploy, or release without explicit human authorization.
+- Do not push to master without explicit human authorization.
