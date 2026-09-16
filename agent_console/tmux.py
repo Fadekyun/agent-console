@@ -10,6 +10,14 @@ from pathlib import Path
 from .validation import validate_session_name
 
 
+class TmuxObservationError(RuntimeError):
+    """The tmux server could not be observed reliably.
+
+    This is intentionally distinct from an authoritative empty server. Callers
+    must not translate an observation error into durable lifecycle absence.
+    """
+
+
 @dataclass(frozen=True)
 class TmuxSession:
     name: str
@@ -73,6 +81,14 @@ class Tmux:
         self.socket_path.unlink()
         return True
 
+    @staticmethod
+    def _is_authoritative_no_server(result: subprocess.CompletedProcess[str]) -> bool:
+        detail = (result.stderr or result.stdout or "").strip().lower()
+        # tmux exits non-zero when there is no server because a server with zero
+        # sessions normally exits. That state is an authoritative empty result,
+        # unlike permission/socket/protocol/command errors.
+        return "no server running" in detail
+
     def list_sessions(self) -> dict[str, TmuxSession]:
         result = self.run(
             "list-sessions",
@@ -81,21 +97,33 @@ class Tmux:
             check=False,
         )
         if result.returncode != 0:
-            return {}
+            if self._is_authoritative_no_server(result):
+                return {}
+            detail = (result.stderr or result.stdout or "unknown tmux observation error").strip()
+            raise TmuxObservationError(
+                f"tmux {self.scope} session observation unavailable: {detail}"
+            )
         sessions: dict[str, TmuxSession] = {}
         for line in result.stdout.splitlines():
             parts = line.split("\t", 5)
             if len(parts) != 6:
-                continue
+                raise TmuxObservationError(
+                    f"tmux {self.scope} returned malformed list-sessions output"
+                )
             name, created, activity, attached, windows, command = parts
-            sessions[name] = TmuxSession(
-                name=name,
-                created_epoch=int(created),
-                activity_epoch=int(activity),
-                attached_clients=int(attached),
-                windows=int(windows),
-                current_command=command,
-            )
+            try:
+                sessions[name] = TmuxSession(
+                    name=name,
+                    created_epoch=int(created),
+                    activity_epoch=int(activity),
+                    attached_clients=int(attached),
+                    windows=int(windows),
+                    current_command=command,
+                )
+            except ValueError as exc:
+                raise TmuxObservationError(
+                    f"tmux {self.scope} returned malformed numeric session metadata"
+                ) from exc
         return sessions
 
     def exists(self, name: str) -> bool:
