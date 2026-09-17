@@ -38,7 +38,7 @@ from .skills import (
     validate_profile_skills,
 )
 from .providers import TOOL_BINARIES, LaunchSpec, provider_adapter
-from .tmux import Tmux
+from .tmux import Tmux, session_missing_error
 from .validation import (
     PROFILES,
     TOOLS,
@@ -1006,11 +1006,33 @@ class SessionManager:
             "content": content,
         }
 
-    def session_context(self, name: str | None = None) -> dict[str, Any]:
-        name = name or os.getenv("AGENT_CONSOLE_SESSION_NAME")
-        if not name:
+    def resolve_session_ref(self, name: str | None) -> str:
+        """Resolve an optional name, preferring the exported session id.
+
+        A live session's tmux name can change (auto-rename), which leaves the
+        ``AGENT_CONSOLE_SESSION_NAME`` exported to that harness stale, so
+        ``--current`` would resolve to a session that no longer exists. The
+        exported ``AGENT_CONSOLE_SESSION_ID`` is stable, so prefer it and fall
+        back to the name for sessions created before the id was exported.
+        """
+        if name:
+            return validate_session_name(name)
+        session_id = (os.getenv("AGENT_CONSOLE_SESSION_ID") or "").strip()
+        if session_id:
+            with self.database.connect() as conn:
+                row = conn.execute(
+                    "SELECT tmux_name FROM sessions WHERE id=?", (session_id,)
+                ).fetchone()
+            if row is not None:
+                return validate_session_name(row[0])
+        current = (os.getenv("AGENT_CONSOLE_SESSION_NAME") or "").strip()
+        if not current:
             raise ValueError("session name is required outside a managed session")
-        session = self.inspect(validate_session_name(name))
+        return validate_session_name(current)
+
+    def session_context(self, name: str | None = None) -> dict[str, Any]:
+        name = self.resolve_session_ref(name)
+        session = self.inspect(name)
         path = self.settings.state_dir / "contexts" / f"{name}.md"
         return {
             "session": {key: session.get(key) for key in (
@@ -1037,10 +1059,7 @@ class SessionManager:
         actor: str = "system",
         surface: str = "CLI",
     ) -> dict[str, Any]:
-        name = name or os.getenv("AGENT_CONSOLE_SESSION_NAME")
-        if not name:
-            raise ValueError("session name is required outside a managed session")
-        name = validate_session_name(name)
+        name = self.resolve_session_ref(name)
         if state not in ATTENTION_STATES:
             raise ValueError(f"attention state must be one of: {', '.join(sorted(ATTENTION_STATES))}")
         note = (note or "").strip()
@@ -1788,7 +1807,20 @@ class SessionManager:
         session = self.inspect(name)
         if session.get("execution_kind") == "integration-plan":
             raise PermissionError("integration planning sessions cannot be renamed")
-        self.tmux_for_name(name).rename(name, new_name)
+        # A finished harness leaves no tmux session to rename, but the rename must
+        # still update the launcher, context file and database row. Inspect first,
+        # then tolerate the harness exiting between the inspection and the call.
+        if session.get("running"):
+            try:
+                self.tmux_for_name(name).rename(name, new_name)
+            except RuntimeError as exc:
+                # Only a positive "session is gone" report is tolerated: any other
+                # failure (socket, permissions) must stay fatal so the caller does
+                # not end up with a renamed database row and a live tmux session
+                # still under the old name.
+                if not session_missing_error(exc):
+                    raise
+                log.debug("tmux session %s already exited before rename: %s", name, exc)
         launcher_path = session["launcher_path"]
         if launcher_path:
             old_launcher = Path(launcher_path)

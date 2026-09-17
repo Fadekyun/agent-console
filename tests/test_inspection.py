@@ -367,5 +367,32 @@ invoke=ctypes.CFUNCTYPE(ctypes.c_long)(ctypes.addressof(ctypes.c_char.from_buffe
         self.assertLess(result.returncode, 0, result.stdout + result.stderr)
 
 
+class GuardedCurrentResolutionTests(unittest.TestCase):
+    """The guarded reader resolves `--current` read-only and fails like the writer."""
+
+    def _views(self, sessions):
+        from agent_console.inspection_views import InspectionViews
+        views = InspectionViews.__new__(InspectionViews)
+        views.sessions = sessions
+        return views
+
+    def test_resolver_prefers_session_id_and_requires_a_current(self):
+        views = self._views([{"id": "sess-1", "tmux_name": "renamed-session"}])
+        with patch.dict(os.environ, {"AGENT_CONSOLE_SESSION_ID": "sess-1",
+                                     "AGENT_CONSOLE_SESSION_NAME": "stale-name"}):
+            self.assertEqual(views.resolve_session_ref(None), "renamed-session")
+        # Unknown id falls back to the exported name; an explicit name always wins.
+        with patch.dict(os.environ, {"AGENT_CONSOLE_SESSION_ID": "sess-unknown",
+                                     "AGENT_CONSOLE_SESSION_NAME": "name-only"}):
+            self.assertEqual(views.resolve_session_ref(None), "name-only")
+            self.assertEqual(views.resolve_session_ref("explicit-name"), "explicit-name")
+        with patch.dict(os.environ, {}, clear=False):
+            for key in ("AGENT_CONSOLE_SESSION_ID", "AGENT_CONSOLE_SESSION_NAME"):
+                os.environ.pop(key, None)
+            with self.assertRaisesRegex(ValueError, "session name is required outside a managed session"):
+                views.resolve_session_ref(None)
+        self.assertEqual(views.sessions, [{"id": "sess-1", "tmux_name": "renamed-session"}])
+
+
 if __name__ == "__main__":
     unittest.main()

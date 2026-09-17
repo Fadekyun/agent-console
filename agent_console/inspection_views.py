@@ -201,6 +201,27 @@ class InspectionViews:
                 return session
         raise KeyError("session not found")
 
+    def resolve_session_ref(self, name):
+        """Resolve an optional name, preferring the exported stable session id.
+
+        A renamed live session leaves ``AGENT_CONSOLE_SESSION_NAME`` stale in its
+        environment; ``AGENT_CONSOLE_SESSION_ID`` still identifies it. Read-only:
+        the lookup uses the loaded snapshot and never touches state. Fails with
+        the same error as the writer path when nothing resolves.
+        """
+        if name:
+            validate_session_name(name)
+            return name
+        session_id = (os.getenv("AGENT_CONSOLE_SESSION_ID") or "").strip()
+        if session_id:
+            for session in self.sessions:
+                if session.get("id") == session_id and session.get("tmux_name"):
+                    return validate_session_name(session["tmux_name"])
+        current = (os.getenv("AGENT_CONSOLE_SESSION_NAME") or "").strip()
+        if not current:
+            raise ValueError("session name is required outside a managed session")
+        return validate_session_name(current)
+
     def tree(self):
         nodes = {item["id"]: {**item, "children": []} for item in self.sessions}
         roots = []
@@ -240,7 +261,7 @@ class InspectionViews:
         raise KeyError("session group not found")
 
     def context(self, name):
-        session = self.inspect(name or os.getenv("AGENT_CONSOLE_SESSION_NAME") or "")
+        session = self.inspect(self.resolve_session_ref(name))
         content = None
         if session["execution_kind"] == "interactive":
             content, _ = _read_file(self.settings.state_dir / "contexts" / f"{session['tmux_name']}.md", self.settings.state_dir)

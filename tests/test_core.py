@@ -394,6 +394,102 @@ class SessionIntegrationTests(unittest.TestCase):
                          "stale context-file path must not appear in renamed launcher")
         self.manager.kill("ctx-renamed")
 
+    def test_rename_of_finished_session_updates_db_and_files_without_tmux(self) -> None:
+        # Renaming a finished session must not go through tmux: an auto-namer
+        # renames sessions after the harness exits, and the tmux session is gone.
+        self.manager.create(
+            tool="shell", profile="general", name="finished-rename-test",
+            repository=str(self.workspace),
+        )
+        tmux = self.manager.tmux_for_name("finished-rename-test")
+        tmux.kill("finished-rename-test")
+        self.assertFalse(tmux.exists("finished-rename-test"))
+        old_ctx = self.manager.settings.state_dir / "contexts" / "finished-rename-test.md"
+        self.assertTrue(old_ctx.is_file())
+
+        info = self.manager.rename("finished-rename-test", "finished-renamed")
+
+        self.assertEqual(info["tmux_name"], "finished-renamed")
+        self.assertTrue((self.manager.settings.state_dir / "contexts" / "finished-renamed.md").is_file())
+        self.assertFalse(old_ctx.exists(), "old context file should be removed on rename")
+        self.assertTrue((self.manager.settings.state_dir / "launchers" / "finished-renamed.sh").is_file())
+        self.assertEqual(self.manager.inspect("finished-renamed")["running"], False)
+
+    def test_current_resolution_prefers_exported_session_id(self) -> None:
+        # A renamed live harness keeps the old AGENT_CONSOLE_SESSION_NAME in its
+        # environment; --current must still resolve through the stable session id.
+        session = self.manager.create(
+            tool="shell", profile="general", name="current-id-test",
+            repository=str(self.workspace),
+        )
+        self.manager.rename("current-id-test", "current-id-renamed")
+        with patch.dict(os.environ, {
+            "AGENT_CONSOLE_SESSION_ID": session["id"],
+            "AGENT_CONSOLE_SESSION_NAME": "current-id-test",
+        }):
+            context = self.manager.session_context(None)
+            self.assertEqual(context["session"]["tmux_name"], "current-id-renamed")
+            self.manager.set_attention(None, state="ready_for_review", note="renamed mid-run")
+        self.assertEqual(self.manager.inspect("current-id-renamed")["attention_state"], "ready_for_review")
+        self.manager.kill("current-id-renamed")
+
+    def test_rename_tolerates_a_harness_exiting_during_the_call(self) -> None:
+        # The harness can exit between the inspection and the tmux call; tmux then
+        # reports the session is gone and the rename must still complete DB-side.
+        self.manager.create(
+            tool="shell", profile="general", name="vanishing-rename-test",
+            repository=str(self.workspace),
+        )
+        tmux = self.manager.tmux_for_name("vanishing-rename-test")
+
+        def vanishing(self, name, new_name):
+            raise RuntimeError("tmux rename-session failed: can't find session: " + name)
+
+        with patch.object(Tmux, "rename", vanishing):
+            info = self.manager.rename("vanishing-rename-test", "vanishing-renamed")
+        self.assertEqual(info["tmux_name"], "vanishing-renamed")
+        self.assertTrue(
+            (self.manager.settings.state_dir / "contexts" / "vanishing-renamed.md").is_file()
+        )
+        # The faked failure left the real tmux session under its old name.
+        tmux.kill("vanishing-rename-test")
+
+    def test_rename_propagates_tmux_failures_that_are_not_a_missing_session(self) -> None:
+        # A transient tmux failure (permissions, socket) must not be swallowed: the
+        # database/launcher/context must not be renamed while tmux still has the old
+        # name. The old implementation suppressed any RuntimeError as soon as a
+        # re-observation returned no sessions, which this test reproduces.
+        self.manager.create(
+            tool="shell", profile="general", name="tmux-fail-test",
+            repository=str(self.workspace),
+        )
+        live_row = self.manager.inspect("tmux-fail-test")
+        self.assertTrue(live_row["running"])
+
+        def failing(self, name, new_name):
+            raise RuntimeError("tmux rename-session failed: permission denied")
+
+        with patch.object(Tmux, "rename", failing), \
+                patch.object(SessionManager, "inspect", lambda self, name: live_row), \
+                patch.object(SessionManager, "_live_sessions", lambda self: {}):
+            with self.assertRaisesRegex(RuntimeError, "permission denied"):
+                self.manager.rename("tmux-fail-test", "tmux-fail-renamed")
+        self.assertTrue((self.manager.settings.state_dir / "contexts" / "tmux-fail-test.md").is_file())
+        self.assertFalse((self.manager.settings.state_dir / "contexts" / "tmux-fail-renamed.md").exists())
+        self.assertEqual(self.manager.inspect("tmux-fail-test")["tmux_name"], "tmux-fail-test")
+        self.manager.kill("tmux-fail-test")
+
+    def test_missing_session_detection_is_positive_only(self) -> None:
+        from agent_console.tmux import session_missing_error
+        self.assertTrue(session_missing_error(RuntimeError(
+            "tmux rename-session failed: can't find session: gone-session")))
+        self.assertTrue(session_missing_error(RuntimeError(
+            "tmux rename-session failed: no server running on /tmp/tmux-1000/default")))
+        self.assertFalse(session_missing_error(RuntimeError(
+            "tmux rename-session failed: permission denied")))
+        self.assertFalse(session_missing_error(RuntimeError(
+            "tmux rename-session failed: unknown tmux error")))
+
     def test_rename_launcher_context_path_is_wired_for_restart(self) -> None:
         session = self.manager.create(
             tool="shell",
