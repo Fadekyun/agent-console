@@ -394,6 +394,45 @@ class SessionIntegrationTests(unittest.TestCase):
                          "stale context-file path must not appear in renamed launcher")
         self.manager.kill("ctx-renamed")
 
+    def test_rename_of_finished_session_updates_db_and_files_without_tmux(self) -> None:
+        # Renaming a finished session must not go through tmux: an auto-namer
+        # renames sessions after the harness exits, and the tmux session is gone.
+        self.manager.create(
+            tool="shell", profile="general", name="finished-rename-test",
+            repository=str(self.workspace),
+        )
+        tmux = self.manager.tmux_for_name("finished-rename-test")
+        tmux.kill("finished-rename-test")
+        self.assertFalse(tmux.exists("finished-rename-test"))
+        old_ctx = self.manager.settings.state_dir / "contexts" / "finished-rename-test.md"
+        self.assertTrue(old_ctx.is_file())
+
+        info = self.manager.rename("finished-rename-test", "finished-renamed")
+
+        self.assertEqual(info["tmux_name"], "finished-renamed")
+        self.assertTrue((self.manager.settings.state_dir / "contexts" / "finished-renamed.md").is_file())
+        self.assertFalse(old_ctx.exists(), "old context file should be removed on rename")
+        self.assertTrue((self.manager.settings.state_dir / "launchers" / "finished-renamed.sh").is_file())
+        self.assertEqual(self.manager.inspect("finished-renamed")["running"], False)
+
+    def test_current_resolution_prefers_exported_session_id(self) -> None:
+        # A renamed live harness keeps the old AGENT_CONSOLE_SESSION_NAME in its
+        # environment; --current must still resolve through the stable session id.
+        session = self.manager.create(
+            tool="shell", profile="general", name="current-id-test",
+            repository=str(self.workspace),
+        )
+        self.manager.rename("current-id-test", "current-id-renamed")
+        with patch.dict(os.environ, {
+            "AGENT_CONSOLE_SESSION_ID": session["id"],
+            "AGENT_CONSOLE_SESSION_NAME": "current-id-test",
+        }):
+            context = self.manager.session_context(None)
+            self.assertEqual(context["session"]["tmux_name"], "current-id-renamed")
+            self.manager.set_attention(None, state="ready_for_review", note="renamed mid-run")
+        self.assertEqual(self.manager.inspect("current-id-renamed")["attention_state"], "ready_for_review")
+        self.manager.kill("current-id-renamed")
+
     def test_rename_launcher_context_path_is_wired_for_restart(self) -> None:
         session = self.manager.create(
             tool="shell",

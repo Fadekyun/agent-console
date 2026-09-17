@@ -4,6 +4,8 @@ This document tracks the planned and completed development work for Agent Consol
 
 ## Integration in progress
 
+- [ ] **Rename without a live harness** (2026-09-18, [#125](https://github.com/Fadekyun/agent-console/issues/125)) — `Manager.rename()` skips the tmux call for a finished session (race-tolerant) and `--current` resolves through the exported `AGENT_CONSOLE_SESSION_ID` with a name fallback, in the writer and guarded read-only paths. Unblocks the lxc-115 auto-namer and future live-session renames. Source tests pass; independent review and deployment pending.
+
 - [ ] **Native pi/Hermes session MCP config** (2026-09-17, [#123](https://github.com/Fadekyun/agent-console/issues/123), part of [#113](https://github.com/Fadekyun/agent-console/issues/113)) — The CommandCode adapter writes pi's credential in the `$CMD_API_KEY` reference form and generates the per-session pi `mcp.json` plus the Hermes `mcp_servers` block from environment-variable names, retiring the host-local Hermes wrapper merge and the pi normalize shim. Source tests pass; independent review and deployment pending.
 
 - [x] **Native progress/final separation** (2026-09-14, #105): collect Codex commentary without premature JSON validation; validate final file/last message after complete stream, reject malformed or conflicting verdicts. Focused regressions prepared; live promotion pending.
