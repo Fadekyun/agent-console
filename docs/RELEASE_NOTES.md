@@ -3,7 +3,7 @@
 ## 0.7.3 (Unreleased)
 
 - **Date**: 2026-09-18
-- **Issue/PR**: [#125](https://github.com/Fadekyun/agent-console/issues/125) / pending
+- **Issue/PR**: [#125](https://github.com/Fadekyun/agent-console/issues/125) / [#126](https://github.com/Fadekyun/agent-console/pull/126) (this PR)
 - **Impact**: Session renames no longer require a live tmux session, and `--current` keeps working for a harness whose session was renamed while it ran. `Manager.rename()` inspects the session first and only calls tmux when the harness is still running, tolerating the harness exiting between the inspection and the call, so a finished session can be renamed through the supported path (launcher, context file and database row are updated together). `AGENT_CONSOLE_SESSION_ID` is now the preferred identity for `session context --current` and `session attention --current`, falling back to `AGENT_CONSOLE_SESSION_NAME`, in both the writer path and the guarded read-only path. This removes the out-of-band monkeypatch an auto-namer needed to rename finished sessions, and is the prerequisite for renaming running sessions.
 - **Configuration/Migration**: None. No schema change and no new environment variables: every managed launcher already exports `AGENT_CONSOLE_SESSION_ID`, and sessions created before that keep working through the name fallback.
 - **Verification**: `tests/test_core.py` adds a finished-session rename (tmux session killed, rename must still update context/launcher/row) and a `--current` resolution test (exported id wins over a stale name); both fail against the previous implementation. Full documented recipe in a scrubbed environment plus the guarded read-only inspection tests.

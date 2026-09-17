@@ -38,7 +38,7 @@ from .skills import (
     validate_profile_skills,
 )
 from .providers import TOOL_BINARIES, LaunchSpec, provider_adapter
-from .tmux import Tmux
+from .tmux import Tmux, session_missing_error
 from .validation import (
     PROFILES,
     TOOLS,
@@ -1814,9 +1814,13 @@ class SessionManager:
             try:
                 self.tmux_for_name(name).rename(name, new_name)
             except RuntimeError as exc:
-                if self._live_sessions().get(name):
+                # Only a positive "session is gone" report is tolerated: any other
+                # failure (socket, permissions) must stay fatal so the caller does
+                # not end up with a renamed database row and a live tmux session
+                # still under the old name.
+                if not session_missing_error(exc):
                     raise
-                log.debug("tmux session %s exited before rename: %s", name, exc)
+                log.debug("tmux session %s already exited before rename: %s", name, exc)
         launcher_path = session["launcher_path"]
         if launcher_path:
             old_launcher = Path(launcher_path)

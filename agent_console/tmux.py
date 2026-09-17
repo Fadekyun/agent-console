@@ -9,6 +9,22 @@ from pathlib import Path
 
 from .validation import validate_session_name
 
+# tmux reports these when the target session, or the whole server, is already
+# gone. They are the only rename failures a finished-session rename may ignore.
+MISSING_SESSION_MARKERS = ("can't find session", "no server running")
+
+
+def session_missing_error(error: BaseException) -> bool:
+    """True only when tmux positively reported that the session is gone.
+
+    A transient failure (socket, permissions, resource exhaustion) carries a
+    different message and must stay fatal: tolerating it would rename the
+    database row, launcher and context while the live tmux session keeps the old
+    name, leaving the session inconsistent.
+    """
+    text = str(error).lower()
+    return any(marker in text for marker in MISSING_SESSION_MARKERS)
+
 
 @dataclass(frozen=True)
 class TmuxSession:
