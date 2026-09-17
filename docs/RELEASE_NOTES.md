@@ -1,5 +1,14 @@
 # Release Notes
 
+## 0.7.2 (Unreleased)
+
+- **Date**: 2026-09-17
+- **Issue/PR**: [#123](https://github.com/Fadekyun/agent-console/issues/123) (part of [#113](https://github.com/Fadekyun/agent-console/issues/113)) / pending
+- **Impact**: Native pi and Hermes sessions receive their MCP client configuration from the release instead of host-edited wrappers. `CommandCodeAdapter` writes the pi credential as the explicit `$CMD_API_KEY` environment reference in `models.json` and `auth.json` (pi >= 0.74 treats a plain string as a literal), and generates the per-session pi `mcp.json` and the Hermes `config.yaml` `mcp_servers` block from a descriptor table keyed on environment-variable **names**. A server is emitted only when its token variable is present in the Console process environment; `<NAME>_URL` overrides the default endpoint. This retires the launch-time Hermes `mcp_servers` merge and the pi `auth.json`/`models.json` normalize shim. Hermes reasoning-effort gating and pi catalogue entries are unchanged.
+- **Configuration/Migration**: None. No schema change and no new required variables: the Console process must keep exporting the token variables (`N8N_MCP_TOKEN`, `DIRECTUS_MCP_TOKEN`). Wrapper-side merges and the pi normalize shim become redundant and may be removed after the release is selected; leaving them in place is harmless for the generated server names.
+- **Verification**: `python3 -m pytest tests/test_commandcode.py -q` (14 passed) covers the credential-reference form, generated server shape, timeout and URL override, omission when the credential is absent, private file modes, and that no token value reaches any written file. Full documented recipe (`test_inspection.py test_cli_inspection.py test_core.py test_web.py test_logging.py test_commandcode.py test_auth_contexts.py test_profile_schema.py test_version.py`) passed 365 tests in a scrubbed environment (the legacy tmux path test requires the real `$HOME` and passes when re-run). Native smoke on the selected release: pi and Hermes `tools/list` against the n8n and Directus endpoints.
+- **Rollback**: Re-select the previous release (`release-20260915-225402-8f7985cd82ac`). The release modifies no wrapper or host file, so no host restore is required; sessions created earlier keep their launchers and per-session configuration.
+
 ## 0.7.1 (Unreleased)
 
 - **Date**: 2026-09-15

@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +22,10 @@ class CommandCodeTests(unittest.TestCase):
         self.context_path.write_text('Profile: general\nSession: test\nPROJECT_CONTEXT_MARKER')
     def tearDown(self):
         self.tmp.cleanup()
+    def _launch(self, tool, model=None):
+        return provider_adapter(tool, self.registry).build_launch_spec(
+            context=self.context, context_path=self.context_path, model=model,
+            role='Profile: general', profile='general', cwd=self.root, read_only=False, agent_mode=None)
     def test_registration_and_no_implicit_verification(self):
         validate_tool('pi')
         self.assertEqual(self.registry.get_context('pi')['status'], 'setup-required')
@@ -49,10 +54,10 @@ class CommandCodeTests(unittest.TestCase):
                 models = provider['models']
                 self.assertEqual([m['id'] for m in models], [DEFAULT_MODEL, 'test/alternate'])
                 self.assertTrue(all(m['contextWindow'] == 128000 for m in models))
-                # Credential is an environment-variable reference, never a literal.
-                self.assertEqual(provider['apiKey'], 'CMD_API_KEY')
+                # Credential is an explicit environment-variable reference, never a literal.
+                self.assertEqual(provider['apiKey'], '$CMD_API_KEY')
                 auth = json.loads((root / 'auth.json').read_text())
-                self.assertEqual(auth['commandcode'], {'type': 'api_key', 'key': 'CMD_API_KEY'})
+                self.assertEqual(auth['commandcode'], {'type': 'api_key', 'key': '$CMD_API_KEY'})
                 config = root / 'models.json'
             else:
                 self.assertEqual(spec.argv[1:5], ['chat', '--cli', '--provider', 'custom'])
@@ -67,10 +72,48 @@ class CommandCodeTests(unittest.TestCase):
                                     'other-provider': {'type': 'oauth', 'access': 'keep-me'}}))
         ensure_pi_auth_env_reference(path)
         data = json.loads(path.read_text())
-        self.assertEqual(data['commandcode'], {'type': 'api_key', 'key': 'CMD_API_KEY'})
+        self.assertEqual(data['commandcode'], {'type': 'api_key', 'key': '$CMD_API_KEY'})
         self.assertEqual(data['other-provider'], {'type': 'oauth', 'access': 'keep-me'})
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertNotIn('literal-secret-value', path.read_text())
+
+    def test_native_sessions_receive_generated_mcp_config_without_values(self):
+        n8n_secret = 'fixture-n8n-token-do-not-publish-123'
+        directus_secret = 'fixture-directus-token-do-not-publish-456'
+        with patch.dict(os.environ, {'N8N_MCP_TOKEN': n8n_secret,
+                                     'DIRECTUS_MCP_TOKEN': directus_secret,
+                                     'N8N_MCP_URL': 'http://n8n.example.test/mcp'},
+                        clear=False):
+            os.environ.pop('DIRECTUS_MCP_URL', None)
+            pi_root = Path(self._launch('pi').environment['PI_CODING_AGENT_DIR'])
+            pi_config = json.loads((pi_root / 'mcp.json').read_text())
+            self.assertEqual(sorted(pi_config['mcpServers']), ['directus', 'n8n'])
+            self.assertEqual(pi_config['mcpServers']['n8n'], {
+                'url': 'http://n8n.example.test/mcp', 'auth': 'bearer',
+                'bearerTokenEnv': 'N8N_MCP_TOKEN', 'lifecycle': 'lazy',
+                'requestTimeoutMs': 180000,
+            })
+            self.assertEqual(pi_config['mcpServers']['directus']['url'], 'http://192.168.1.71:8055/mcp')
+            self.assertEqual((pi_root / 'mcp.json').stat().st_mode & 0o777, 0o600)
+
+            hermes_root = Path(self._launch('hermes').environment['HERMES_HOME'])
+            hermes_config = (hermes_root / 'config.yaml').read_text()
+            self.assertIn('Bearer ${N8N_MCP_TOKEN}', hermes_config)
+            self.assertIn('Bearer ${DIRECTUS_MCP_TOKEN}', hermes_config)
+            # The reasoning gate must survive the added server block.
+            self.assertIn('reasoning_effort', hermes_config)
+            for text in ((pi_root / 'mcp.json').read_text(), hermes_config):
+                self.assertNotIn(n8n_secret, text)
+                self.assertNotIn(directus_secret, text)
+
+    def test_native_sessions_omit_mcp_config_without_credentials(self):
+        with patch.dict(os.environ, {}, clear=False):
+            for name in ('N8N_MCP_TOKEN', 'DIRECTUS_MCP_TOKEN'):
+                os.environ.pop(name, None)
+            pi_root = Path(self._launch('pi').environment['PI_CODING_AGENT_DIR'])
+            self.assertFalse((pi_root / 'mcp.json').exists())
+            hermes_root = Path(self._launch('hermes').environment['HERMES_HOME'])
+            self.assertNotIn('mcp_servers', (hermes_root / 'config.yaml').read_text())
 
     def test_unavailable_model_does_not_write_anything(self):
         untouched = self.root / 'untouched'
