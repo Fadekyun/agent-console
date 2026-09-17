@@ -32,6 +32,34 @@ MAX_OUTPUT_TOKENS = 8192
 # turns it into a top-level ``reasoning_effort`` request field.
 COMMANDCODE_DEFAULT_REASONING_EFFORT = "high"
 
+# pi >= 0.74 treats a plain `api_key` string as a literal and only resolves the
+# explicit ``$NAME`` template form, so every credential reference written for a
+# native harness uses that form. The value itself stays in the launcher's
+# environment (sourced from the host-local secret file).
+PI_API_KEY_REFERENCE = "$" + COMMANDCODE_ENV_VAR
+
+# MCP servers offered to native harnesses. Only the *names* of the environment
+# variables are stored here; each generated config carries an interpolation
+# reference and the value never leaves the Console process environment. A
+# server is emitted only when its token variable is present, so a Console
+# without that credential produces no entry rather than a broken one.
+MCP_SERVERS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "n8n",
+        "url": "http://192.168.1.73/mcp-server/http",
+        "url_env": "N8N_MCP_URL",
+        "token_env": "N8N_MCP_TOKEN",
+        "request_timeout_ms": 180000,
+    },
+    {
+        "name": "directus",
+        "url": "http://192.168.1.71:8055/mcp",
+        "url_env": "DIRECTUS_MCP_URL",
+        "token_env": "DIRECTUS_MCP_TOKEN",
+        "request_timeout_ms": 120000,
+    },
+)
+
 # CommandCode's OpenAI-compatible endpoint only honours the *top-level*
 # ``reasoning_effort`` field and validates it against
 # {"low", "medium", "high", "xhigh", "max"}: "none"/"minimal" return HTTP
@@ -142,12 +170,66 @@ def write_private_json(path: Path, value: dict) -> None:
             os.unlink(tmp)
 
 
+def session_mcp_servers(environ: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    """Return the MCP servers this Console can offer a native session.
+
+    A server qualifies only when its token variable is present in the Console
+    process environment. The optional URL variable lets a deployment point at a
+    different endpoint; only the resolved URL and variable names are returned.
+    Values are never read into the result.
+    """
+    env = os.environ if environ is None else environ
+    servers: list[dict[str, Any]] = []
+    for server in MCP_SERVERS:
+        if not env.get(server["token_env"]):
+            continue
+        servers.append({**server, "url": env.get(server["url_env"]) or server["url"]})
+    return servers
+
+
+def pi_mcp_config(servers: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build pi's per-session `mcp.json` (the highest-precedence pi config).
+
+    A server whose credential is present gets a `bearerTokenEnv` entry. A server
+    in the descriptor table whose credential is missing is written as an explicit
+    `disabled` entry instead: because this file outranks every other pi config
+    source, an inherited host-global entry for the same name cannot survive and
+    fail at connect time. The caller rewrites this file on every launch, so a
+    credential removed between launches cannot leave a stale active entry.
+    """
+    entries: dict[str, Any] = {
+        server["name"]: {
+            "url": server["url"],
+            "auth": "bearer",
+            "bearerTokenEnv": server["token_env"],
+            "lifecycle": "lazy",
+            "requestTimeoutMs": _positive_int(server.get("request_timeout_ms"), 120000),
+        }
+        for server in servers
+    }
+    for server in MCP_SERVERS:
+        entries.setdefault(server["name"], {"disabled": True})
+    return {"mcpServers": entries}
+
+
+def hermes_mcp_servers(servers: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the Hermes `mcp_servers` block, using ``${VAR}`` references."""
+    return {
+        server["name"]: {
+            "url": server["url"],
+            "headers": {"Authorization": "Bearer ${" + server["token_env"] + "}"},
+        }
+        for server in servers
+    }
+
+
 def ensure_pi_auth_env_reference(path: Path) -> None:
     """Keep pi's native `auth.json` pointed at the env var, never a literal key.
 
-    Pi resolves an `api_key` entry through `resolveConfigValue`, which returns
-    `process.env[key]` when the stored string names an environment variable. A
-    previously stored literal is replaced while unrelated providers are kept.
+    pi >= 0.74 resolves an `api_key` entry through `resolveConfigValue`, which
+    expands the explicit ``$NAME`` template form from the process environment
+    and otherwise treats the string as a literal. A previously stored literal is
+    replaced while unrelated providers are kept.
     """
     data: dict[str, Any] = {}
     if path.is_file():
@@ -157,7 +239,7 @@ def ensure_pi_auth_env_reference(path: Path) -> None:
             existing = None
         if isinstance(existing, dict):
             data = existing
-    data["commandcode"] = {"type": "api_key", "key": COMMANDCODE_ENV_VAR}
+    data["commandcode"] = {"type": "api_key", "key": PI_API_KEY_REFERENCE}
     write_private_json(path, data)
 
 

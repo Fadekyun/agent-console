@@ -13,13 +13,19 @@ Hermes already accepted any catalogue model id, so this only changed Pi.
 
 ## Installation and credential provisioning
 
-Install upstream `@mariozechner/pi-coding-agent@0.73.1` under `~/.local` and
-Node 22.22.2 under `~/.local/share/agent-console/pi-runtime` (npm package `node`).
-Install `scripts/pi-wrapper` as `~/.local/bin/pi-agent-console` and set
-`AGCONSOLE_PI_BIN` to that absolute path in Console's runtime.env.
-Pi 0.73.1 uses the **bare environment-variable name** `CMD_API_KEY` in models.json;
-newer upstream documentation uses a different interpolation syntax. Keep this
-version pinned until the adapter and native smoke are reverified together.
+Install pi under `~/.local` with the pinned `pi-runtime` Node (22.22.2). The
+deployed harness is `@earendil-works/pi-coding-agent` 0.85.1: the retired
+`@mariozechner` scope is no longer published, and `scripts/pi-wrapper` in this
+repository still names it, so install the harness by hand (or repair that wrapper)
+until it is corrected. Install `scripts/pi-wrapper` as
+`~/.local/bin/pi-agent-console` and set `AGCONSOLE_PI_BIN` to that absolute path
+in Console's runtime.env.
+Pi resolves an `api_key` entry through its config-value expansion: from pi 0.74
+onwards a plain string is a literal and only the explicit **`$CMD_API_KEY`**
+form reads the environment. The adapter always writes that form in both
+`models.json` and `auth.json`, so no wrapper-side rewrite is required and a
+previously stored literal is never kept on disk. Keep the harness version pinned
+until the adapter and native smoke are reverified together.
 
 Install `scripts/hermes-wrapper` as `~/.local/bin/hermes` and set
 `AGCONSOLE_HERMES_BIN` to it. It invokes the existing Hermes checkout with its
@@ -40,12 +46,30 @@ timestamp, never the key. Rerun to refresh the catalogue or rotate the key.
 ## Launch behavior and limitations
 
 Session launchers source the selected secret file at runtime. Pi gets a private
-models.json with an environment reference and `--append-system-prompt` pointing
-to Console's context file; its `auth.json` is (re)written to the same
-`CMD_API_KEY` reference so a previously stored literal is never kept on disk.
-Hermes gets a private HERMES_HOME/config.yaml with `${CMD_API_KEY}`; its wrapper
-reads the Console context into HERMES_EPHEMERAL_SYSTEM_PROMPT at launch,
+models.json with the `$CMD_API_KEY` environment reference and
+`--append-system-prompt` pointing to Console's context file; its `auth.json` is
+(re)written to the same reference so a previously stored literal is never kept
+on disk. Hermes gets a private HERMES_HOME/config.yaml with `${CMD_API_KEY}`; its
+wrapper reads the Console context into HERMES_EPHEMERAL_SYSTEM_PROMPT at launch,
 including after a rename/restart.
+
+Both harnesses also receive their MCP client configuration from the release
+rather than from host-edited wrappers. For every server in the adapter's
+descriptor table, Pi's per-session `mcp.json` (the highest-precedence Pi config)
+gets a `bearerTokenEnv` entry when the token variable is present in the Console
+process environment, and Hermes' `config.yaml` gets an `mcp_servers` entry with a
+`${VAR}` authorization header. Only variable **names** are stored, and
+`<NAME>_URL` overrides the default endpoint.
+
+Absence must mean absence, not inheritance. Pi's per-session file outranks the
+user-global `~/.config/mcp/mcp.json` and discovered host configs, so a descriptor
+server whose token is missing is written there as an explicit `disabled` entry
+(`{"disabled": true}`); a host-global entry for the same name is therefore
+suppressed instead of being inherited and failing at connect time. The file is
+rewritten on every launch, so removing a credential cannot leave a stale active
+entry. Unrelated servers (for example `openrouter` from the shared config) are
+untouched. Hermes has no shared MCP source, so an absent token simply omits the
+`mcp_servers` block.
 The user still sends the stored session brief explicitly in the composer.
 
 Both desktop and mobile expose the selected context's model catalogue. The CLI

@@ -264,9 +264,10 @@ class CommandCodeAdapter(ProviderAdapter):
 
     def build_launch_spec(self, **kwargs: Any) -> LaunchSpec:
         from .commandcode import (COMMANDCODE_DEFAULT_REASONING_EFFORT, COMMANDCODE_ENV_VAR,
-                                 ensure_pi_auth_env_reference, install_hermes_reasoning_gate,
-                                 pi_model_entries, selected_model, supports_reasoning,
-                                 write_private_json)
+                                 PI_API_KEY_REFERENCE, ensure_pi_auth_env_reference,
+                                 hermes_mcp_servers, install_hermes_reasoning_gate,
+                                 pi_mcp_config, pi_model_entries, selected_model,
+                                 session_mcp_servers, supports_reasoning, write_private_json)
 
         context = kwargs["context"]
         model = selected_model(context, kwargs.get("model"))
@@ -274,14 +275,20 @@ class CommandCodeAdapter(ProviderAdapter):
         root = context_path.parent / (context_path.stem + "-" + self.tool)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         environment = {"AGENT_CONSOLE_CONTEXT_FILE": str(context_path)}
+        # MCP entries are generated per session from variable names only, so a
+        # session never depends on a host-global hand-edited harness config.
+        mcp_servers = session_mcp_servers()
         if self.tool == "pi":
             write_private_json(root / "models.json", {"providers": {"commandcode": {
                 "baseUrl": context["base_url"], "api": "openai-completions",
-                "apiKey": COMMANDCODE_ENV_VAR, "authHeader": True,
+                "apiKey": PI_API_KEY_REFERENCE, "authHeader": True,
                 "headers": {"User-Agent": "agent-console-commandcode/1.0"},
                 "models": pi_model_entries(context, selected=model),
             }}})
             ensure_pi_auth_env_reference(root / "auth.json")
+            per_session_mcp = pi_mcp_config(mcp_servers)
+            if per_session_mcp["mcpServers"]:
+                write_private_json(root / "mcp.json", per_session_mcp)
             environment["PI_CODING_AGENT_DIR"] = str(root)
             argv = [str(self.binary), "--provider", "commandcode", "--model", model,
                     "--append-system-prompt", str(context_path)]
@@ -298,6 +305,8 @@ class CommandCodeAdapter(ProviderAdapter):
                 hermes_config["agent"] = {
                     "reasoning_effort": COMMANDCODE_DEFAULT_REASONING_EFFORT,
                 }
+            if mcp_servers:
+                hermes_config["mcp_servers"] = hermes_mcp_servers(mcp_servers)
             write_private_json(root / "config.yaml", hermes_config)
             # Gate the session-level effort by the current request's model so a
             # /model switch to an unsupported model cannot inherit it (HTTP 400).
