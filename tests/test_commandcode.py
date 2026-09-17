@@ -106,14 +106,30 @@ class CommandCodeTests(unittest.TestCase):
                 self.assertNotIn(n8n_secret, text)
                 self.assertNotIn(directus_secret, text)
 
-    def test_native_sessions_omit_mcp_config_without_credentials(self):
+    def test_native_sessions_suppress_mcp_servers_without_credentials(self):
         with patch.dict(os.environ, {}, clear=False):
             for name in ('N8N_MCP_TOKEN', 'DIRECTUS_MCP_TOKEN'):
                 os.environ.pop(name, None)
             pi_root = Path(self._launch('pi').environment['PI_CODING_AGENT_DIR'])
-            self.assertFalse((pi_root / 'mcp.json').exists())
+            pi_config = json.loads((pi_root / 'mcp.json').read_text())
+            # Explicit suppression: the per-session file outranks any host-global
+            # entry that still names these servers.
+            self.assertEqual(pi_config['mcpServers'], {'n8n': {'disabled': True},
+                                                       'directus': {'disabled': True}})
             hermes_root = Path(self._launch('hermes').environment['HERMES_HOME'])
             self.assertNotIn('mcp_servers', (hermes_root / 'config.yaml').read_text())
+
+    def test_relaunch_without_credential_replaces_stale_pi_mcp_config(self):
+        stale_secret = 'fixture-stale-n8n-token-do-not-publish-789'
+        with patch.dict(os.environ, {'N8N_MCP_TOKEN': stale_secret}, clear=False):
+            os.environ.pop('DIRECTUS_MCP_TOKEN', None)
+            pi_root = Path(self._launch('pi').environment['PI_CODING_AGENT_DIR'])
+            self.assertIn('bearerTokenEnv', (pi_root / 'mcp.json').read_text())
+            os.environ.pop('N8N_MCP_TOKEN', None)
+            self._launch('pi')
+            config = json.loads((pi_root / 'mcp.json').read_text())
+            self.assertEqual(config['mcpServers']['n8n'], {'disabled': True})
+            self.assertNotIn(stale_secret, (pi_root / 'mcp.json').read_text())
 
     def test_unavailable_model_does_not_write_anything(self):
         untouched = self.root / 'untouched'

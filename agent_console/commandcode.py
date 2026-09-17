@@ -188,8 +188,16 @@ def session_mcp_servers(environ: dict[str, str] | None = None) -> list[dict[str,
 
 
 def pi_mcp_config(servers: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build pi's per-session `mcp.json` (the highest-precedence pi config)."""
-    return {"mcpServers": {
+    """Build pi's per-session `mcp.json` (the highest-precedence pi config).
+
+    A server whose credential is present gets a `bearerTokenEnv` entry. A server
+    in the descriptor table whose credential is missing is written as an explicit
+    `disabled` entry instead: because this file outranks every other pi config
+    source, an inherited host-global entry for the same name cannot survive and
+    fail at connect time. The caller rewrites this file on every launch, so a
+    credential removed between launches cannot leave a stale active entry.
+    """
+    entries: dict[str, Any] = {
         server["name"]: {
             "url": server["url"],
             "auth": "bearer",
@@ -198,7 +206,10 @@ def pi_mcp_config(servers: list[dict[str, Any]]) -> dict[str, Any]:
             "requestTimeoutMs": _positive_int(server.get("request_timeout_ms"), 120000),
         }
         for server in servers
-    }}
+    }
+    for server in MCP_SERVERS:
+        entries.setdefault(server["name"], {"disabled": True})
+    return {"mcpServers": entries}
 
 
 def hermes_mcp_servers(servers: list[dict[str, Any]]) -> dict[str, Any]:

@@ -286,8 +286,9 @@ class CommandCodeAdapter(ProviderAdapter):
                 "models": pi_model_entries(context, selected=model),
             }}})
             ensure_pi_auth_env_reference(root / "auth.json")
-            if mcp_servers:
-                write_private_json(root / "mcp.json", pi_mcp_config(mcp_servers))
+            per_session_mcp = pi_mcp_config(mcp_servers)
+            if per_session_mcp["mcpServers"]:
+                write_private_json(root / "mcp.json", per_session_mcp)
             environment["PI_CODING_AGENT_DIR"] = str(root)
             argv = [str(self.binary), "--provider", "commandcode", "--model", model,
                     "--append-system-prompt", str(context_path)]
