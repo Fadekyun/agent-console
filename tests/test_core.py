@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -502,6 +503,8 @@ class SessionIntegrationTests(unittest.TestCase):
         pi_dir = state / "contexts" / "privdir-test-pi"
         (pi_dir / "sessions").mkdir(parents=True)
         (pi_dir / "sessions" / "one.jsonl").write_text("{}\n", encoding="utf-8")
+        hermes_dir = state / "contexts" / "privdir-test-hermes"
+        hermes_dir.mkdir(parents=True)
         overlay = state / "tool-overlays" / "privdir-test"
         overlay.mkdir(parents=True, exist_ok=True)
         launcher = state / "launchers" / "privdir-test.sh"
@@ -519,12 +522,83 @@ class SessionIntegrationTests(unittest.TestCase):
         new_overlay = state / "tool-overlays" / "privdir-renamed"
         self.assertTrue((new_pi / "sessions" / "one.jsonl").is_file())
         self.assertFalse(pi_dir.exists(), "old private dir must be gone")
+        self.assertTrue((state / "contexts" / "privdir-renamed-hermes").is_dir())
+        self.assertFalse(hermes_dir.exists(), "old hermes dir must be gone")
         self.assertTrue(new_overlay.is_dir())
         self.assertFalse(overlay.exists(), "old overlay must be gone")
         text = (state / "launchers" / "privdir-renamed.sh").read_text(encoding="utf-8")
         self.assertIn(str(new_pi), text)
         self.assertIn(str(new_overlay), text)
         self.assertNotIn(str(pi_dir), text)
+
+    def test_rename_refuses_a_private_dir_collision_and_changes_nothing(self) -> None:
+        # A previous session with the target name left a private dir behind: the
+        # rename must refuse before touching the tmux session, files or row.
+        self.manager.create(
+            tool="shell", profile="general", name="collide-test",
+            repository=str(self.workspace),
+        )
+        state = self.manager.settings.state_dir
+        (state / "contexts" / "collide-test-pi").mkdir(parents=True)
+        (state / "contexts" / "collide-taken-pi").mkdir(parents=True)
+        self.manager.tmux_for_name("collide-test").kill("collide-test")
+        launcher = state / "launchers" / "collide-test.sh"
+        before = launcher.read_text(encoding="utf-8")
+
+        with self.assertRaisesRegex(FileExistsError, "private directory already exists"):
+            self.manager.rename("collide-test", "collide-taken")
+
+        self.assertEqual(self.manager.inspect("collide-test")["tmux_name"], "collide-test")
+        self.assertEqual(launcher.read_text(encoding="utf-8"), before)
+        self.assertTrue((state / "contexts" / "collide-test.md").is_file())
+        self.assertFalse((state / "launchers" / "collide-taken.sh").exists())
+        self.assertFalse((state / "contexts" / "collide-taken.md").exists())
+        self.assertTrue((state / "contexts" / "collide-taken-pi").is_dir())
+
+    def test_rename_refuses_an_existing_launcher_or_context(self) -> None:
+        self.manager.create(
+            tool="shell", profile="general", name="occupied-name",
+            repository=str(self.workspace),
+        )
+        self.manager.create(
+            tool="shell", profile="general", name="moving-name",
+            repository=str(self.workspace),
+        )
+        self.manager.tmux_for_name("moving-name").kill("moving-name")
+        # Remove the occupied session's overlay so the launcher collision is the
+        # only remaining conflict.
+        shutil.rmtree(self.manager.settings.state_dir / "tool-overlays" / "occupied-name")
+
+        with self.assertRaisesRegex(FileExistsError, "launcher already exists"):
+            self.manager.rename("moving-name", "occupied-name")
+        self.assertEqual(self.manager.inspect("moving-name")["tmux_name"], "moving-name")
+        self.assertTrue((self.manager.settings.state_dir / "launchers" / "occupied-name.sh").is_file())
+        self.manager.kill("occupied-name")
+
+    def test_rename_round_trip_moves_private_dirs_again(self) -> None:
+        self.manager.create(
+            tool="shell", profile="general", name="roundtrip-one",
+            repository=str(self.workspace),
+        )
+        state = self.manager.settings.state_dir
+        (state / "contexts" / "roundtrip-one-pi").mkdir(parents=True)
+        launcher = state / "launchers" / "roundtrip-one.sh"
+        launcher.write_text(
+            launcher.read_text(encoding="utf-8")
+            + f"export PI_CODING_AGENT_DIR={shlex.quote(str(state / 'contexts' / 'roundtrip-one-pi'))}\n",
+            encoding="utf-8",
+        )
+        self.manager.tmux_for_name("roundtrip-one").kill("roundtrip-one")
+
+        self.manager.rename("roundtrip-one", "roundtrip-two")
+        self.manager.rename("roundtrip-two", "roundtrip-three")
+
+        self.assertTrue((state / "contexts" / "roundtrip-three-pi").is_dir())
+        self.assertFalse((state / "contexts" / "roundtrip-two-pi").exists())
+        self.assertFalse((state / "contexts" / "roundtrip-one-pi").exists())
+        self.assertTrue((state / "launchers" / "roundtrip-three.sh").is_file())
+        self.assertIn(str(state / "contexts" / "roundtrip-three-pi"),
+                      (state / "launchers" / "roundtrip-three.sh").read_text(encoding="utf-8"))
 
     def test_rename_keeps_harness_private_dirs_while_running(self) -> None:
         # A live harness keeps writing to its private dir, so a rename must not move
