@@ -170,6 +170,59 @@ def write_private_json(path: Path, value: dict) -> None:
             os.unlink(tmp)
 
 
+def merge_hermes_skill_dirs(config_path: Path, skills_root: Path) -> None:
+    """Refresh the managed ``skills.external_dirs`` entry in a Hermes config.
+
+    Hermes reads ``skills.external_dirs`` from ``HERMES_HOME/config.yaml``. The
+    generated file is JSON (valid YAML); unrelated keys and any operator-added
+    external directories are preserved. The managed entry is replaced rather
+    than appended so repeated restarts cannot accumulate duplicates, and it is
+    removed again when the managed root has no shared skills. An unreadable or
+    non-object file is reported instead of overwritten, so a hand-edited config
+    is never destroyed.
+    """
+    data: dict[str, Any] = {}
+    if config_path.is_file():
+        try:
+            loaded = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"refusing to rewrite Hermes config {config_path}: {exc}"
+            ) from exc
+        if not isinstance(loaded, dict):
+            raise ValueError(f"refusing to rewrite non-object Hermes config {config_path}")
+        data = loaded
+    skills = data.get("skills")
+    if not isinstance(skills, dict):
+        skills = {}
+    raw_dirs = skills.get("external_dirs")
+    if isinstance(raw_dirs, str):
+        raw_dirs = [raw_dirs]
+    existing = (
+        [item for item in raw_dirs if isinstance(item, str)]
+        if isinstance(raw_dirs, list)
+        else []
+    )
+    managed = str(skills_root)
+    kept = [item for item in existing if item != managed]
+    try:
+        has_skills = skills_root.is_dir() and any(skills_root.iterdir())
+    except OSError:
+        has_skills = False
+    if has_skills:
+        kept.append(managed)
+    if kept:
+        skills["external_dirs"] = kept
+        data["skills"] = skills
+    else:
+        skills.pop("external_dirs", None)
+        if skills:
+            data["skills"] = skills
+        else:
+            data.pop("skills", None)
+    write_private_json(config_path, data)
+
+
 def session_mcp_servers(environ: dict[str, str] | None = None) -> list[dict[str, Any]]:
     """Return the MCP servers this Console can offer a native session.
 

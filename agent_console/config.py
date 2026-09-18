@@ -11,6 +11,18 @@ def _clamp_positive(value: int, default: int) -> int:
     return value if value > 0 else default
 
 
+def _split_env_list(raw: str) -> tuple[str, ...]:
+    """Split a comma-separated env value, dropping blanks and duplicates."""
+    seen: set[str] = set()
+    values: list[str] = []
+    for item in raw.split(","):
+        name = item.strip()
+        if name and name not in seen:
+            seen.add(name)
+            values.append(name)
+    return tuple(values)
+
+
 def safe_parse_port(value: str | None, default: int) -> int:
     try:
         v = int(value)
@@ -46,6 +58,10 @@ class Settings:
     log_dir: Path | None = None
     log_retention_days: int = 395
     log_backup_count: int = 400
+    # Standard skills shared with every capable harness, independent of the
+    # persisted per-profile assignments. Empty by default for programmatic
+    # Settings; the service environment opts in explicitly.
+    shared_skills: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -131,6 +147,9 @@ class Settings:
             ),
             log_backup_count=_clamp_positive(
                 _safe_parse_int(os.getenv("AGENT_CONSOLE_LOG_BACKUP_COUNT"), 400), 400
+            ),
+            shared_skills=_split_env_list(
+                os.getenv("AGCONSOLE_SHARED_SKILLS", "")
             ),
         )
 
