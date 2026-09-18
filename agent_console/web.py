@@ -269,6 +269,9 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     from .presence_routes import install as install_presence
     install_presence(app, presence_identity)
 
+    from .jev_ghost import install as install_jev_ghost
+    install_jev_ghost(app, require_identity)
+
     @app.get("/healthz", response_class=PlainTextResponse)
     async def healthz() -> str:
         return "ok\n"
