@@ -1,5 +1,14 @@
 # Release Notes
 
+## 0.9.0 (Unreleased)
+
+- **Date**: 2026-09-19
+- **Issue/PR**: [#138](https://github.com/Fadekyun/agent-console/issues/138) / this PR (part of the [#133](https://github.com/Fadekyun/agent-console/issues/133) decision-layer epic, related [#135](https://github.com/Fadekyun/agent-console/issues/135))
+- **Impact**: Adds a read-only **Jev Ghost** view to the session dashboard so continuous probes of the shared Jev (TypeSafe) credential and typed-answer path can be reviewed without shell access. `agent_console/jev_ghost.py` reads the probe's sanitized artifacts (`runs.jsonl`, `latest.json`, `summary.json`) from `<state_dir>/jev-ghost` (override with `AGENT_CONSOLE_JEV_GHOST_DIR`), tails the history without loading the whole file, drops unknown fields, and degrades to an empty payload when artifacts are missing or malformed. `GET /api/jev-ghost?limit=N` sits behind the existing identity dependency and returns availability, the rolling summary, the latest run, the recent runs, the configured `AGCONSOLE_SHARED_SKILLS` allowlist, and per-run typed answers and skill-path status. The SPA adds a `Jev Ghost` navigation entry, a summary strip (runs, pass ratio, streak, last status, scenario, model), a shared-skill status strip, and a run table (when, scenario, status, checks, HTTP, typed answers, duration). The route is read-only; no mutation endpoint, no API call from the Console process, and no credential value is read, logged, or returned.
+- **Configuration/Migration**: No database migration. The view is inert when no probe history exists. The probe itself is an operator-run systemd user timer that reads `TYPESAFE_API_KEY` from a reference-only `EnvironmentFile=`, so the Console process needs no new secret. `AGENT_CONSOLE_JEV_GHOST_DIR` is optional and defaults to `<state_dir>/jev-ghost`.
+- **Verification**: `python3 -m pytest tests/test_jev_ghost.py -q` (reader default/limit/junk/unknown-field handling, missing-directory degradation, summary and shared-skills parsing, and the route contract for both populated and empty history). No live API calls in tests.
+- **Rollback**: Re-select the previous release. The probe artifacts are plain files and are unaffected; no host file is modified by the release.
+
 ## 0.8.0 (Unreleased)
 
 - **Date**: 2026-09-18

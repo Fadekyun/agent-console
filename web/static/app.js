@@ -4,7 +4,7 @@ import { skillActionMessage, skillToolDiagnostic } from '/static/skill-diagnosti
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = { identity: null, sessions: [], plans: [], tree: { roots: [], delegations: [] }, view: 'sessions', selectedSession: null };
-const viewTitles = { sessions: 'Sessions', projects: 'Projects', profiles: 'Profiles', skills: 'Skills', orchestration: 'Orchestration', new: 'New session' };
+const viewTitles = { sessions: 'Sessions', projects: 'Projects', profiles: 'Profiles', skills: 'Skills', jevghost: 'Jev Ghost', orchestration: 'Orchestration', new: 'New session' };
 const activeEl = $('#active-sessions');
 const historyEl = $('#session-history');
 const historyCountEl = $('#history-count');
@@ -266,6 +266,7 @@ function selectView(view, updateHash = true) {
   $('#view-title').textContent = viewTitles[state.view];
   if (state.view === 'profiles') renderProfiles();
   if (state.view === 'skills') renderSkills();
+  if (state.view === 'jevghost') renderJevGhost();
   if (state.view === 'projects') renderProjects();
   if (updateHash && location.hash !== `#${state.view}`) history.replaceState(null, '', `#${state.view}`);
 }
@@ -766,6 +767,75 @@ async function runSkillsDoctor() {
 
 $('#skills-sync').onclick = runSkillsSync;
 $('#skills-doctor').onclick = runSkillsDoctor;
+
+function ghostPill(label, value) {
+  return `<span class="status-pill"><span class="summary-label">${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></span>`;
+}
+
+function ghostTyped(typed) {
+  if (!typed || typeof typed !== 'object') return '—';
+  const parts = Object.entries(typed).map(([name, answer]) => {
+    if (!answer || typeof answer !== 'object') return `${name}=?`;
+    if (answer.type === 'noul') return `${name}=noul ${Number(answer.noul).toFixed(2)}`;
+    return `${name}=${answer.choice}${answer.confidence == null ? '' : ` (${Number(answer.confidence).toFixed(2)})`}`;
+  });
+  return parts.join(' · ') || '—';
+}
+
+function ghostWhen(at) {
+  if (!at) return '—';
+  const parsed = new Date(at);
+  return Number.isNaN(parsed.getTime()) ? escapeHtml(at) : parsed.toLocaleString();
+}
+
+async function renderJevGhost() {
+  const summaryEl = $('#jev-ghost-summary');
+  const skillEl = $('#jev-ghost-skill');
+  const runsEl = $('#jev-ghost-runs');
+  summaryEl.textContent = 'Loading probes…';
+  try {
+    const data = await api('/api/jev-ghost?limit=50');
+    if (!data.available) {
+      summaryEl.innerHTML = ghostPill('No probe history yet', '');
+      skillEl.innerHTML = '';
+      runsEl.innerHTML = '';
+      return;
+    }
+    const s = data.summary || {};
+    const last = data.latest || {};
+    summaryEl.innerHTML = [
+      ghostPill('Runs', s.total_runs ?? 0),
+      ghostPill('Pass', s.pass_ratio == null ? '—' : `${Math.round(s.pass_ratio * 100)}%`),
+      ghostPill('Streak', s.current_pass_streak ?? 0),
+      ghostPill('Last', last.status || 'n/a'),
+      ghostPill('Scenario', last.scenario || '—'),
+      ghostPill('Model', last.model || '—'),
+    ].join('');
+    const paths = (last.skill_paths && typeof last.skill_paths === 'object') ? last.skill_paths : {};
+    const shared = Array.isArray(data.shared_skills) && data.shared_skills.length
+      ? data.shared_skills.join(', ') : 'none configured';
+    skillEl.innerHTML = [
+      ghostPill('Shared skill allowlist', shared),
+      ghostPill('Canonical root', paths.canonical ? 'yes' : 'no'),
+      ghostPill('Isolated roots', paths.isolated_roots_with_skill ?? '—'),
+    ].join('');
+    runsEl.innerHTML = (data.runs || []).map((run) => `<tr>
+      <td>${ghostWhen(run.at)}</td>
+      <td>${escapeHtml(run.scenario || '—')}</td>
+      <td>${escapeHtml(run.status || '—')}${run.error ? ` <span class="muted">${escapeHtml(run.error)}</span>` : ''}</td>
+      <td>${run.checks_passed ?? '—'}/${run.checks_total ?? '—'}</td>
+      <td>${run.http_status ?? '—'}</td>
+      <td class="muted">${escapeHtml(ghostTyped(run.typed))}</td>
+      <td>${run.duration_ms == null ? '—' : `${run.duration_ms} ms`}</td>
+    </tr>`).join('') || '<tr><td colspan="7" class="muted">No runs recorded.</td></tr>';
+  } catch (e) {
+    summaryEl.textContent = `Probe history unavailable: ${e.message || String(e)}`;
+    skillEl.innerHTML = '';
+    runsEl.innerHTML = '';
+  }
+}
+
+$('#jev-ghost-refresh').onclick = renderJevGhost;
 
 async function renderProjects() {
   const projects = await api('/api/projects');
