@@ -600,6 +600,80 @@ class SessionIntegrationTests(unittest.TestCase):
         self.assertIn(str(state / "contexts" / "roundtrip-three-pi"),
                       (state / "launchers" / "roundtrip-three.sh").read_text(encoding="utf-8"))
 
+    def test_rename_rolls_back_rewritten_files_when_a_move_fails(self) -> None:
+        # A failure after the launcher/context were rewritten must restore their
+        # original bytes, not just move them back under the old name.
+        self.manager.create(
+            tool="shell", profile="general", name="rollback-test",
+            repository=str(self.workspace),
+        )
+        state = self.manager.settings.state_dir
+        (state / "contexts" / "rollback-test-pi").mkdir(parents=True)
+        (state / "contexts" / "rollback-test-hermes").mkdir(parents=True)
+        launcher = state / "launchers" / "rollback-test.sh"
+        launcher.write_text(
+            launcher.read_text(encoding="utf-8")
+            + f"export PI_CODING_AGENT_DIR={shlex.quote(str(state / 'contexts' / 'rollback-test-pi'))}\n",
+            encoding="utf-8",
+        )
+        context = state / "contexts" / "rollback-test.md"
+        launcher_before, context_before = launcher.read_bytes(), context.read_bytes()
+        self.manager.tmux_for_name("rollback-test").kill("rollback-test")
+
+        import agent_console.manager as manager_module
+        real_move = manager_module.shutil.move
+        calls = {"n": 0}
+
+        def failing_move(src, dst, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:  # first private dir moves, second fails (rollback still works)
+                raise OSError("injected move failure")
+            return real_move(src, dst, *args, **kwargs)
+
+        with patch.object(manager_module.shutil, "move", failing_move):
+            with self.assertRaisesRegex(OSError, "injected move failure"):
+                self.manager.rename("rollback-test", "rollback-renamed")
+
+        self.assertEqual(self.manager.inspect("rollback-test")["tmux_name"], "rollback-test")
+        self.assertEqual(launcher.read_bytes(), launcher_before)
+        self.assertEqual(context.read_bytes(), context_before)
+        self.assertFalse((state / "launchers" / "rollback-renamed.sh").exists())
+        self.assertTrue((state / "contexts" / "rollback-test-pi").is_dir())
+        self.assertTrue((state / "contexts" / "rollback-test-hermes").is_dir())
+        self.assertFalse((state / "contexts" / "rollback-renamed-pi").exists())
+
+    def test_rename_rolls_back_when_the_database_rejects_the_name(self) -> None:
+        # A legacy row with the target name but no launcher/context files passes the
+        # preflight and fails on the unique constraint; everything must be restored.
+        self.manager.create(
+            tool="shell", profile="general", name="db-collide-holder",
+            repository=str(self.workspace),
+        )
+        self.manager.create(
+            tool="shell", profile="general", name="db-collide-mover",
+            repository=str(self.workspace),
+        )
+        state = self.manager.settings.state_dir
+        # Strip the holder's files and overlay so only the database blocks the
+        # target name (a legacy row without artifacts).
+        (state / "launchers" / "db-collide-holder.sh").unlink()
+        (state / "contexts" / "db-collide-holder.md").unlink()
+        shutil.rmtree(state / "tool-overlays" / "db-collide-holder")
+        pi_dir = state / "contexts" / "db-collide-mover-pi"
+        pi_dir.mkdir(parents=True)
+        launcher = state / "launchers" / "db-collide-mover.sh"
+        launcher_before = launcher.read_bytes()
+        self.manager.tmux_for_name("db-collide-mover").kill("db-collide-mover")
+
+        with self.assertRaises(Exception):
+            self.manager.rename("db-collide-mover", "db-collide-holder")
+
+        self.assertEqual(self.manager.inspect("db-collide-mover")["tmux_name"], "db-collide-mover")
+        self.assertEqual(launcher.read_bytes(), launcher_before)
+        self.assertTrue(pi_dir.is_dir())
+        self.assertFalse((state / "contexts" / "db-collide-holder-pi").exists())
+        self.manager.kill("db-collide-holder")
+
     def test_rename_keeps_harness_private_dirs_while_running(self) -> None:
         # A live harness keeps writing to its private dir, so a rename must not move
         # it out from under the process.

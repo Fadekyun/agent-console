@@ -1910,6 +1910,7 @@ class SessionManager:
         # then tolerate the harness exiting between the inspection and the call.
         tmux_renamed = False
         created: list[tuple[Path, Path]] = []
+        originals: list[tuple[Path, bytes, int]] = []
         try:
             if session.get("running"):
                 try:
@@ -1925,8 +1926,9 @@ class SessionManager:
                     log.debug("tmux session %s already exited before rename: %s", name, exc)
             if launcher_path:
                 old_launcher = Path(launcher_path)
-                launcher_text = old_launcher.read_text(encoding="utf-8")
-                launcher_text = launcher_text.replace(
+                original = old_launcher.read_bytes()
+                originals.append((old_launcher, original, old_launcher.stat().st_mode & 0o777))
+                launcher_text = original.decode("utf-8").replace(
                     f"export AGENT_CONSOLE_SESSION_NAME={shlex.quote(name)}\n",
                     f"export AGENT_CONSOLE_SESSION_NAME={shlex.quote(new_name)}\n",
                     1,
@@ -1940,7 +1942,9 @@ class SessionManager:
                 new_launcher_path.chmod(0o700)
                 launcher_path = str(new_launcher_path)
             if old_context.is_file():
-                context_text = old_context.read_text(encoding="utf-8").replace(name, new_name)
+                original_context = old_context.read_bytes()
+                originals.append((old_context, original_context, old_context.stat().st_mode & 0o777))
+                context_text = original_context.decode("utf-8").replace(name, new_name)
                 old_context.rename(new_context)
                 created.append((new_context, old_context))
                 new_context.write_text(context_text, encoding="utf-8")
@@ -1949,10 +1953,15 @@ class SessionManager:
                 shutil.move(str(old_dir), str(new_dir))
                 created.append((new_dir, old_dir))
                 log.debug("session=%s private directory moved %s -> %s", name, old_dir, new_dir)
+            with self.database.connect() as conn:
+                conn.execute(
+                    "UPDATE sessions SET tmux_name=?, launcher_path=? WHERE tmux_name=?",
+                    (new_name, launcher_path, name),
+                )
         except BaseException:
-            # Best effort: put back whatever this call already moved, so a failure
-            # never leaves the database pointing at one name and the files at
-            # another.
+            # Best effort: put back whatever this call already moved or rewrote, so a
+            # failure never leaves the database pointing at one name and the files at
+            # another (or a rewritten launcher under the old name).
             for new_path, old_path in reversed(created):
                 try:
                     if new_path.exists() and not old_path.exists():
@@ -1960,17 +1969,20 @@ class SessionManager:
                 except OSError as rollback_error:  # noqa: PERF203
                     log.warning("session=%s rename rollback failed for %s: %s",
                                 name, new_path, rollback_error)
+            for path, data, mode in reversed(originals):
+                try:
+                    if path.exists():
+                        path.write_bytes(data)
+                        path.chmod(mode)
+                except OSError as rollback_error:  # noqa: PERF203
+                    log.warning("session=%s rename rollback could not restore %s: %s",
+                                name, path, rollback_error)
             if tmux_renamed:
                 try:
                     self.tmux_for_name(new_name).rename(new_name, name)
                 except RuntimeError as rollback_error:
                     log.warning("session=%s tmux rename rollback failed: %s", name, rollback_error)
             raise
-        with self.database.connect() as conn:
-            conn.execute(
-                "UPDATE sessions SET tmux_name=?, launcher_path=? WHERE tmux_name=?",
-                (new_name, launcher_path, name),
-            )
         self.database.audit("session.renamed", name, "success", details={"new_name": new_name})
         return self.inspect(new_name)
 
