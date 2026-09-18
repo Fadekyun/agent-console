@@ -1,5 +1,14 @@
 # Release Notes
 
+## 0.8.1 (Unreleased)
+
+- **Date**: 2026-09-18
+- **Issue/PR**: [#129](https://github.com/Fadekyun/agent-console/issues/129) / [#130](https://github.com/Fadekyun/agent-console/pull/130) (this PR)
+- **Impact**: A rename now moves the session's harness-private directories with it when the harness is not running: `contexts/<stem>-<tool>` for pi/Hermes and `tool-overlays/<name>` for the overlay tools, with the launcher's references rewritten to match. Anything that derives those paths from the current session name (activity/transcript lookups such as the lxc-115 auto-namer, operator tooling) keeps resolving after a rename, and stale directories no longer accumulate under the old name. A **running** harness keeps its paths untouched, because it is still writing to them. No harness history is lost either way.
+- **Configuration/Migration**: None. No schema change. Renames performed by earlier releases keep working: their launchers still point at the old-named directories, and a later rename moves whatever it finds.
+- **Verification**: `tests/test_core.py` gains a stopped-session rename that must move both private dirs and rewrite the launcher (`test_rename_moves_harness_private_dirs_of_a_stopped_session`, fails against the previous implementation) and a running-session rename that must leave them in place (`test_rename_keeps_harness_private_dirs_while_running`). Full documented recipe run in a scrubbed environment.
+- **Rollback**: Re-select the previous release. Directories moved by this release stay valid; a rolled-back release only renames the context file, launcher and database row.
+
 ## 0.8.0 (Unreleased)
 
 - **Date**: 2026-09-18
@@ -8,6 +17,7 @@
 - **Configuration/Migration**: No database migration. `AGCONSOLE_SHARED_SKILLS` is a comma-separated allowlist and defaults to **empty**, so existing installations are unaffected. `install.sh` (and therefore `update.sh`, which sources `runtime.env` before reinstalling) preserves the value across regeneration. The lxc-115 deployment opts in with `AGCONSOLE_SHARED_SKILLS=typesafe-ai` in `runtime.env` as a separate approved deployment step.
 - **Verification**: `python3 -m pytest tests/test_shared_skill_discovery.py -q` — 23 passed, covering resolution/rejection rules, the from_env default/parse, assignment+shared merge, empty-allowlist no-op, Codex create/restart materialization, Hermes create/restart `external_dirs` (including unrelated-key and operator-directory preservation and idempotency), OpenCode per-session `skills` config, the missing-skill create failure with no side effects, and the preserved non-isolating-harness assignment guard. `python3 -m pytest tests/test_installer.py -q` — 47 passed, including default-empty persistence and a runtime.env regeneration check. Live bounded OpenCode probe: candidate-managed session config carries the isolated root (restart preserved), `opencode debug config` shows the additional path and keeps the MCP servers, and the native listing includes the shared skill; the earlier intermittent miss was traced to `opencode debug skill` truncating its JSON when stdout is a pipe (2/3 pipe runs incomplete vs 3/3 complete to a file). Scrubbed documented recipe (`env -u AGCONSOLE_RETAINED_SKILLS`) — 504 passed, 10 skipped (the legacy tmux review test is timing-flaky and passed on re-run).
 - **Rollback**: Unset `AGCONSOLE_SHARED_SKILLS` (and restart the service) to return to assignment-only behavior, or re-select the previous release. Existing Hermes session configs keep their last `external_dirs` until the session is restarted; restarting after the variable is cleared removes the managed entry. Existing OpenCode session launchers keep their `OPENCODE_CONFIG_CONTENT` until the session is restarted.
+>>>>>>> ad326d4 (fix: move a session's private directories when it is renamed)
 
 ## 0.7.3 (Unreleased)
 

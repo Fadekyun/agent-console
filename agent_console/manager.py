@@ -1866,6 +1866,22 @@ class SessionManager:
         log.info("session=%s action=restart tool=%s profile=%s", name, tool, profile)
         return self.inspect(name)
 
+    def _private_path_moves(self, name: str, new_name: str) -> list[tuple[Path, Path]]:
+        """Harness-private directories keyed by the session name.
+
+        pi/Hermes keep their agent home next to the context file
+        (``contexts/<stem>-<tool>``); Codex/Claude/OpenCode get a
+        ``tool-overlays/<name>`` overlay. They are only movable while nothing is
+        running, because a live harness keeps writing to its path.
+        """
+        state = self.settings.state_dir
+        moves = [
+            (state / "contexts" / f"{name}-{tool}", state / "contexts" / f"{new_name}-{tool}")
+            for tool in ("pi", "hermes")
+        ]
+        moves.append((state / "tool-overlays" / name, state / "tool-overlays" / new_name))
+        return [(old, new) for old, new in moves if old.is_dir()]
+
     def rename(self, name: str, new_name: str) -> dict[str, Any]:
         validate_session_name(new_name)
         session = self.inspect(name)
@@ -1885,6 +1901,10 @@ class SessionManager:
                 if not session_missing_error(exc):
                     raise
                 log.debug("tmux session %s already exited before rename: %s", name, exc)
+        # Name-keyed private directories move with a stopped session, so lookups
+        # that derive the path from the current name keep resolving. A running
+        # harness keeps its paths (the launcher already points there).
+        path_moves = [] if session.get("running") else self._private_path_moves(name, new_name)
         launcher_path = session["launcher_path"]
         if launcher_path:
             old_launcher = Path(launcher_path)
@@ -1898,6 +1918,8 @@ class SessionManager:
             old_context_path = str(self.settings.state_dir / "contexts" / f"{name}.md")
             new_context_path = str(self.settings.state_dir / "contexts" / f"{new_name}.md")
             launcher_text = launcher_text.replace(old_context_path, new_context_path)
+            for old_dir, new_dir in path_moves:
+                launcher_text = launcher_text.replace(str(old_dir), str(new_dir))
             old_launcher.rename(new_launcher)
             new_launcher.write_text(launcher_text, encoding="utf-8")
             new_launcher.chmod(0o700)
@@ -1910,6 +1932,11 @@ class SessionManager:
             old_context.rename(new_context)
             new_context.write_text(context_text, encoding="utf-8")
             new_context.chmod(0o600)
+        for old_dir, new_dir in path_moves:
+            if new_dir.exists():
+                raise FileExistsError(f"private directory already exists: {new_dir}")
+            shutil.move(str(old_dir), str(new_dir))
+            log.debug("session=%s private directory moved %s -> %s", name, old_dir, new_dir)
         with self.database.connect() as conn:
             conn.execute(
                 "UPDATE sessions SET tmux_name=?, launcher_path=? WHERE tmux_name=?",

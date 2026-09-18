@@ -490,6 +490,61 @@ class SessionIntegrationTests(unittest.TestCase):
         self.assertFalse(session_missing_error(RuntimeError(
             "tmux rename-session failed: unknown tmux error")))
 
+    def test_rename_moves_harness_private_dirs_of_a_stopped_session(self) -> None:
+        # Auto-renames happen after the harness exits; the private dirs are keyed by
+        # the session name, so name-based lookups (activity signals, tooling) break
+        # unless they move with the session.
+        self.manager.create(
+            tool="shell", profile="general", name="privdir-test",
+            repository=str(self.workspace),
+        )
+        state = self.manager.settings.state_dir
+        pi_dir = state / "contexts" / "privdir-test-pi"
+        (pi_dir / "sessions").mkdir(parents=True)
+        (pi_dir / "sessions" / "one.jsonl").write_text("{}\n", encoding="utf-8")
+        overlay = state / "tool-overlays" / "privdir-test"
+        overlay.mkdir(parents=True, exist_ok=True)
+        launcher = state / "launchers" / "privdir-test.sh"
+        launcher.write_text(
+            launcher.read_text(encoding="utf-8")
+            + f"export PI_CODING_AGENT_DIR={shlex.quote(str(pi_dir))}\n"
+            + f"export CODEX_HOME={shlex.quote(str(overlay))}/codex-home\n",
+            encoding="utf-8",
+        )
+        self.manager.tmux_for_name("privdir-test").kill("privdir-test")
+
+        self.manager.rename("privdir-test", "privdir-renamed")
+
+        new_pi = state / "contexts" / "privdir-renamed-pi"
+        new_overlay = state / "tool-overlays" / "privdir-renamed"
+        self.assertTrue((new_pi / "sessions" / "one.jsonl").is_file())
+        self.assertFalse(pi_dir.exists(), "old private dir must be gone")
+        self.assertTrue(new_overlay.is_dir())
+        self.assertFalse(overlay.exists(), "old overlay must be gone")
+        text = (state / "launchers" / "privdir-renamed.sh").read_text(encoding="utf-8")
+        self.assertIn(str(new_pi), text)
+        self.assertIn(str(new_overlay), text)
+        self.assertNotIn(str(pi_dir), text)
+
+    def test_rename_keeps_harness_private_dirs_while_running(self) -> None:
+        # A live harness keeps writing to its private dir, so a rename must not move
+        # it out from under the process.
+        self.manager.create(
+            tool="shell", profile="general", name="privdir-live-test",
+            repository=str(self.workspace),
+        )
+        state = self.manager.settings.state_dir
+        pi_dir = state / "contexts" / "privdir-live-test-pi"
+        pi_dir.mkdir(parents=True)
+        (pi_dir / "live.txt").write_text("still in use", encoding="utf-8")
+
+        self.manager.rename("privdir-live-test", "privdir-live-renamed")
+
+        self.assertTrue((pi_dir / "live.txt").is_file())
+        self.assertFalse((state / "contexts" / "privdir-live-renamed-pi").exists())
+        self.assertTrue(self.manager.inspect("privdir-live-renamed")["running"])
+        self.manager.kill("privdir-live-renamed")
+
     def test_rename_launcher_context_path_is_wired_for_restart(self) -> None:
         session = self.manager.create(
             tool="shell",
