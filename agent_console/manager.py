@@ -1866,55 +1866,123 @@ class SessionManager:
         log.info("session=%s action=restart tool=%s profile=%s", name, tool, profile)
         return self.inspect(name)
 
+    def _private_path_moves(self, name: str, new_name: str) -> list[tuple[Path, Path]]:
+        """Harness-private directories keyed by the session name.
+
+        pi/Hermes keep their agent home next to the context file
+        (``contexts/<stem>-<tool>``); Codex/Claude/OpenCode get a
+        ``tool-overlays/<name>`` overlay. They are only movable while nothing is
+        running, because a live harness keeps writing to its path.
+        """
+        state = self.settings.state_dir
+        moves = [
+            (state / "contexts" / f"{name}-{tool}", state / "contexts" / f"{new_name}-{tool}")
+            for tool in ("pi", "hermes")
+        ]
+        moves.append((state / "tool-overlays" / name, state / "tool-overlays" / new_name))
+        return [(old, new) for old, new in moves if old.is_dir()]
+
     def rename(self, name: str, new_name: str) -> dict[str, Any]:
         validate_session_name(new_name)
         session = self.inspect(name)
         if session.get("execution_kind") == "integration-plan":
             raise PermissionError("integration planning sessions cannot be renamed")
+        # Name-keyed private directories move with a stopped session, so lookups
+        # that derive the path from the current name keep resolving. A running
+        # harness keeps its paths (the launcher already points there).
+        path_moves = [] if session.get("running") else self._private_path_moves(name, new_name)
+        launcher_path = session["launcher_path"]
+        new_launcher_path = Path(launcher_path).with_name(f"{new_name}.sh") if launcher_path else None
+        old_context = self.settings.state_dir / "contexts" / f"{name}.md"
+        new_context = self.settings.state_dir / "contexts" / f"{new_name}.md"
+        # Preflight every destination before mutating anything: a collision must
+        # leave the tmux session, files, private directories and database row
+        # exactly as they were.
+        for _old_dir, new_dir in path_moves:
+            if new_dir.exists():
+                raise FileExistsError(f"private directory already exists: {new_dir}")
+        if new_launcher_path is not None and new_launcher_path.exists():
+            raise FileExistsError(f"launcher already exists: {new_launcher_path}")
+        if new_context.exists():
+            raise FileExistsError(f"session context already exists: {new_context}")
         # A finished harness leaves no tmux session to rename, but the rename must
         # still update the launcher, context file and database row. Inspect first,
         # then tolerate the harness exiting between the inspection and the call.
-        if session.get("running"):
-            try:
-                self.tmux_for_name(name).rename(name, new_name)
-            except RuntimeError as exc:
-                # Only a positive "session is gone" report is tolerated: any other
-                # failure (socket, permissions) must stay fatal so the caller does
-                # not end up with a renamed database row and a live tmux session
-                # still under the old name.
-                if not session_missing_error(exc):
-                    raise
-                log.debug("tmux session %s already exited before rename: %s", name, exc)
-        launcher_path = session["launcher_path"]
-        if launcher_path:
-            old_launcher = Path(launcher_path)
-            new_launcher = old_launcher.with_name(f"{new_name}.sh")
-            launcher_text = old_launcher.read_text(encoding="utf-8")
-            launcher_text = launcher_text.replace(
-                f"export AGENT_CONSOLE_SESSION_NAME={shlex.quote(name)}\n",
-                f"export AGENT_CONSOLE_SESSION_NAME={shlex.quote(new_name)}\n",
-                1,
-            )
-            old_context_path = str(self.settings.state_dir / "contexts" / f"{name}.md")
-            new_context_path = str(self.settings.state_dir / "contexts" / f"{new_name}.md")
-            launcher_text = launcher_text.replace(old_context_path, new_context_path)
-            old_launcher.rename(new_launcher)
-            new_launcher.write_text(launcher_text, encoding="utf-8")
-            new_launcher.chmod(0o700)
-            launcher_path = str(new_launcher)
-        old_context = self.settings.state_dir / "contexts" / f"{name}.md"
-        if old_context.is_file():
-            new_context = old_context.with_name(f"{new_name}.md")
-            context_text = old_context.read_text(encoding="utf-8")
-            context_text = context_text.replace(name, new_name)
-            old_context.rename(new_context)
-            new_context.write_text(context_text, encoding="utf-8")
-            new_context.chmod(0o600)
-        with self.database.connect() as conn:
-            conn.execute(
-                "UPDATE sessions SET tmux_name=?, launcher_path=? WHERE tmux_name=?",
-                (new_name, launcher_path, name),
-            )
+        tmux_renamed = False
+        created: list[tuple[Path, Path]] = []
+        originals: list[tuple[Path, bytes, int]] = []
+        try:
+            if session.get("running"):
+                try:
+                    self.tmux_for_name(name).rename(name, new_name)
+                    tmux_renamed = True
+                except RuntimeError as exc:
+                    # Only a positive "session is gone" report is tolerated: any other
+                    # failure (socket, permissions) must stay fatal so the caller does
+                    # not end up with a renamed database row and a live tmux session
+                    # still under the old name.
+                    if not session_missing_error(exc):
+                        raise
+                    log.debug("tmux session %s already exited before rename: %s", name, exc)
+            if launcher_path:
+                old_launcher = Path(launcher_path)
+                original = old_launcher.read_bytes()
+                originals.append((old_launcher, original, old_launcher.stat().st_mode & 0o777))
+                launcher_text = original.decode("utf-8").replace(
+                    f"export AGENT_CONSOLE_SESSION_NAME={shlex.quote(name)}\n",
+                    f"export AGENT_CONSOLE_SESSION_NAME={shlex.quote(new_name)}\n",
+                    1,
+                )
+                launcher_text = launcher_text.replace(str(old_context), str(new_context))
+                for old_dir, new_dir in path_moves:
+                    launcher_text = launcher_text.replace(str(old_dir), str(new_dir))
+                old_launcher.rename(new_launcher_path)
+                created.append((new_launcher_path, old_launcher))
+                new_launcher_path.write_text(launcher_text, encoding="utf-8")
+                new_launcher_path.chmod(0o700)
+                launcher_path = str(new_launcher_path)
+            if old_context.is_file():
+                original_context = old_context.read_bytes()
+                originals.append((old_context, original_context, old_context.stat().st_mode & 0o777))
+                context_text = original_context.decode("utf-8").replace(name, new_name)
+                old_context.rename(new_context)
+                created.append((new_context, old_context))
+                new_context.write_text(context_text, encoding="utf-8")
+                new_context.chmod(0o600)
+            for old_dir, new_dir in path_moves:
+                shutil.move(str(old_dir), str(new_dir))
+                created.append((new_dir, old_dir))
+                log.debug("session=%s private directory moved %s -> %s", name, old_dir, new_dir)
+            with self.database.connect() as conn:
+                conn.execute(
+                    "UPDATE sessions SET tmux_name=?, launcher_path=? WHERE tmux_name=?",
+                    (new_name, launcher_path, name),
+                )
+        except BaseException:
+            # Best effort: put back whatever this call already moved or rewrote, so a
+            # failure never leaves the database pointing at one name and the files at
+            # another (or a rewritten launcher under the old name).
+            for new_path, old_path in reversed(created):
+                try:
+                    if new_path.exists() and not old_path.exists():
+                        shutil.move(str(new_path), str(old_path))
+                except OSError as rollback_error:  # noqa: PERF203
+                    log.warning("session=%s rename rollback failed for %s: %s",
+                                name, new_path, rollback_error)
+            for path, data, mode in reversed(originals):
+                try:
+                    if path.exists():
+                        path.write_bytes(data)
+                        path.chmod(mode)
+                except OSError as rollback_error:  # noqa: PERF203
+                    log.warning("session=%s rename rollback could not restore %s: %s",
+                                name, path, rollback_error)
+            if tmux_renamed:
+                try:
+                    self.tmux_for_name(new_name).rename(new_name, name)
+                except RuntimeError as rollback_error:
+                    log.warning("session=%s tmux rename rollback failed: %s", name, rollback_error)
+            raise
         self.database.audit("session.renamed", name, "success", details={"new_name": new_name})
         return self.inspect(new_name)
 
