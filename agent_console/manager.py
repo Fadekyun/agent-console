@@ -35,7 +35,7 @@ from .skills import (
     cleanup_isolated_skills,
     get_effective_skills,
     isolate_skills,
-    validate_profile_skills,
+    resolve_session_skills,
 )
 from .providers import TOOL_BINARIES, LaunchSpec, provider_adapter
 from .tmux import Tmux, session_missing_error
@@ -84,6 +84,28 @@ def _validate_codex_pin(
             raise ValueError(
                 f"Codex {label} must be one of: {', '.join(sorted(CODEX_EFFORT_LEVELS))}"
             )
+
+
+def _launcher_exports(text: str) -> dict[str, str]:
+    """Extract the ``export KEY=value`` pairs from a pinned launcher file.
+
+    Restart does not rebuild the launch spec, so provider configuration that
+    depends on the launch environment (for example ``HERMES_HOME``) is read back
+    from the launcher before the provider hooks run.
+    """
+    exports: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.startswith("export "):
+            continue
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            continue
+        if len(tokens) < 2 or "=" not in tokens[1]:
+            continue
+        key, _, value = tokens[1].partition("=")
+        exports[key] = value
+    return exports
 
 
 class SessionManager:
@@ -1329,7 +1351,22 @@ class SessionManager:
                 skills_link.unlink()
             skills_link.symlink_to(isolated_skills_root, target_is_directory=True)
             overlay_env["CLAUDE_HOME"] = str(overlay)
-        elif tool in ("opencode", "hermes"):
+        elif tool == "opencode":
+            # OpenCode accepts additional discovery paths in its config. Register
+            # the same per-session isolated root Codex uses (assigned + shared
+            # skills) as an *additional* path rather than mutating the
+            # version-gated global root. The managed path contains only the
+            # materialized skills; OpenCode's existing native sources stay active.
+            context_path = self.settings.state_dir / "contexts" / f"{session_name}.md"
+            overlay_env["AGENT_CONSOLE_ISOLATED_SKILLS_ROOT"] = str(isolated_skills_root)
+            overlay_env["OPENCODE_CONFIG_CONTENT"] = json.dumps(
+                {
+                    "instructions": [str(context_path)],
+                    "skills": [str(isolated_skills_root)],
+                },
+                separators=(",", ":"),
+            )
+        elif tool == "hermes":
             overlay_env["AGENT_CONSOLE_ISOLATED_SKILLS_ROOT"] = str(isolated_skills_root)
         return overlay_env
 
@@ -1375,7 +1412,13 @@ class SessionManager:
         capability = validate_profile_capability(profile, tool, agent_mode, worktree=worktree)
         if not capability["allowed"]:
             raise ValueError(capability["reason"])
-        skill_validation = validate_profile_skills(self.database, profile)
+        session_skills = resolve_session_skills(
+            self.database,
+            profile,
+            tool,
+            shared_allowlist=self.settings.shared_skills,
+        )
+        skill_validation = session_skills["validation"]
         if not skill_validation["valid"]:
             issues = "; ".join(skill_validation["issues"])
             raise ValueError(
@@ -1566,10 +1609,14 @@ class SessionManager:
 
             canonical_root = _resolve_canonical_root()
             isolated_root = self.settings.state_dir / "skills-isolated" / name
-            effective = skill_validation["effective"]
+            effective = session_skills["materialized"]
             isolate_skills(isolated_root, canonical_root, effective)
             overlay_env = self._create_session_tool_overlay(
                 name, tool, context, isolated_root,
+            )
+            provider_adapter(tool, self.auth).configure_shared_skills(
+                environment=spec.environment,
+                isolated_skills_root=isolated_root,
             )
 
             launcher_created = True
@@ -1648,7 +1695,10 @@ class SessionManager:
                 )
             self.database.audit(
                 "session.created", name, "success", surface=creator_surface,
-                details={"effective_skills": [s["name"] for s in skill_validation["effective"]]},
+                details={
+                    "effective_skills": [s["name"] for s in skill_validation["effective"]],
+                    "shared_skills": [s["name"] for s in session_skills["shared"]],
+                },
             )
             log.info("session=%s id=%s tool=%s profile=%s mode=%s provider=%s worktree=%s surface=%s",
                      name, session_id, tool, profile, agent_mode, provider, worktree, creator_surface)
@@ -1740,13 +1790,19 @@ class SessionManager:
                     f"session {name!r} cannot be restarted"
                 )
         profile = session.get("profile") or "general"
-        skill_validation = validate_profile_skills(self.database, profile)
+        tool = session.get("tool") or "shell"
+        session_skills = resolve_session_skills(
+            self.database,
+            profile,
+            tool,
+            shared_allowlist=self.settings.shared_skills,
+        )
+        skill_validation = session_skills["validation"]
         if not skill_validation["valid"]:
             issues = "; ".join(skill_validation["issues"])
             raise ValueError(
                 f"profile {profile!r} has invalid skill assignments preventing restart: {issues}"
             )
-        tool = session.get("tool") or "shell"
         if skill_validation["effective"]:
             adapter = provider_adapter(tool, self.auth)
             if not adapter.can_isolate_skills:
@@ -1759,7 +1815,7 @@ class SessionManager:
                 )
         canonical_root = _resolve_canonical_root()
         isolated_root = self.settings.state_dir / "skills-isolated" / name
-        effective = skill_validation["effective"]
+        effective = session_skills["materialized"]
         isolate_skills(isolated_root, canonical_root, effective)
         auth_context = self.auth.get_context(tool, session.get("auth_context"))
         overlay_env = self._create_session_tool_overlay(
@@ -1767,6 +1823,7 @@ class SessionManager:
         )
         launcher_path = Path(session["launcher_path"])
         launcher_text = launcher_path.read_text(encoding="utf-8")
+        launcher_env = _launcher_exports(launcher_text)
         for key, value in overlay_env.items():
             line = f"export {key}={shlex.quote(value)}\n"
             if f"export {key}=" in launcher_text:
@@ -1778,6 +1835,10 @@ class SessionManager:
                 launcher_text = launcher_text[:insert_pos] + line + launcher_text[insert_pos:]
         launcher_path.write_text(launcher_text, encoding="utf-8")
         launcher_path.chmod(0o700)
+        provider_adapter(tool, self.auth).configure_shared_skills(
+            environment=launcher_env,
+            isolated_skills_root=isolated_root,
+        )
         provider_adapter(tool, self.auth).restart(session)
         with admission_lock(self.settings.state_dir):
             if not session.get("running"):
@@ -1797,7 +1858,10 @@ class SessionManager:
             self.tmux_for_name(name).restart(name, launcher_path)
         self.database.audit(
             "session.restarted", name, "success",
-            details={"effective_skills": [s["name"] for s in skill_validation["effective"]]},
+            details={
+                "effective_skills": [s["name"] for s in skill_validation["effective"]],
+                "shared_skills": [s["name"] for s in session_skills["shared"]],
+            },
         )
         log.info("session=%s action=restart tool=%s profile=%s", name, tool, profile)
         return self.inspect(name)

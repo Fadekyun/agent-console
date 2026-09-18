@@ -114,6 +114,7 @@ handoff_dir="${AGENT_CONSOLE_HANDOFF_DIR:-$workspace_root/handoffs}"
 worktree_root="${AGENT_CONSOLE_WORKTREE_ROOT:-$workspace_root/worktrees}"
 skills_root="${AGCONSOLE_SKILLS_ROOT:-$HOME/codex/skills}"
 retained_skills="${AGCONSOLE_RETAINED_SKILLS:-}"
+shared_skills="${AGCONSOLE_SHARED_SKILLS:-}"
 tunnel_host="${AGENT_CONSOLE_TUNNEL_HOST:-localhost}"
 
 mkdir -p "$config_dir"
@@ -154,6 +155,7 @@ fi
   [ -n "$hermes_bin" ] && echo "AGCONSOLE_HERMES_BIN=$hermes_bin"
   echo "AGCONSOLE_SKILLS_ROOT=$skills_root"
   echo "AGCONSOLE_RETAINED_SKILLS=$retained_skills"
+  echo "AGCONSOLE_SHARED_SKILLS=$shared_skills"
 } > "$config_dir/runtime.env"
 chmod 600 "$config_dir/runtime.env"
 
@@ -242,6 +244,7 @@ PYTHONPATH="$state_dir/releases/current" python3 -B -m agent_console.cli doctor
 printf '\nSkills setup (optional):\n'
 printf '  export AGCONSOLE_SKILLS_ROOT=%s\n' "$skills_root"
 printf '  export AGCONSOLE_RETAINED_SKILLS=%s\n' "$retained_skills"
+printf '  export AGCONSOLE_SHARED_SKILLS=%s\n' "$shared_skills"
 if [ -d "$skills_root" ]; then
   printf '  agentctl skills sync\n'
 fi

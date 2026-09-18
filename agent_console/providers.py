@@ -105,6 +105,21 @@ class ProviderAdapter:
     def interrupt(self, session: dict[str, Any]) -> None:
         """Prepare a provider for the shared tmux Ctrl-C lifecycle action."""
 
+    def configure_shared_skills(
+        self,
+        *,
+        environment: dict[str, str],
+        isolated_skills_root: Path,
+    ) -> None:
+        """Materialize the session's shared-skill discovery for this provider.
+
+        Called on both session create and restart. Implementations must merge
+        into any existing provider configuration without removing unrelated
+        settings. Codex and Codex Pro discover the isolated root through the
+        session overlay symlink, so only providers with an explicit config file
+        need to act.
+        """
+
     def restart(self, session: dict[str, Any]) -> None:
         """Prepare a provider before its pinned launcher is respawned."""
 
@@ -261,6 +276,25 @@ class OpenCodeAdapter(ProviderAdapter):
 
 class CommandCodeAdapter(ProviderAdapter):
     """Native harness configuration contains references, never credential values."""
+
+    def configure_shared_skills(
+        self,
+        *,
+        environment: dict[str, str],
+        isolated_skills_root: Path,
+    ) -> None:
+        # Only Hermes needs an explicit directory list; pi discovers its skills
+        # through its own per-session agent directory.
+        if self.tool != "hermes":
+            return
+        hermes_home = environment.get("HERMES_HOME")
+        if not hermes_home:
+            # Legacy Hermes launchers predate the per-session home; there is no
+            # config to update and no unintended exposure from leaving it alone.
+            return
+        from .commandcode import merge_hermes_skill_dirs
+
+        merge_hermes_skill_dirs(Path(hermes_home) / "config.yaml", isolated_skills_root)
 
     def build_launch_spec(self, **kwargs: Any) -> LaunchSpec:
         from .commandcode import (COMMANDCODE_DEFAULT_REASONING_EFFORT, COMMANDCODE_ENV_VAR,

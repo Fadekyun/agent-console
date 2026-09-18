@@ -190,12 +190,46 @@ exit 0
         result = self._run({
             "AGCONSOLE_SKILLS_ROOT": str(skills_dir),
             "AGCONSOLE_RETAINED_SKILLS": "skill-a,skill-b",
+            "AGCONSOLE_SHARED_SKILLS": "typesafe-ai",
         })
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
 
         env = self._env_path().read_text()
         self.assertIn(f"AGCONSOLE_SKILLS_ROOT={skills_dir}", env)
         self.assertIn("AGCONSOLE_RETAINED_SKILLS=skill-a,skill-b", env)
+        self.assertIn("AGCONSOLE_SHARED_SKILLS=typesafe-ai", env)
+
+    def test_shared_skills_defaults_to_empty_and_survives_regeneration(self):
+        self._create_tool("codex")
+        # A fresh install without the optional list still writes the empty key.
+        first = self._run()
+        self.assertEqual(first.returncode, 0, msg=first.stderr + first.stdout)
+        self.assertIn("AGCONSOLE_SHARED_SKILLS=\n", self._env_path().read_text())
+
+        # Simulate the updater's regeneration path: it sources the existing
+        # runtime.env (set -a; source ...) before re-running the installer, so a
+        # configured list must be carried through rather than dropped.
+        configured = self._run({"AGCONSOLE_SHARED_SKILLS": "typesafe-ai,other-skill"})
+        self.assertEqual(configured.returncode, 0, msg=configured.stderr + configured.stdout)
+        self.assertIn(
+            "AGCONSOLE_SHARED_SKILLS=typesafe-ai,other-skill",
+            self._env_path().read_text(),
+        )
+        regenerated = self._run(self._runtime_env_exports())
+        self.assertEqual(regenerated.returncode, 0, msg=regenerated.stderr + regenerated.stdout)
+        self.assertIn(
+            "AGCONSOLE_SHARED_SKILLS=typesafe-ai,other-skill",
+            self._env_path().read_text(),
+        )
+
+    def _runtime_env_exports(self) -> dict[str, str]:
+        exports: dict[str, str] = {}
+        for line in self._env_path().read_text().splitlines():
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            exports[key.strip()] = value
+        return exports
 
     def test_killmode_process_in_web_unit(self):
         self._create_tool("codex")

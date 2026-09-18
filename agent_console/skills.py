@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from itertools import islice
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from .database import Database, utc_now
 from .skill_capabilities import SKILL_TOOL_CAPABILITIES, SUPPORTED_TOOLS, SkillToolCapability
@@ -1160,6 +1160,112 @@ def isolate_skills(
 def cleanup_isolated_skills(isolated_root: Path) -> None:
     if isolated_root.exists():
         shutil.rmtree(isolated_root)
+
+
+def get_shared_skills(
+    profile: str,
+    tool: str,
+    *,
+    allowlist: Sequence[str],
+    canonical_root: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Resolve the configured shared-skill allowlist for one profile and tool.
+
+    Shared skills are deliberately separate from the persisted per-profile
+    assignments: they are the small, operator-managed set of standard skills
+    that every capable harness should see. Only ``standard`` skills are
+    eligible, the skill's own ``allowed_profiles`` still applies, and a skill
+    that does not declare the tool is simply not shared there. A name that is
+    absent from the catalogue, is not a standard skill, has a stale source, or
+    is disallowed for the profile raises ``ValueError`` so a typo cannot
+    silently change what a session is exposed to.
+    """
+    if profile not in PROFILES:
+        raise ValueError(f"unknown profile: {profile!r}")
+    root = canonical_root or _resolve_canonical_root()
+    entries = _live_entries(root)
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_name in allowlist:
+        name = raw_name.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        entry = next((e for e in entries if e["name"] == name), None)
+        if entry is None:
+            raise ValueError(
+                f"shared skill {name!r} is not in the catalog "
+                "(AGCONSOLE_SHARED_SKILLS)"
+            )
+        if entry["kind"] != "standard":
+            raise ValueError(
+                f"shared skill {name!r} is kind {entry['kind']!r}; only standard "
+                "skills may be shared"
+            )
+        if entry["source_diagnostic"]["state"] != "present":
+            raise ValueError(
+                f"shared skill {name!r} has {entry['source_diagnostic']['state']} "
+                f"source: {entry['source_diagnostic']['skill_file']}"
+            )
+        if entry.get("requires_approval", False):
+            # A shared skill has no profile assignment to approve it against, so
+            # an approval-required entry is rejected rather than silently shared.
+            raise ValueError(
+                f"shared skill {name!r} requires explicit approval and cannot be "
+                "shared automatically; assign it to a profile instead"
+            )
+        allowed = entry.get("allowed_profiles")
+        if allowed is not None and profile not in allowed:
+            raise ValueError(
+                f"shared skill {name!r} is not allowed for profile {profile!r} "
+                f"(allowed: {sorted(allowed)})"
+            )
+        if tool not in entry["tools"]:
+            continue
+        selected.append({
+            "name": name,
+            "kind": entry["kind"],
+            "description": entry.get("description", ""),
+            "tools": entry["tools"],
+            "allowed_profiles": sorted(allowed) if allowed else None,
+            "requires_approval": bool(entry.get("requires_approval", False)),
+            "shared": True,
+        })
+    return selected
+
+
+def resolve_session_skills(
+    db: Database,
+    profile: str,
+    tool: str,
+    *,
+    shared_allowlist: Sequence[str] = (),
+    canonical_root: Path | None = None,
+) -> dict[str, Any]:
+    """Combine persisted profile assignments with the shared-skill allowlist.
+
+    Returns the assignment validation (whose ``effective`` list still drives the
+    non-isolating-harness guard), the resolved shared entries, and the merged,
+    de-duplicated materialization list. A profile assignment wins a name
+    collision so its audit metadata is preserved.
+    """
+    root = canonical_root or _resolve_canonical_root()
+    validation = validate_profile_skills(db, profile, canonical_root=root)
+    shared = get_shared_skills(
+        profile, tool, allowlist=shared_allowlist, canonical_root=root
+    )
+    materialized: list[dict[str, Any]] = list(validation["effective"])
+    names = {skill["name"] for skill in materialized}
+    for skill in shared:
+        if skill["name"] in names:
+            continue
+        names.add(skill["name"])
+        materialized.append(skill)
+    return {
+        "validation": validation,
+        "shared": shared,
+        "materialized": materialized,
+    }
 
 
 def get_effective_skills(
