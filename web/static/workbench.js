@@ -5,7 +5,7 @@ const form = $('#create-form');
 const state = { sessions: [], me: null, selected: null, loading: false, frames: new Map() };
 const names = { normal: 'Working', needs_input: 'Needs input', blocked: 'Blocked', ready_for_review: 'Ready for review' };
 function el(tag, text, cls) { const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node; }
-function message(text) { $('#notice').textContent = text; $('#notice').hidden = !text; }
+function message(text, kind = 'general') { $('#notice').textContent = text; $('#notice').hidden = !text; $('#notice').dataset.kind = kind; }
 async function api(path, payload, method = 'POST') {
   const response = await fetch(path, payload === undefined ? { cache: 'no-store' } : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   const data = await response.json();
@@ -71,8 +71,9 @@ function route() {
   if (hash === '#skills' && !skillsLoaded && state.me) { skillsLoaded = true; skillsView.load().catch(error => { skillsLoaded = false; message(error.message); }); }
   $('#settings-view').hidden = hash !== '#settings';
   $('#session-view').hidden = !state.selected;
-  document.querySelectorAll('.mobile-nav a').forEach(a => a.setAttribute('aria-current', a.hash === (hash === '#settings' ? '#settings' : '#work') ? 'page' : 'false'));
-  if (sessionName && !state.selected) message('This session is no longer available. Return to Work.');
+  document.querySelectorAll('.mobile-nav a').forEach(a => a.setAttribute('aria-current', a.hash === (['#settings','#skills'].includes(hash) ? hash : '#work') ? 'page' : 'false'));
+  if (sessionName && !state.selected) message('This session is no longer available. Return to Work.', 'route');
+  else if ($('#notice').dataset.kind === 'route') message('');
   renderWork(); renderSession();
   for (const [name, frame] of state.frames) frame.hidden = name !== state.selected?.tmux_name;
   if (!state.selected || !state.frames.has(state.selected.tmux_name)) $('#terminal-panel').hidden = true;

@@ -100,7 +100,10 @@ test('skills inspection and exact revision approval work on desktop and phone', 
   let approved=null;
   await page.route('**/api/skill-registry', route=>route.fulfill({json:{entries:[item],imports:[]}}));
   await page.route('**/api/skill-registry/bounded-coding/approve',route=>{approved=route.request().postDataJSON();return route.fulfill({json:{hash:item.hash}});});
-  await page.goto('/work#skills');
+  await page.goto('/work#session/missing-fixture');
+  await expect(page.getByText('This session is no longer available. Return to Work.',{exact:true})).toBeVisible();
+  await page.getByRole('link',{name:'Skills',exact:true}).click();
+  await expect(page.locator('#notice')).toBeHidden();
   await expect(page.getByRole('heading',{name:'Skills',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Inspect',exact:true}).click();
   await expect(page.getByText(item.hash,{exact:true})).toBeVisible();

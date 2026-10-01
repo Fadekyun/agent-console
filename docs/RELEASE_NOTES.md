@@ -1,3 +1,11 @@
+## 0.11.1 (unreleased staging)
+
+- Date: 2026-10-02. Issue: #90.
+- Impact: clear obsolete missing-session notices after navigation, expose Skills directly in mobile navigation, and trim redundant skill descriptions and approval actions.
+- Configuration/migration: none.
+- Verification: desktop, 360px and 390px workbench scenarios include navigating from a missing session to Skills and confirming the old notice disappears. Live staging screenshots identified the defect.
+- Rollback: select staging 0.11.0; no data changes. Current console remains separate.
+
 ## 0.11.0 (unreleased staging)
 
 - Date: 2026-10-02. Issue: #6.

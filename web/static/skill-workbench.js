@@ -33,7 +33,8 @@ export function setupSkills({ api, el, message, profiles }) {
       const label = el('label', 'Role'), role = el('select');
       profiles().filter(p => p.status !== 'deprecated').forEach(p => { const option = el('option', p.display_name || p.name); option.value = p.name; role.append(option); });
       role.value = 'coder'; label.append(role); panel.append(label);
-      actions.append(button('Assign to role', () => api('/api/skills/assign', { profile: role.value, skill_name: packageInfo.name })), button('Remove assignment', () => api('/api/skills/unassign', { profile: role.value, skill_name: packageInfo.name })), button('Approve revision for role', () => api(`/api/skill-registry/${packageInfo.name}/approve`, { profile: role.value, expected_hash: packageInfo.hash })), button('Revoke role approval', () => api(`/api/skill-registry/${packageInfo.name}/revoke`, { profile: role.value, expected_hash: packageInfo.hash })));
+      actions.append(button('Assign to role', () => api('/api/skills/assign', { profile: role.value, skill_name: packageInfo.name })), button('Remove assignment', () => api('/api/skills/unassign', { profile: role.value, skill_name: packageInfo.name })));
+      if (packageInfo.approval === 'ask') actions.append(button('Approve revision for role', () => api(`/api/skill-registry/${packageInfo.name}/approve`, { profile: role.value, expected_hash: packageInfo.hash })), button('Revoke role approval', () => api(`/api/skill-registry/${packageInfo.name}/revoke`, { profile: role.value, expected_hash: packageInfo.hash })));
     }
     panel.append(actions); return panel;
   }
@@ -49,7 +50,7 @@ export function setupSkills({ api, el, message, profiles }) {
     for (const packageInfo of catalog.entries) {
       const card = el('article', null, 'card');
       const inspect = el('button', 'Inspect'); inspect.onclick = () => { selected = packageInfo.name; details.replaceChildren(detail(packageInfo)); details.scrollIntoView({ block: 'nearest' }); };
-      card.append(el('h2', packageInfo.name), el('p', packageInfo.description, 'muted'), el('p', `${packageInfo.trust} · ${packageInfo.validation}`), inspect); cards.append(card);
+      card.append(el('h2', packageInfo.name), el('p', packageInfo.description, 'brief muted'), el('p', `${packageInfo.trust} · ${packageInfo.validation}`), inspect); cards.append(card);
       if (selected === packageInfo.name) details.replaceChildren(detail(packageInfo));
     }
     root.append(cards, details);

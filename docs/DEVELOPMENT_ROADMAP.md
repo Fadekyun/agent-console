@@ -4,6 +4,8 @@ This document tracks the planned and completed development work for Agent Consol
 
 ## Integration in progress
 
+- [x] **Staging navigation cleanup** (2026-10-02, #90) — route errors clear on recovery; phone navigation has a direct Skills tab; skill cards and policy actions are shortened for the selected policy. Verified in desktop and phone browser scenarios.
+
 - [ ] **Skills v2 registry and delivery** (2026-10-02, #6) — staged implementation: real YAML/namespaced policy, hash-bound trust and approvals, scoped resolution, immutable session copies, durable delivery history, workbench library/launch preview and CLI. Source validation is tracked in [SKILL_REGISTRY.md](SKILL_REGISTRY.md). The full epic remains open for remaining harness discovery and canonical guide migration; see [full revamp acceptance](FULL_REVAMP_ACCEPTANCE.md).
 
 - [ ] **Jev ghost probe review view** (2026-09-19, [#138](https://github.com/Fadekyun/agent-console/issues/138), part of [#133](https://github.com/Fadekyun/agent-console/issues/133)/[#135](https://github.com/Fadekyun/agent-console/issues/135)) — read-only `GET /api/jev-ghost` and a `Jev Ghost` dashboard view over the continuous probe's sanitized JSONL history (summary, streak, per-run typed answers, skill-path status). Reader is defensive and drops unknown fields; no credential value is read or returned. Source tests pass; independent review and deployment pending.
