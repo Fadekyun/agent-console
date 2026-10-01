@@ -6,7 +6,8 @@ export function setupWorkflow({api,el,message,editStep,openSession}) {
     root.replaceChildren(el('p','Loading next steps…'));
     try{
       const flow=await api(`/api/sessions/${session.id}/workflow`),policy=flow.policy.policy;
-      root.replaceChildren(el('p',policy.mode==='auto'?'Auto within reviewed limits':'Suggestions only · nothing starts until accepted','badge'),el('p','A small task can finish in one session. Add another only for a distinct useful job.','small muted'));
+      root.replaceChildren();
+      if(flow.policy.state!=='stopped')root.append(el('p',policy.mode==='auto'?'Auto within reviewed limits':'Suggestions only · nothing starts until accepted','badge'),el('p','A small task can finish in one session. Add another only for a distinct useful job.','small muted'));
       const controls=el('div',null,'actions');controls.append(action('Refresh next steps',()=>load(root,session)));
       if(flow.policy.state!=='stopped'){
         controls.append(action(flow.policy.state==='paused'?'Resume workflow':'Pause workflow',async()=>{await api(`/api/sessions/${flow.root_id}/workflow/control`,{state:flow.policy.state==='paused'?'running':'paused'});await load(root,session);}));
@@ -16,8 +17,11 @@ export function setupWorkflow({api,el,message,editStep,openSession}) {
       if(!flow.steps.length)root.append(el('p','No extra session proposed. Continue this task here, or use Add session for a specific next step.'));
       for(const step of flow.steps){
         const card=el('article',null,'panel'),attempt=step.attempts.at(-1),status=attempt?.state||step.decision;
-        card.append(el('h3',step.task),el('p',status+(attempt?.result?' · '+attempt.result.outcome:''),'badge'),el('p',step.reason),el('p','Expected: '+step.expected_output,'small muted'),el('p',`${step.config.profile} · ${step.config.tool} · ${step.config.action} · ${step.config.repository}`,'small muted'));
-        for(const dependency of step.dependencies)card.append(el('p',`${dependency.readiness} · ${dependency.source_id}`,'small muted'));
+        const title=step.task.length>80?step.task.slice(0,77).trimEnd()+'…':step.task;
+        card.append(el('h3',title),el('p',status+(attempt?.result?' · '+attempt.result.outcome:''),'badge'),el('p',step.reason,'workflow-reason'),el('p',`${step.config.profile} · ${step.config.tool} · ${step.config.action}`,'small muted'));
+        const description=el('details');description.append(el('summary','Task & configuration'),el('p',step.task),el('p','Why: '+step.reason),el('p','Expected: '+step.expected_output),el('p',step.config.repository,'small muted'));
+        for(const dependency of step.dependencies)description.append(el('p',`${dependency.readiness} · ${dependency.source_id}`,'small muted'));
+        card.append(description);
         if(step.error||attempt?.error)card.append(el('p',step.error||attempt.error,'small'));
         const actions=el('div',null,'actions');
         if(step.decision==='proposed'&&flow.policy.state!=='stopped'){

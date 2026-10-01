@@ -1,3 +1,10 @@
+## 0.14.2 — 2026-10-02 (staging, #90)
+
+- Impact: compact Next steps cards keep long tasks readable through expandable Task & configuration details. Stopped workflows omit irrelevant expansion guidance. Result handoff forms open only when requested, reducing phone page length.
+- Configuration/migration: none.
+- Verification: desktop/360px/390px browser journeys expand a long task before preview/accept, and explicitly open the handoff form before sending; live staging screenshots and overflow checks.
+- Rollback: select staging 0.14.1; no data changes or current-console cutover.
+
 ## 0.14.1 — 2026-10-02 (staging, #140)
 
 - Impact: native attempts receive completion instructions matching their supervised structured-result contract. Concurrent result publication no longer blocks status readers through rollback-journal lock cycles.

@@ -1,5 +1,9 @@
 # Development Roadmap
 
+### 2026-10-02 — #90 compact workflow details
+
+- Long next-step prompts use a short heading with full task/configuration available on demand. Result handoff forms are collapsed until requested; stopped workflow guidance is trimmed. Tested across desktop and phone widths.
+
 ### 2026-10-02 — #140 live native completion hardening
 
 - Live acceptance exposed conflicting interactive completion instructions and companion DB contention. Native attempts now use runner-owned structured completion; WAL permits status reads during native result commits. Canonical results guide follows the same contract.

@@ -18,9 +18,11 @@ export function setupResults({api,el,message,sessions,editStep,openSession}) {
     if(targets.length){
       const target=field('Hand off this version to','select');target.input.append(...targets.map(s=>option(s.id,s.tmux_name)));
       const note=field('Handoff note','textarea');note.input.rows=2;
-      let key=requestKey();card.append(target.wrapper,note.wrapper,action('Queue handoff',async()=>{
+      const handoff=el('details');handoff.append(el('summary','Send this version'));
+      let key=requestKey();handoff.append(target.wrapper,note.wrapper,action('Queue handoff',async()=>{
         await api(`/api/results/${result.id}/send`,{target_session_id:target.input.value,note:note.input.value,request_key:key});key=requestKey();message('Handoff queued. Delivery and consumption are acknowledged separately.');
       }));
+      card.append(handoff);
     }
     return card;
   }

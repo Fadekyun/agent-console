@@ -18,6 +18,7 @@
 
 #session-results .panel { margin:12px 0; overflow-wrap:anywhere; }
 #session-results label { margin:12px 0; }
+#session-results .workflow-reason { display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden; }
 #session-results form > details { margin:12px 0; }
 
 .session-actions{display:flex;gap:8px;flex-wrap:wrap}

@@ -36,9 +36,15 @@ test('work, manual child, drafts and mobile terminal use the real components',as
   await page.goto('/work'); await expect(page.getByRole('heading',{name:'Work in progress'})).toBeVisible();
   await page.getByRole('link',{name:'Open work'}).click();
   await page.getByRole('button',{name:'+ Add session',exact:true}).click();
-  await page.locator('[name=task]').fill('Review only the changed layout');
+  const task='Review only the changed layout. Check the mobile navigation, the terminal scroll position while reading output, and whether a long task remains readable without making the session card occupy the entire phone screen.';
+  await page.locator('[name=task]').fill(task);
   await page.locator('[name=profile]').selectOption('reviewer');
   await page.getByRole('button',{name:'Review next step',exact:true}).click();
+  await expect(page.locator('#workflow-next-steps h3')).toHaveText(task.slice(0,77).trimEnd()+'…');
+  await expect(page.getByText(task,{exact:true})).toBeHidden();
+  await page.getByText('Task & configuration',{exact:true}).click();
+  await expect(page.getByText(task,{exact:true})).toBeVisible();
+  await page.getByText('Task & configuration',{exact:true}).click();
   await page.getByRole('button',{name:'Preview launch',exact:true}).click();
   await page.getByRole('button',{name:'Accept next step',exact:true}).click();
   await page.getByRole('button',{name:'Open session',exact:true}).click();
@@ -163,6 +169,8 @@ test('one-session result and durable handoff acknowledge distinct states',async(
   await page.getByRole('button',{name:'Publish result',exact:true}).click();
   await expect(page.getByRole('heading',{name:'Final result · v1 · pass',exact:true})).toBeVisible();
   expect(published.kind).toBe('final');expect(published.request_key).toBeTruthy();
+  await expect(page.getByRole('button',{name:'Queue handoff',exact:true})).toBeHidden();
+  await page.getByText('Send this version',{exact:true}).click();
   await page.getByRole('button',{name:'Queue handoff',exact:true}).click();await expect.poll(()=>queued).toBe(true);
   await page.getByRole('link',{name:'Back to session'}).click();
   await page.locator('#session-tree').getByRole('link',{name:'session-target',exact:true}).click();

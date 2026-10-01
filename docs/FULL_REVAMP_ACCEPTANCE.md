@@ -16,15 +16,15 @@ Objective: finish issues #90, #140 and #6, update development documentation, pus
 
 ## #140 — connected workflows
 
-- [ ] One-session completion without compulsory review agents; manual Add/Attach by durable ID with role/skill checks.
-- [ ] Ready/final results and selected versioned artifacts; source-attributed durable inbox with sequence, delivery and consumed acknowledgment.
-- [ ] Justified suggestions; accept/edit/reject and explicit suggestion-only default.
-- [ ] Ownership distinct from DAG dependencies; after-ready/after-final/alongside; joins and cycle rejection.
-- [ ] Explicit reviewed auto envelope for repositories/actions/roles/harnesses/targets/budgets, versioned expansions and limits.
-- [ ] Durable launch receipts; restart reconciliation without duplicate dispatch; capacity/backoff and unsupported adapter explanation.
+- [x] One-session completion without compulsory review agents; manual Add/Attach by durable ID with role/skill checks.
+- [x] Ready/final results and selected versioned artifacts; source-attributed durable inbox with sequence, delivery and consumed acknowledgment.
+- [x] Justified suggestions; accept/edit/reject and explicit suggestion-only default.
+- [x] Ownership distinct from DAG dependencies; after-ready/after-final/alongside; joins and cycle rejection.
+- [x] Explicit reviewed auto envelope for repositories/actions/roles/harnesses/targets/budgets, versioned expansions and limits.
+- [x] Durable launch receipts; restart reconciliation without duplicate dispatch; capacity/backoff and unsupported adapter explanation.
 - [ ] Failed inputs block dependents; independent branches continue; changes stale downstream results and review evidence.
-- [ ] Coalesced replacement after current attempt; rerun limits; history retained.
-- [ ] Pause blocks new dispatch; stop cancels/interrupts with durable history.
+- [x] Coalesced replacement after current attempt; rerun limits; history retained.
+- [x] Pause blocks new dispatch; stop cancels/interrupts with durable history.
 - [ ] Exact-candidate release evidence and authorized action/target; uncertain external outcomes require reconciliation before retry.
 - [ ] Rewrite all seven Console guide bundles against implemented commands and verify a real two-session handoff.
 
@@ -69,3 +69,9 @@ This does not complete #140: launch-parent and connected ownership views still n
 Version 0.14 adds proposed logical steps, accept/edit/reject, explicit reviewed automatic envelopes, probed native Codex/Pro task input, durable launch receipts and immutable configuration/skill checks. Required inputs gate launch; replacements coalesce behind the current attempt. Budgets include the initial/attached sessions and every launched attempt. Pause holds new dispatch, Stop interrupts owned connected sessions, and uncertain launches need explicit reconciliation. Native structured finals publish selected worktree artifacts and consumed-input claims; optional justified follow-ups pass the same proposal gate.
 
 Unit/native-fixture, API and browser evidence covers dispatch, crash recovery, coalescing, scopes, budgets and control behavior. See `WORKFLOW_DISPATCH.md` for supported adapters and rollback. Exact external release gates, unified tree navigation, remaining workbench features, all seven guides and the full skill-provider/device matrix remain open. This checkpoint does not complete the goal.
+
+## Native dispatch verification — 2026-10-02
+
+The checked #140 items above are supported by [native dispatch verification](WORKFLOW_DISPATCH_VERIFICATION.md), not by terminal exit status alone. A real Codex Pro attempt consumed a selected immutable snapshot after its original file was removed, published a passing structured final and survived a web restart with one durable launch. Rollback to 0.13 and restoration preserved all 14 workflow table counts. Current-console PID/release and both switching routes were unchanged.
+
+This verifies those protocol portions only. The launch tree still needs connected ownership/attempt navigation, exact external release gates remain unsupported, and the unchecked workbench/skills/guide/provider requirements remain necessary for the full goal.
