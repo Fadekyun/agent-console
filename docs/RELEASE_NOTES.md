@@ -1,3 +1,11 @@
+## 0.10.0 (unreleased staging)
+
+- Date: 2026-10-01. Issue: #90.
+- Impact: opt-in Connected Work home, responsive session tree and manual child creation; improved nested terminal scroll/reconnect and draft persistence. Classic controls remain available.
+- Configuration/migration: `AGENT_CONSOLE_UI=workbench`, optional instance label/current/staging URLs; persistent staging uses a separate Unix account and state. No database schema migration or current-console cutover.
+- Validation: API tests, desktop/phone browser tests and isolated live PTY smoke checks described in [STAGING_WORKBENCH.md](STAGING_WORKBENCH.md).
+- Rollback: return to the current-console URL; remove only staging routes/service if withdrawing the trial. Preserve both workspaces and databases.
+
 # Release Notes
 
 ## 0.9.0 (Unreleased)

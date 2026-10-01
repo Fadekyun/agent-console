@@ -38,6 +38,10 @@ const MAX_RECONNECT_ATTEMPTS = 30;
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 30000;
 let autoReconnectEnabled = true;
+const draftKey = `agent-console:composer:${name}`;
+try { const draft = sessionStorage.getItem(draftKey); if (draft !== null) { composer.value = draft; briefLoaded = true; } } catch { /* storage may be disabled */ }
+function saveDraft() { try { sessionStorage.setItem(draftKey, composer.value); } catch { /* continue without persistence */ } }
+window.addEventListener('pagehide', saveDraft);
 
 function setStatus(message) { connection.textContent = message; }
 
@@ -63,6 +67,7 @@ function resize() {
   cancelAnimationFrame(resizeFrame);
   resizeFrame = requestAnimationFrame(() => {
     try {
+      if (!terminalFrame.clientWidth || !terminalFrame.clientHeight) return;
       fit.fit();
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
       if (following) terminal.scrollToBottom();
@@ -98,12 +103,12 @@ function cancelReconnect() {
 }
 
 function connect() {
-  cancelReconnect();
-  socket?.close();
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  if (socket) { socket.onclose = null; socket.onerror = null; socket.onmessage = null; socket.close(); }
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   socket = new WebSocket(`${protocol}//${location.host}/ws/sessions/${encodeURIComponent(name)}`);
   socket.binaryType = 'arraybuffer'; setStatus('Connecting…'); reconnect.disabled = true;
-  socket.onopen = () => { cancelReconnect(); setStatus('Connected'); resize(); following = true; terminal.scrollToBottom(); if (mode === 'type') terminal.focus(); };
+  socket.onopen = () => { cancelReconnect(); setStatus('Connected'); resize(); if (following) terminal.scrollToBottom(); if (mode === 'type') terminal.focus(); };
   socket.onmessage = (event) => {
     const output = typeof event.data === 'string' ? event.data : decoder.decode(event.data, { stream: true });
     terminal.write(output, () => {
@@ -130,7 +135,7 @@ function connect() {
       scheduleReconnect();
     }
   };
-  socket.onerror = () => { setStatus('Connection error'); reconnect.disabled = false; scheduleReconnect(); };
+  socket.onerror = () => { setStatus('Connection error'); }; // close schedules exactly one retry
 }
 
 function setMode(selected) {
@@ -146,7 +151,7 @@ function insertComposer(text, focus = true) {
   const start = composer.selectionStart ?? composer.value.length;
   const end = composer.selectionEnd ?? start;
   composer.setRangeText(text, start, end, 'end');
-  autoSizeComposer(); if (focus) composer.focus();
+  saveDraft(); autoSizeComposer(); if (focus) composer.focus();
 }
 
 function autoSizeComposer() {
@@ -158,7 +163,7 @@ function autoSizeComposer() {
 function submit(addEnter) {
   try {
     send(composer.value + (addEnter ? '\r' : ''));
-    composer.value = ''; autoSizeComposer();
+    composer.value = ''; saveDraft(); autoSizeComposer();
     if (mode === 'type') terminal.focus();
   } catch (error) { setStatus(error.message); }
 }
@@ -281,18 +286,35 @@ terminal.onScroll(() => {
   }
 });
 window.__terminal = terminal;
+// Own scroll-mode touch gestures in one place. xterm 6 uses a virtual
+// scrollbar, so native overflow scrolling is not enough in a nested iframe.
+let touchViewport = 0;
+let touchAlternate = false;
 $('#terminal').addEventListener('touchstart', (event) => {
-  if (mode === 'scroll' && event.touches.length === 1) touchStartY = event.touches[0].clientY;
-}, { passive: true });
-$('#terminal').addEventListener('touchend', async (event) => {
+  if (mode !== 'scroll' || event.touches.length !== 1) { touchStartY = null; return; }
+  touchStartY = event.touches[0].clientY;
+  touchViewport = terminal.buffer.active.viewportY;
+  touchAlternate = terminal.buffer.active.type === 'alternate' || alternateScreen;
+  event.stopPropagation();
+}, { passive: true, capture: true });
+$('#terminal').addEventListener('touchmove', (event) => {
+  if (touchStartY === null || event.touches.length !== 1) return;
+  event.preventDefault(); event.stopPropagation();
+  if (!touchAlternate) {
+    const height = $('.xterm-screen')?.getBoundingClientRect().height || terminal.rows * 16;
+    const lines = Math.round((event.touches[0].clientY - touchStartY) / (height / terminal.rows));
+    terminal.scrollToLine(Math.max(0, touchViewport - lines));
+  }
+}, { passive: false, capture: true });
+$('#terminal').addEventListener('touchend', (event) => {
   if (mode !== 'scroll' || touchStartY === null) return;
-  const end = event.changedTouches[0]?.clientY ?? touchStartY;
-  const delta = end - touchStartY; touchStartY = null;
-  if (Math.abs(delta) < 48) return;
-  if (terminal.buffer.active.type === 'alternate' || alternateScreen) {
+  const delta = (event.changedTouches[0]?.clientY ?? touchStartY) - touchStartY;
+  touchStartY = null; event.stopPropagation();
+  if (touchAlternate && Math.abs(delta) >= 48) {
     try { send(delta > 0 ? '\x1b[5~' : '\x1b[6~'); } catch (error) { setStatus(error.message); }
-  } else terminal.scrollLines(delta > 0 ? -6 : 6);
-}, { passive: true });
+  }
+}, { passive: true, capture: true });
+$('#terminal').addEventListener('touchcancel', () => { touchStartY = null; }, { passive: true });
 new ResizeObserver(resize).observe($('.terminal-frame'));
 window.visualViewport?.addEventListener('resize', syncVisualViewport);
 window.visualViewport?.addEventListener('scroll', syncVisualViewport);
@@ -324,7 +346,7 @@ $('#send').onclick = () => submit(false);
 $('#send-enter').onclick = () => submit(true);
 newOutput.onclick = () => { terminal.scrollToBottom(); following = true; hasUnread = false; newOutput.hidden = true; newOutput.classList.remove('has-unread'); };
 $('#use-manual-paste').onclick = () => { insertComposer($('#paste-sheet-text').value); $('#paste-sheet').close(); setStatus('Pasted into composer; review before sending'); };
-composer.addEventListener('input', autoSizeComposer);
+composer.addEventListener('input', () => { saveDraft(); autoSizeComposer(); });
 composer.addEventListener('keydown', (event) => {
   if (!coarsePointer && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(true); }
 });

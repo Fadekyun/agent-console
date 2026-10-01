@@ -339,3 +339,20 @@ dialog::backdrop { background: rgb(0 0 0 / .58); } .dialog-form, dialog form { d
   .model-estimator { grid-template-columns: 1fr 1fr; }
   .model-estimator button { grid-column: 1 / -1; }
 }
+
+/* Keep terminal scroll gestures inside the iframe at either scroll boundary. */
+.terminal-page { overscroll-behavior: none; }
+.terminal-frame, #terminal, #terminal .xterm { min-height: 0; min-width: 0; }
+#terminal .xterm-viewport { overscroll-behavior: contain; }
+@media (max-width: 760px) {
+  .terminal-embedded .mode-switch button { min-height: 44px; }
+  .terminal-embedded .composer-actions button { min-height: 44px; }
+  .terminal-embedded .composer { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+}
+
+.terminal-embedded .terminal-controls .key-strip { display: flex; }
+.terminal-embedded .key-strip > button { display: none; }
+.terminal-embedded .key-strip > button:first-child,
+.terminal-embedded .key-strip > button:nth-child(3),
+.terminal-embedded .key-strip > #text-view,
+.terminal-embedded .key-strip > #load-brief { display: block; }

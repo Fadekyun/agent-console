@@ -1559,6 +1559,19 @@ class SessionManager:
                 integration_count = conn.execute(
                     "SELECT COUNT(*) FROM integration_requests WHERE admission_held=1"
                 ).fetchone()[0]
+            if parent_session_id:
+                with self.database.connect() as conn:
+                    parent_exists = conn.execute(
+                        "SELECT id FROM sessions WHERE id=?", (parent_session_id,)
+                    ).fetchone()
+                    child_count = conn.execute(
+                        "SELECT COUNT(*) FROM sessions WHERE parent_session_id=? "
+                        "AND status IN ('reserved','attached','detached')", (parent_session_id,)
+                    ).fetchone()[0]
+                if parent_exists is None:
+                    raise KeyError("parent session no longer exists")
+                if child_count >= self.settings.max_children_per_parent:
+                    raise RuntimeError(f"child-session limit reached ({self.settings.max_children_per_parent})")
             if ordinary_count + integration_count >= self.settings.max_managed_sessions:
                 raise RuntimeError(
                     f"managed-session limit reached ({self.settings.max_managed_sessions})"

@@ -79,6 +79,35 @@ class WebTests(unittest.TestCase):
             os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
         self.temp.cleanup()
 
+    def test_workbench_selection_and_current_link_validation(self) -> None:
+        with patch.dict(os.environ, {"AGENT_CONSOLE_UI": "workbench", "AGENT_CONSOLE_CURRENT_URL": "https://console.example/"}):
+            self.assertIn('workbench.js', self.client.get("/", headers=self.headers).text)
+            self.assertEqual(self.client.get("/api/interface", headers=self.headers).json()["current_url"], "https://console.example/")
+        with patch.dict(os.environ, {"AGENT_CONSOLE_CURRENT_URL": "javascript:alert(1)"}):
+            self.assertEqual(self.client.get("/api/interface", headers=self.headers).json()["current_url"], "")
+        self.assertEqual(self.client.get("/work").status_code, 403)
+        self.assertIn('app.js', self.client.get("/desktop", headers=self.headers).text)
+
+    def test_human_add_child_keeps_role_and_enforces_capacity(self) -> None:
+        parent = self.manager.create(tool="shell", profile="planner", name="human-parent")
+        endpoint = "/api/sessions/human-parent/children"
+        payload = {"tool": "shell", "profile": "coder", "task": "Explicit implementation task"}
+        self.assertEqual(self.client.post(endpoint, json=payload).status_code, 403)
+        response = self.client.post(endpoint, json={**payload, "name": "human-child"}, headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        child = response.json()
+        self.assertEqual(child["parent_session_id"], parent["id"])
+        self.assertEqual(child["profile"], "coder")
+        self.assertEqual(self.manager.inspect("human-parent")["profile"], "planner")
+        self.assertEqual(self.client.post(endpoint, json={**payload, "name": "human-child-2"}, headers=self.headers).status_code, 200)
+        limited = self.client.post(endpoint, json={**payload, "name": "human-child-3"}, headers=self.headers)
+        self.assertEqual(limited.status_code, 400)
+        self.assertIn("child-session limit", limited.json()["detail"])
+        # Automatic delegation still cannot escalate a planner to a coder.
+        denied = self.client.post("/api/sessions/human-parent/delegations", json=payload, headers=self.headers)
+        self.assertEqual(denied.status_code, 400)
+        self.assertIn("not allowed", denied.json()["detail"])
+
     def test_lifespan_keeps_live_wal_sidecars_for_guarded_inspection(self) -> None:
         from agent_console.inspection import InspectionUnavailable, read_session_snapshot
 

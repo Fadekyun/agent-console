@@ -19,7 +19,7 @@ from typing import Any
 
 import uvicorn.config
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
@@ -278,7 +278,47 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
 
     @app.get("/")
     async def dashboard(_: AuthContext = Depends(require_identity)) -> FileResponse:
-        return FileResponse(STATIC_ROOT / "index.html")
+        page = "workbench.html" if os.getenv("AGENT_CONSOLE_UI") == "workbench" else "index.html"
+        return FileResponse(STATIC_ROOT / page)
+
+    @app.get("/work")
+    async def workbench(_: AuthContext = Depends(require_identity)) -> FileResponse:
+        return FileResponse(STATIC_ROOT / "workbench.html")
+
+    def interface_links() -> dict[str, str]:
+        from urllib.parse import urlsplit
+        links = {"label": os.getenv("AGENT_CONSOLE_INSTANCE_LABEL", "Agent Console"),
+                 "workspace": str(session_manager.settings.workspace_root)}
+        for key in ("current", "staging"):
+            value = os.getenv(f"AGENT_CONSOLE_{key.upper()}_URL", "")
+            try:
+                parsed = urlsplit(value)
+                safe = parsed.scheme in {"http", "https"} and parsed.netloc and not parsed.username and not parsed.password
+            except ValueError:
+                safe = False
+            links[f"{key}_url"] = value if safe else ""
+        return links
+
+    @app.get("/api/interface")
+    async def interface(_: AuthContext = Depends(require_identity)) -> dict[str, str]:
+        return interface_links()
+
+    @app.get("/versions", response_class=HTMLResponse)
+    async def versions(_: AuthContext = Depends(require_identity)) -> str:
+        from html import escape
+        links = interface_links()
+        choices = "".join(
+            f'<p><a href="{escape(links[key + "_url"], quote=True)}">{label}</a></p>'
+            for key, label in (("current", "Current console"), ("staging", "New console · staging"))
+            if links[key + "_url"]
+        )
+        return ('<!doctype html><html lang="en"><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                '<title>Choose your Agent Console</title><style>'
+                'body{font:17px/1.6 system-ui;background:#f5f6f1;color:#20352b;max-width:600px;margin:12vh auto;padding:24px}'
+                'a{display:block;padding:20px;border:1px solid #dce2d9;border-radius:10px;color:#25583d;background:white}'
+                '</style><h1>Choose your console</h1>' + choices +
+                '<p>Both versions stay available. Each keeps its own sessions, files and settings.</p></html>')
 
     @app.get("/desktop")
     async def desktop(_: AuthContext = Depends(require_identity)) -> FileResponse:
@@ -591,6 +631,30 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             creator_surface="web",
             project_id=payload.project_id,
         )
+
+    @app.post("/api/sessions/{parent}/children")
+    async def add_child_session(
+        parent: str,
+        payload: CreateSessionRequest,
+        auth: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        # A human starts this session explicitly. Agent delegation continues to
+        # use its existing role restrictions and never gains this capability.
+        source = session_manager.inspect(parent)
+        if not source.get("managed") or source.get("execution_kind") == "integration-plan":
+            raise HTTPException(status_code=400, detail="Choose a managed interactive parent session")
+        result = session_manager.create(
+            **{**payload.model_dump(),
+               "repository": payload.repository or source.get("repository"),
+               "project_id": payload.project_id or source.get("project_id")},
+            parent_session_id=source["id"], creator_surface="web",
+        )
+        session_manager.database.audit(
+            "session.child_added", result["tmux_name"], "success",
+            actor=auth.actor, surface="web",
+            details={"parent": parent, "profile": payload.profile},
+        )
+        return result
 
     @app.post("/api/sessions/{parent}/delegations")
     async def create_delegation(

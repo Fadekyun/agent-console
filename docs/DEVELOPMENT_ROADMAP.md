@@ -64,3 +64,9 @@ This document tracks the planned and completed development work for Agent Consol
 - [ ] Plugin system
 
 - [x] #107 — Pi harness and Hermes CommandCode contexts, exact authenticated DeepSeek V4.1 Flash defaults, native profile/session prompt delivery, runtime secret references, and explicit unsupported enforcement reporting (v0.7.0).
+
+## Connected Work persistent staging (#90)
+
+- Implemented for trial: opt-in Work home, phone full-screen terminal, explicit manual child sessions, draft/reconnect fixes and independent version switching.
+- Deployment and verification contract: [STAGING_WORKBENCH.md](STAGING_WORKBENCH.md).
+- Follow-up: adaptive suggestions/scheduling, durable results/inbox, exact effective-skill provenance and separately approved migration/cutover. Current console remains available throughout.
