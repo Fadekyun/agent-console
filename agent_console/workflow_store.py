@@ -54,10 +54,15 @@ class WorkflowStore:
     def connect(self, *, write=False):
         self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
         db = sqlite3.connect(self.path, timeout=10)
+        self.path.chmod(0o600)
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA foreign_keys=ON')
         db.execute('PRAGMA busy_timeout=10000')
         try:
+            # Native result writers and web/dispatcher readers run concurrently.
+            # WAL lets a writer commit while another connection holds a snapshot,
+            # avoiding reader/writer cycles during live status polling.
+            db.execute('PRAGMA journal_mode=WAL')
             db.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
             yield db
             db.commit()

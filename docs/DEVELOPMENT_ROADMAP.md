@@ -1,5 +1,9 @@
 # Development Roadmap
 
+### 2026-10-02 — #140 live native completion hardening
+
+- Live acceptance exposed conflicting interactive completion instructions and companion DB contention. Native attempts now use runner-owned structured completion; WAL permits status reads during native result commits. Canonical results guide follows the same contract.
+
 ### 2026-10-02 — #140 reviewed native dispatch
 
 - Added bounded proposals and Add session review, suggestion-only defaults, explicit auto scopes/budgets, immutable preview hashes and capability-probed native Codex/Pro adapters.

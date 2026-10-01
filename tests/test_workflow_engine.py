@@ -59,7 +59,9 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
             self.engine.tick();step=self.engine.step(step_id)
             if step['attempts'] and step['attempts'][-1]['state'] in {'completed','failed','unknown'}:return step
             time.sleep(.1)
-        self.fail('attempt did not settle: '+json.dumps(self.engine.step(step_id)))
+        step=self.engine.step(step_id)
+        output=self.manager.tmux.capture(step['attempts'][-1]['name'])[0] if step['attempts'] else ''
+        self.fail('attempt did not settle: '+json.dumps(step)+'\n'+output[-4000:])
 
     def test_suggestions_do_not_launch_until_reviewed_and_retries_deduplicate(self):
         step=self.propose();self.assertEqual(self.propose()['id'],step['id']);self.engine.tick();self.assertFalse(self.calls.exists())
@@ -152,6 +154,8 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
         launch=self.settings.state_dir/'workflow-attempts'/done['attempts'][0]['id']/'launch.json'
         argv=json.loads(launch.read_text())['argv']
         self.assertEqual(argv[argv.index('--sandbox')+1],'read-only')
+        self.assertIn('The supervising runner owns result publication',' '.join(argv))
+        self.assertNotIn('To signal completion:',' '.join(argv))
 
     def test_lost_prepared_terminal_cannot_silently_retry(self):
         step=self.propose();self.accept(step);prepare=self.engine._prepare
@@ -167,6 +171,21 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
         self.assertEqual(current['attempts'][0]['state'],'unknown')
         self.assertFalse(self.calls.exists())
         with self.assertRaisesRegex(ValueError,'reconciled'):self.engine.retry(step['id'],actor='test')
+
+    def test_lost_prepared_runner_is_detected_even_when_shell_remains(self):
+        import signal
+        step=self.propose();self.accept(step);prepare=self.engine._prepare
+        def paused_prepare(attempt,session):
+            self.engine.control(self.root['id'],state='paused',actor='test');return prepare(attempt,session)
+        with patch.object(self.engine,'_prepare',side_effect=paused_prepare):self.engine.tick()
+        attempt=self.engine.step(step['id'])['attempts'][0]
+        path=self.settings.state_dir/'workflow-attempts'/attempt['id']/'runner-presence.json'
+        deadline=time.monotonic()+5
+        while not path.is_file() and time.monotonic()<deadline:time.sleep(.05)
+        handle=json.loads(path.read_text());os.kill(handle['pid'],signal.SIGKILL)
+        time.sleep(.2);self.engine.tick()
+        self.assertEqual(self.engine.step(step['id'])['attempts'][0]['state'],'unknown')
+        self.assertFalse(self.calls.exists())
 
     def test_budget_reached_does_not_silently_launch_replacement(self):
         policy={**DEFAULT_POLICY,'max_total':2}

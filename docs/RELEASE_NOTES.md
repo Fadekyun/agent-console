@@ -1,3 +1,10 @@
+## 0.14.1 — 2026-10-02 (staging, #140)
+
+- Impact: native attempts receive completion instructions matching their supervised structured-result contract. Concurrent result publication no longer blocks status readers through rollback-journal lock cycles.
+- Configuration/migration: companion workflow database uses WAL, with owner-only database/sidecars. Backups must use SQLite's backup API (or checkpoint while quiescent), not copy only the main file. Running session skill snapshots remain unchanged; new sessions receive the revised canonical results guide.
+- Verification: a reader-held snapshot now permits concurrent result commit; generated native instructions omit interactive completion requirements. Workflow, existing-session and authenticated API regressions plus repeated real staging launch/restart check.
+- Rollback: settle/stop native attempts, retain both databases and SQLite backup snapshots, then select the previous staging release. WAL is SQLite-compatible with earlier releases; preserve its sidecars until checkpointed. Current console is unaffected.
+
 ## 0.14.0 — 2026-10-02 (staging, #140)
 
 - Impact: Add session now proposes a bounded next step with purpose, output, role and required inputs. Preview and accept/edit/reject control dispatch; suggestions are the default. Reviewed auto envelopes bound repositories/actions/roles/harnesses/targets, concurrency, total attempts, depth and reruns. Native Codex/Pro tasks use durable receipts, immutable selected inputs, structured results and optional justified follow-ups. Input changes coalesce after the current attempt. Pause holds dispatch; Stop interrupts connected work while preserving history. Uncertain launches require explicit reconciliation. Selected files now resolve from the actual isolated worktree.

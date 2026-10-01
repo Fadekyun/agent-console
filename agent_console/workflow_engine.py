@@ -159,7 +159,8 @@ class WorkflowEngine:
             data['attempts']=[dict(r) for r in db.execute('SELECT * FROM workflow_attempts WHERE step_id=? ORDER BY generation',(step_id,))]
             for a in data['attempts']:
                 a['inputs']=json.loads(a.pop('inputs_json'));a.pop('config_json');a.pop('pid');a.pop('start_time');a.pop('pgid');a.pop('boot_id');a.pop('runner_pid');a.pop('runner_start');a.pop('runner_boot')
-                results=self.store.results(a['session_id'],limit=1);a['result']={key:results[0][key] for key in ('id','kind','outcome')} if results else None
+                result=db.execute('SELECT id,kind,outcome FROM results WHERE session_id=? ORDER BY version DESC LIMIT 1',(a['session_id'],)).fetchone()
+                a['result']=dict(result) if result else None
             return data
 
     def _error(self,step_id,error):
@@ -275,10 +276,16 @@ class WorkflowEngine:
                             self._attempt_state(attempt['id'],'unknown','Native startup was not acknowledged; reconcile before retry')
                         continue
                     if attempt['state']=='prepared':
+                        from .task_runner import _proc_start_time, _current_boot_id
+                        from datetime import datetime, timezone
                         session=self._owned_session(attempt)
-                        if not session or not session['running']:
+                        presence=self.manager.settings.state_dir/'workflow-attempts'/attempt['id']/'runner-presence.json'
+                        handle=json.loads(presence.read_text()) if presence.is_file() else None
+                        runner_lost=bool(handle and (not handle.get('start') or _proc_start_time(handle['pid'])!=handle['start'] or _current_boot_id()!=handle['boot']))
+                        missing_too_long=not handle and (datetime.now(timezone.utc)-datetime.fromisoformat(attempt['updated_at'])).total_seconds()>120
+                        if not session or not session['running'] or runner_lost or missing_too_long:
                             current=self._attempt(attempt['id'])
-                            if current['state']=='prepared':self._attempt_state(attempt['id'],'unknown','Prepared terminal disappeared before native startup; reconcile before retry')
+                            if current['state']=='prepared':self._attempt_state(attempt['id'],'unknown','Prepared runner disappeared or did not register before native startup; reconcile before retry')
                         continue
                     if attempt['state']=='running':
                         from .task_runner import process_identity_matches, _proc_start_time, _current_boot_id

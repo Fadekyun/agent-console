@@ -38,6 +38,18 @@ class ResultInboxTests(unittest.TestCase):
             results=list(pool.map(lambda n:self.publish(request_key=f'parallel-{n}'),range(12)))
         self.assertEqual(sorted(r['version'] for r in results),list(range(1,13)))
 
+    def test_native_writer_commits_while_status_reader_holds_snapshot(self):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with self.store.connect() as reader:
+                self.assertEqual(reader.execute('SELECT COUNT(*) FROM results').fetchone()[0],0)
+                future=pool.submit(self.publish)
+                result=future.result(timeout=2)
+                self.assertEqual(result['version'],1)
+                # The status reader keeps a consistent snapshot while another
+                # process commits the final result, then sees it on next read.
+                self.assertEqual(reader.execute('SELECT COUNT(*) FROM results').fetchone()[0],0)
+        self.assertEqual(len(self.store.results(self.session['id'])),1)
+
     def test_file_snapshot_is_immutable_and_integrity_checked(self):
         file=self.repo/'answer.txt';file.write_text('Exact candidate')
         result=self.publish(artifacts=[{'path':'answer.txt'}])
