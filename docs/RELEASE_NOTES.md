@@ -1,3 +1,10 @@
+## 0.20.1 — 2026-10-02 (staging, #90 / #140 / #6)
+
+- Impact: completes the staging acceptance record for Workbench, connected workflows and the skills control plane. No functional change after 0.20.0.
+- Configuration/migration: none. Current and staging remain independently accessible through the version chooser; no current-console cutover.
+- Verification: 81 final Workbench/workflow backend tests, 289 skills/session/API tests, 51 capability/CLI/delivery tests, all 42 Workbench browser scenarios and three focused Skills scenarios passed. Ten retained-catalog fixtures are intentionally skipped under the empty allowlist. Native readers, real staging terminals/handoffs, restart/reconciliation, rollback, all 40 database tables, and both HTTPS routes are covered by the linked audit. Physical-phone feedback remains part of cutover review.
+- Rollback: select 0.20.0 with all data retained. This patch changes documentation and version labels only. See `FINAL_STAGING_ACCEPTANCE.md` for evidence and limits.
+
 ## 0.20.0 — 2026-10-02 (staging, #6 / #90)
 
 - Impact: adds package validation and explicit profile-validation/unassignment CLI commands; Skills inspection exposes per-harness delivery diagnostics. Fixes Claude shared-snapshot delivery through its supported additional-directory argument, including legacy launcher upgrade on explicit restart.

@@ -1,3 +1,9 @@
+## Staging revamp completed — 2026-10-02 (#90 / #140 / #6)
+
+- Workbench, optional connected-session growth, results/release controls and the portable skills control plane are implemented and published together to the isolated staging console.
+- Final requirement mapping and verification are in [FINAL_STAGING_ACCEPTANCE.md](FINAL_STAGING_ACCEPTANCE.md). Earlier checkpoints below are historical and their remaining-work notes are superseded by that audit.
+- Current remains independently usable through the version chooser. Physical-phone feedback and a separately authorized current-console cutover remain follow-up review; missing provider accounts continue to explain setup requirements.
+
 ## Native skill matrix and final surfaces — 2026-10-02 (#6 / #90)
 
 - v0.20 records actual native discovery for every supported harness, including all seven rewritten guides. Claude's previously ineffective environment override is replaced by supported additional-directory delivery; explicit restart upgrades legacy launchers and retains native account configuration.

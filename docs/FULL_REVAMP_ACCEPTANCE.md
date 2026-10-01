@@ -12,7 +12,7 @@ Objective: finish issues #90, #140 and #6, update development documentation, pus
 - [x] Project/profile/harness/mechanical/attention/result/root filters with local preferences.
 - [x] Shared desktop/mobile state, keyboard navigation and pending/errors; terminal focus survives refresh.
 - [x] Real terminal matrix: embedded/expanded, wheel/touch, normal/alternate screen, output while reading, selection/copy/paste and denied clipboard, resize/keyboard/orientation, reconnect and multiple terminals.
-- [ ] Playwright acceptance scenarios from the issue plus real staging verification.
+- [x] Playwright acceptance scenarios from the issue plus real staging verification.
 
 ## #140 — connected workflows
 
@@ -42,11 +42,19 @@ Objective: finish issues #90, #140 and #6, update development documentation, pus
 
 ## Publication / deployment gates
 
-- [ ] Development roadmap and release notes reflect completed behavior, configuration, migrations, tests and rollback.
-- [ ] Source commits published to the staging/development branch; no current-console cutover.
-- [ ] Staging source identity matches published SHA; services and both version-switch routes verified.
-- [ ] Existing staging data and current service/configuration preserved; migrations/recovery/rollback exercised.
-- [ ] Requirement-by-requirement evidence attached here or in a linked final audit; no remaining required work.
+- [x] Development roadmap and release notes reflect completed behavior, configuration, migrations, tests and rollback.
+- [x] Source commits published to the staging/development branch; no current-console cutover.
+- [x] Staging source identity matches published SHA; services and both version-switch routes verified.
+- [x] Existing staging data and current service/configuration preserved; migrations/recovery/rollback exercised.
+- [x] Requirement-by-requirement evidence attached here or in a linked final audit; no remaining required work.
+
+## Final acceptance — 2026-10-02
+
+All three issues are implemented and published to staging. See
+[FINAL_STAGING_ACCEPTANCE.md](FINAL_STAGING_ACCEPTANCE.md) for the requirement
+mapping, final regression counts, actual native/live evidence and review limits.
+The checkpoints below are historical; their remaining-work notes are superseded
+by the final audit. Current-console cutover remains a separate user decision.
 
 ## Registry checkpoint — 2026-10-02
 
