@@ -109,6 +109,59 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
         with self.assertRaisesRegex(ValueError,'no verified native'):self.accept(step)
         self.assertEqual(self.engine.step(step['id'])['attempts'],[])
 
+    def test_preview_uses_creation_defaults_and_rejects_invalid_mode_before_acceptance(self):
+        step=self.propose()
+        preview=self.engine.preview(step['root_id'],step['config'])
+        prepared=self.manager.prepare_launch(tool='codex',profile='general',worktree=False,repository=str(self.workspace))
+        self.assertEqual(preview['launch_config'],prepared['config'])
+        self.assertEqual(preview['config']['agent_mode'],'auto')
+        for key,value in [('agent_mode','invalid-mode'),('reasoning_effort','invalid-effort')]:
+            bad=self.propose(key=key,**{key:value})
+            with self.assertRaises(ValueError):self.accept(bad)
+            self.assertEqual(self.engine.step(bad['id'])['attempts'],[])
+        self.assertFalse(self.calls.exists())
+
+    def test_parent_project_is_inherited_and_repository_mismatch_blocks_preview(self):
+        from agent_console.database import utc_now
+        with self.manager.database.connect() as db:
+            db.execute('INSERT INTO projects(id,name,repository,created_at,updated_at) VALUES(?,?,?,?,?)',
+                ('proj-fixture','Fixture',str(self.workspace),utc_now(),utc_now()))
+            db.execute('UPDATE sessions SET project_id=? WHERE id=?',('proj-fixture',self.root['id']))
+        step=self.propose()
+        preview=self.engine.preview(step['root_id'],step['config'])
+        self.assertEqual(preview['launch_config']['project_id'],'proj-fixture')
+        other=self.workspace/'other';other.mkdir()
+        bad=self.propose(key='other-repo',repository=str(other))
+        with self.assertRaisesRegex(ValueError,'does not match project repository'):self.accept(bad)
+        self.assertEqual(self.engine.step(bad['id'])['attempts'],[])
+
+    def test_configuration_change_during_admission_cannot_reach_native_task(self):
+        step=self.propose();self.accept(step);create=self.manager.create
+        def change_mode(**kwargs):
+            kwargs['agent_mode']='plan'
+            return create(**kwargs)
+        with patch.object(self.manager,'create',side_effect=change_mode):self.engine.tick()
+        current=self.engine.step(step['id'])
+        self.assertEqual(current['attempts'][0]['state'],'failed')
+        self.assertIn('Launch configuration changed',current['attempts'][0]['error'])
+        self.assertFalse(self.calls.exists())
+        self.assertFalse(self.manager.tmux.exists(current['attempts'][0]['name']))
+
+    def test_native_plan_and_read_actions_record_the_actual_narrowed_sandbox(self):
+        from agent_console.workbench_launch import LaunchCatalog
+        for key,config in [('plan-mode',{'agent_mode':'plan'}),('read-action',{'action':'read'})]:
+            step=self.propose(key=key,**config)
+            preview=self.engine.preview(step['root_id'],step['config'])
+            self.assertEqual(preview['native_permission_mode'],'read-only')
+            self.accept(step)
+            finished=self.finish(step['id'])
+            attempt=finished['attempts'][0]
+            self.assertEqual(attempt['state'],'completed',attempt)
+            receipt=LaunchCatalog(self.manager).configuration(attempt['session_id'])['latest']
+            manifest=json.loads((self.settings.state_dir/'workflow-attempts'/attempt['id']/'launch.json').read_text())
+            self.assertEqual(manifest['argv'][manifest['argv'].index('--sandbox')+1],'read-only')
+            self.assertEqual(receipt['permission_mode'],'read-only')
+
     def test_changed_role_requires_review_before_dispatch(self):
         step=self.propose();self.accept(step)
         (self.settings.profile_dir/'general.md').write_text('# Changed role instructions')

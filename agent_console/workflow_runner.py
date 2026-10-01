@@ -36,7 +36,8 @@ def prepare_launcher(manager,spec,attempt_id,session_id,name,profile):
     frozen=json.loads(attempt['config_json']);adapter=provider_adapter(frozen['config']['tool'],manager.auth)
     if not adapter.can_run_workflow_task:raise ValueError('native workflow adapter is unavailable')
     native=adapter.workflow_argv(spec.argv,schema=schema,output=output,
-        read_only=PROFILE_SCHEMA[profile]['read_write_capability']=='read_only' or frozen['config']['action']=='read')
+        read_only=PROFILE_SCHEMA[profile]['read_write_capability']=='read_only'
+            or frozen['config'].get('agent_mode')=='plan' or frozen['config']['action']=='read')
     settings={key:str(value) if isinstance(value,Path) else value for key,value in asdict(manager.settings).items()}
     manifest=directory/'launch.json';manifest.write_text(json.dumps({'settings':settings,'argv':native,'output':str(output),'attempt_id':attempt_id}));manifest.chmod(0o600)
     source=str(Path(__file__).resolve().parent.parent)

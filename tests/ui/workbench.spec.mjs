@@ -20,7 +20,7 @@ async function fixture(page) {
       const data=req.postDataJSON();requests.push(data.config);const step={...data,id:'step-fixture',root_id:'root',owner_id:'root',decision:'proposed',version:1,attempts:[]};steps.push(step);body=step;
     }
     else if(path.endsWith('/workflow'))body={root_id:'root',steps,policy:{state:'running',version:0,policy:{mode:'suggestions',repositories:[],actions:[],roles:[],harnesses:[],targets:[],max_concurrent:2,max_total:4,max_depth:2,max_reruns:3}},graph:{}};
-    else if(path==='/api/workflow/steps/step-fixture/preview')body={hash:'c'.repeat(64),config:{...steps[0].config,auth_context:'default'},skills:[],adapter:{version:'fixture'}};
+    else if(path==='/api/workflow/steps/step-fixture/preview')body={hash:'c'.repeat(64),config:{...steps[0].config,auth_context:'default'},skills:[],adapter:{version:'fixture'},native_permission_mode:'read-only'};
     else if(path==='/api/workflow/steps/step-fixture/review'){
       steps[0].decision=req.postDataJSON().decision;steps[0].version++;
       if(steps[0].decision==='accepted'){
@@ -174,6 +174,7 @@ test('work, manual child, drafts and mobile terminal use the real components',as
   await expect(page.getByText(task,{exact:true})).toBeVisible();
   await page.getByText('Task & configuration',{exact:true}).click();
   await page.getByRole('button',{name:'Preview launch',exact:true}).click();
+  await expect(page.getByText('Native permissions: read-only',{exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Accept next step',exact:true}).click();
   await page.getByRole('button',{name:'Open session',exact:true}).click();
   await expect(page.locator('#session-title')).toHaveText('session-two');

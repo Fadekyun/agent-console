@@ -1723,6 +1723,12 @@ class SessionManager:
             if _workflow_attempt:
                 from .workflow_runner import prepare_launcher
                 spec=prepare_launcher(self,spec,_workflow_attempt,session_id,name,profile)
+                # The native task adapter may narrow interactive permissions.
+                # Record the sandbox in the actual prepared native argv rather
+                # than presenting the interactive-mode default as its sandbox.
+                native_manifest=self.settings.state_dir/'workflow-attempts'/_workflow_attempt/'launch.json'
+                native_argv=json.loads(native_manifest.read_text())['argv']
+                launch_view['permission_mode']=native_argv[native_argv.index('--sandbox')+1]
 
             launcher_created = True
             launcher = self._write_launcher(

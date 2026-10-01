@@ -8,10 +8,10 @@ from pathlib import Path
 import time
 
 from .database import utc_now
-from .profiles import PROFILE_SCHEMA, profile_text, validate_profile_capability
+from .profiles import PROFILE_SCHEMA, validate_profile_capability
 from .providers import provider_adapter
 from .skill_registry import SkillRegistry, read_deliveries
-from .skills import _resolve_canonical_root, resolve_session_skills
+from .skills import _resolve_canonical_root
 from .validation import contained_path, validate_profile, validate_tool
 from .workflow_service import WorkflowService
 from .workflow_store import bounded_text, canonical, identifier
@@ -87,6 +87,8 @@ class WorkflowEngine:
             if key!='worktree' and value is not None and not isinstance(value,str):raise ValueError('launch configuration values must be text')
         parent=self.svc.session(root)
         data={key:value for key,value in config.items() if value is not None};data.setdefault('tool',parent['tool']);data.setdefault('profile',parent['profile'])
+        if 'project_id' not in config and parent.get('project_id'):
+            data['project_id']=parent['project_id']
         data.setdefault('repository',parent.get('repository') or str(self.manager.settings.workspace_root))
         data['repository']=str(contained_path(Path(data['repository']),self.manager.settings.workspace_root))
         validate_tool(data['tool']);validate_profile(data['profile'])
@@ -108,16 +110,20 @@ class WorkflowEngine:
         if not adapter.can_run_workflow_task:raise ValueError('setup required: this harness has no verified native workflow input adapter')
         adapter_info=adapter.workflow_info()
         if not adapter_info['supported']:raise ValueError('setup required: '+adapter_info['reason'])
-        context=adapter.availability(config.get('auth_context'))
-        if context['status']!='ready':raise ValueError('setup required: '+str(context.get('reason') or context['status']))
-        config['auth_context']=context['name']
-        selected=resolve_session_skills(self.manager.database,config['profile'],config['tool'],shared_allowlist=self.manager.settings.shared_skills,repository=config['repository'])
-        if not selected['validation']['valid']:raise ValueError('; '.join(selected['validation']['issues']))
-        if selected['validation']['effective'] and not adapter.can_isolate_skills:raise ValueError('setup required: selected skills cannot be isolated')
+        # Approval must validate the configuration that creation actually uses,
+        # including project repository, model/mode and current skill policy.
+        prepared=self.manager.prepare_launch(**{k:v for k,v in config.items() if k not in {'action','target'}})
+        launch_config=prepared['config']
+        config={**{k:v for k,v in launch_config.items() if k in CONFIG_KEYS},
+                'action':config['action'],'target':config['target']}
+        selected=prepared['skills']
         registry=SkillRegistry(_resolve_canonical_root(),self.manager.database.path.parent)
         skills=sorted([{'name':s['name'],'hash':registry.inspect(s['name'])['hash']} for s in selected['materialized']],key=lambda s:s['name'])
-        role_hash=hashlib.sha256(profile_text(self.manager.settings.profile_dir,config['profile']).strip().encode()).hexdigest()
-        value={'config':config,'skills':skills,'adapter':adapter_info,'profile_hash':role_hash}
+        role_hash=hashlib.sha256(prepared['profile_content'].encode()).hexdigest()
+        native_permission_mode='read-only' if (PROFILE_SCHEMA[config['profile']]['read_write_capability']=='read_only'
+            or config.get('agent_mode')=='plan' or config['action']=='read') else 'workspace-write'
+        value={'config':config,'launch_config':launch_config,'native_permission_mode':native_permission_mode,
+               'skills':skills,'adapter':adapter_info,'profile_hash':role_hash}
         return {**value,'hash':hashlib.sha256(canonical(value).encode()).hexdigest()}
 
     def propose(self,identity,*,task,reason,expected_output,config,dependencies,request_key,actor):
@@ -374,7 +380,7 @@ class WorkflowEngine:
         frozen=json.loads(attempt['config_json']);step=self.step(attempt['step_id'])
         if self.policy(step['root_id'])['state']!='running':return
         self._attempt_state(attempt['id'],'creating')
-        config={k:v for k,v in frozen['config'].items() if k not in {'action','target'}}
+        config=frozen.get('launch_config') or {k:v for k,v in frozen['config'].items() if k not in {'action','target'}}
         with self.store.connect() as db:parent=self.graph._native(db,step['owner_id'])
         if parent.startswith('step-'):parent=step['root_id']
         try:
@@ -395,6 +401,10 @@ class WorkflowEngine:
         receipt=LaunchCatalog(self.manager).configuration(session['id'])['latest']
         if not receipt or not frozen.get('profile_hash') or receipt['profile_hash']!=frozen['profile_hash']:
             self._attempt_state(attempt['id'],'failed','Role instructions changed during launch; review again');self.retire(attempt);return
+        if frozen.get('launch_config') and receipt['config']!=frozen['launch_config']:
+            self._attempt_state(attempt['id'],'failed','Launch configuration changed during admission; review again');self.retire(attempt);return
+        if frozen.get('native_permission_mode') and receipt['permission_mode']!=frozen['native_permission_mode']:
+            self._attempt_state(attempt['id'],'failed','Native permissions changed during admission; review again');self.retire(attempt);return
         actual=sorted([{'name':s['name'],'hash':s['hash']} for s in (delivery.get('latest') or {}).get('skills',[])],key=lambda s:s['name'])
         if actual!=frozen['skills']:
             self._attempt_state(attempt['id'],'failed','Skill content changed during launch; review again');self.retire(attempt);return

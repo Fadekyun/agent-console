@@ -29,6 +29,8 @@ export function setupWorkflow({api,el,message,editStep,openSession}) {
           actions.append(action('Preview launch',async()=>{
             const preview=await api(`/api/workflow/steps/${step.id}/preview`,{});
             previewBox.replaceChildren(el('p',`${preview.config.profile} using ${preview.config.tool}/${preview.config.auth_context} · ${preview.adapter?.version||'native adapter'} · ${preview.config.worktree?'isolated worktree':'existing repository'}`,'small'));
+            if(preview.native_permission_mode)previewBox.append(el('p',`Native permissions: ${preview.native_permission_mode}`,'small'));
+            previewBox.append(el('p',preview.config.model?`Model: ${preview.config.model}`:'Model: harness default (not pinned)','small muted'));
             if(preview.profile_hash)previewBox.append(el('p',`Role revision · ${preview.profile_hash.slice(0,12)}`,'small muted'));
             for(const skill of preview.skills)previewBox.append(el('p',`${skill.name} · ${skill.hash.slice(0,12)}`,'small muted'));
             if(!preview.skills.length)previewBox.append(el('p','No Console-selected skills.','small muted'));

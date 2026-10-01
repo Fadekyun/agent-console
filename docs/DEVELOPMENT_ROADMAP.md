@@ -1,3 +1,8 @@
+## Shared launch validation — 2026-10-02 (#90 / #140)
+
+- v0.19.2 uses the creation validator for reviewed connected steps and compares the admitted configuration before native startup. Inherited projects and actual narrowed native sandbox are now part of the review/receipt contract.
+- Live audit also removed the maintenance guide's default General assignment to restore ordinary Shell launches; Orchestrator retains it. Final provider and Workbench acceptance remain in the full audit.
+
 ## Live Git import verification — 2026-10-02 (#6)
 
 - v0.19.1 corrects generated-default provenance labels exposed by live staging inspection. The actual pinned fetch remained unreviewed and unactivated; its exact commit/hash and the updated guide's actual session copy were verified.

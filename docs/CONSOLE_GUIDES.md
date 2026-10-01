@@ -10,9 +10,11 @@ The seven guides are maintained in the canonical skills workspace on n100, `/hom
 | agent-console-coordination | 2026-10-02.1 | orchestrator, planner |
 | agent-console-verification | 2026-10-02.1 | reviewer, verifier |
 | agent-console-release | 2026-10-02.1 | release |
-| agent-console-skills | 2026-10-02.2 | general, orchestrator |
+| agent-console-skills | 2026-10-02.2 | orchestrator; General remains compatible for an explicit assignment |
 
 Role compatibility is checked before launch. A guide does not expand the profile's permissions. For example, coordination guidance lets a planner propose useful steps without authorizing implementation. Existing unrelated infrastructure `agent-console-ops` guidance is preserved.
+
+The initial General assignment of the maintenance guide was removed after live verification showed it blocked plain Shell sessions, which do not isolate agent skills. A fresh Shell/General session now launches normally; the guide remains assigned to Orchestrator. Existing session copies are unchanged, and the earlier General delivery proof remains historical evidence.
 
 ## Connected behavior
 

@@ -1,3 +1,10 @@
+## 0.19.2 — 2026-10-02 (staging, #90 / #140)
+
+- Impact: connected-step preview shares normal session creation validation, inherits its parent project, and binds the resolved configuration/native sandbox before admission. Plan/read actions stay read-only; Configuration reports the actual task sandbox. Removes the default staging General maintenance-guide assignment that blocked plain Shell.
+- Configuration/migration: no schema change. Previously queued approvals need a fresh edit/preview/review; running attempts retain their contract. Guide remains assigned to Orchestrator and compatible with explicit General assignment.
+- Verification: 62 workflow/release tests, 73 authenticated API tests, responsive Add session scenarios, project/mode/admission-drift checks and native argv/receipt sandbox equality. Live Shell launch/stop verifies the assignment correction.
+- Rollback: pause/settle active workflows, then select 0.19.1 with state retained. Old code does not enforce the expanded approval/configuration check or Plan-mode sandbox correction. Preserve current-console separation.
+
 ## 0.19.1 — 2026-10-02 (staging, #6)
 
 - Impact: package-declared provenance appears only when the package explicitly supplies it. Live inspection found generated staging paths/hash defaults mislabeled as declared claims; fetched provenance and bytes were unaffected.
