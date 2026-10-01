@@ -96,6 +96,17 @@ class GitSkillTests(unittest.TestCase):
         self.assertEqual(delivered['provenance']['content_hash'], record['hash'])
         self.assertNotEqual(delivered['hash'], record['hash'])
 
+    def test_generated_defaults_are_not_presented_as_package_declared_provenance(self):
+        (self.skill / 'SKILL.md').write_text('---\nname: portable-guide\ndescription: No provenance claims.\n---\nInspect the input.\n')
+        self.commit()
+        with patch.object(GitReader, 'fetch', lambda reader, *_: self.copy_current(reader)):
+            record = self.stage()
+        package = self.registry.inspect_import(record['id'])['package']
+        self.assertIsNone(package['declared_source'])
+        self.assertIsNone(package['declared_revision'])
+        self.assertEqual(package['source'], 'https://example.invalid/guides.git')
+        self.assertEqual(package['revision'], self.sha)
+
     def test_missing_directory_and_unsafe_links_never_activate(self):
         with self.assertRaises(ValueError):
             self.registry.stage_git('https://example.invalid/repo', subdirectory='missing')

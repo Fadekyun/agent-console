@@ -1,3 +1,7 @@
+## Live Git import verification — 2026-10-02 (#6)
+
+- v0.19.1 corrects generated-default provenance labels exposed by live staging inspection. The actual pinned fetch remained unreviewed and unactivated; its exact commit/hash and the updated guide's actual session copy were verified.
+
 ## Git skill provenance — 2026-10-02 (#6)
 
 - v0.19 stages a selected Git HTTPS tree at an exact resolved commit, without hooks, checkout filters or installers. UI/CLI inspect before activation; fetched origin survives review and delivery, and local edits do not masquerade as the original commit.

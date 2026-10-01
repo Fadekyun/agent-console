@@ -94,6 +94,7 @@ def inspect_package(directory: Path, *, name: str | None = None) -> dict[str, An
     issues: list[str] = []
     warnings: list[str] = []
     result: dict[str, Any] = {"name": name, "hash": None, "revision": None, "source": str(directory), "scope": "global", "risk": "low", "approval": "allow", "compatible_harnesses": [], "compatible_profiles": [], "required_binaries": [], "required_services": [], "scripts": [], "description": "", "native_id": name, "issues": issues, "warnings": warnings, "files": [], "manifest_version": "legacy"}
+    result.update(declared_source=None, declared_revision=None)
     if not ID.fullmatch(name):
         issues.append("invalid skill id")
         return result
@@ -179,6 +180,8 @@ def inspect_package(directory: Path, *, name: str | None = None) -> dict[str, An
                     if parsed.username or parsed.password or parsed.query or parsed.fragment:
                         raise ValueError("source provenance cannot contain credentials or query parameters")
                 result[field] = policy[field]
+                if field in {'source', 'revision'}:
+                    result['declared_' + field] = policy[field]
         result["revision"] = result["revision"] or result["hash"][:12]
         for field, choices, default in (("scope", {"global", "project"}, "global"), ("risk", {"low", "elevated"}, "elevated" if meta.get("kind") == "superpower" else "low"), ("approval", {"allow", "ask", "deny"}, "ask" if meta.get("requires_approval") is True or str(meta.get("requires_approval", "")).lower() in {"true", "yes", "1"} else "allow")):
             value = policy.get(field, default)
@@ -332,8 +335,6 @@ class SkillRegistry:
         if provenance:
             package['provenance'] = provenance
             package['provenance_content_matches'] = package['hash'] == record['hash']
-            package['declared_source'] = package['source']
-            package['declared_revision'] = package['revision']
             package['source'] = provenance['source']
             package['revision'] = provenance.get('revision', package['revision'])
         return package

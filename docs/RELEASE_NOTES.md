@@ -1,3 +1,10 @@
+## 0.19.1 — 2026-10-02 (staging, #6)
+
+- Impact: package-declared provenance appears only when the package explicitly supplies it. Live inspection found generated staging paths/hash defaults mislabeled as declared claims; fetched provenance and bytes were unaffected.
+- Configuration/migration: none. The read-time correction also applies to existing staged imports.
+- Verification: native live staged import, updated canonical guide delivery, desktop/phone inspection, and regression coverage for packages without declared provenance.
+- Rollback: select 0.19.0 with the same state; its misleading declaration labels return. Current console remains unchanged.
+
 ## 0.19.0 — 2026-10-02 (staging, #6)
 
 - Impact: UI and CLI stage an anonymous HTTPS Git package at a resolved commit without checkout/installers. Inspection and delivery distinguish fetched provenance, package declarations and later local edits; activation remains separate and hash-bound.
