@@ -1,3 +1,11 @@
+## 0.12.0 (unreleased staging)
+
+- Date: 2026-10-02. Issue: #140.
+- Impact: one-session ready/final results, immutable selected file/commit artifacts, source/version-attributed durable inbox, separate delivery/consumption acknowledgments, capability-bound native reporting, and integrated desktop/phone result/handoff controls.
+- Configuration/migration: companion `connected-work.sqlite3` schema 1 plus `result-objects/`; no sessions schema change. Native launchers export the reporting URL; older sessions need an explicit restart to adopt it. Add the canonical `agent-console-results` guide to staging's shared allowlist. See [RESULTS_AND_HANDOFFS.md](RESULTS_AND_HANDOFFS.md).
+- Verification: store concurrency/idempotency/snapshot/recovery tests, native reporting and authenticated two-session API tests, responsive workbench result/inbox scenarios, and a live staging handoff before completion of this increment.
+- Rollback: select previous staging source and preserve the companion database/result objects and original skills/config backup. Earlier sources do not expose result/inbox records; return to this release to inspect them. Current console stays separate.
+
 ## 0.11.1 (unreleased staging)
 
 - Date: 2026-10-02. Issue: #90.

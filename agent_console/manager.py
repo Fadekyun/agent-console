@@ -1196,6 +1196,8 @@ class SessionManager:
             )
         nav_items.extend([
             "- Run `agentctl session tree` to find peer sessions.",
+            "- Read explicit handoffs with `agentctl workflow inbox --current`. Acknowledge delivered then consumed inputs with `agentctl workflow ack INPUT_ID --current --state delivered|consumed`. These commands record Console reporting metadata, not repository changes.",
+            "- Publish explicit progress/final results with `agentctl workflow publish --current --kind ready|final --outcome pass|fail|blocked --summary TEXT --request-key UNIQUE_KEY`; add --check TEXT, --file PATH or --commit SHA for actual checks and selected artifacts. Attention status and terminal text do not publish results automatically.",
             "- Run `agentctl session review NAME` for bounded, read-only peer output.",
             session_identity,
             wait_proto,
@@ -1298,6 +1300,10 @@ class SessionManager:
             "AGENT_CONSOLE_PROJECT_NAME": project_name or "",
             "AGENT_CONSOLE_PROJECT_REPOSITORY": project_repository or "",
         }
+        reporting_host = self.settings.service_bind
+        if reporting_host in {"0.0.0.0", "::"}: reporting_host = "127.0.0.1"
+        if ":" in reporting_host: reporting_host = f"[{reporting_host}]"
+        console_environment["AGENT_CONSOLE_REPORTING_URL"] = f"http://{reporting_host}:{self.settings.service_port}"
         if evidence_capability is not None:
             console_environment["AGENT_CONSOLE_EVIDENCE_CAPABILITY"] = evidence_capability
         merged: dict[str, str] = dict(spec.environment)

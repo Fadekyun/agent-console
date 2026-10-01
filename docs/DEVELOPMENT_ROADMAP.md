@@ -4,6 +4,8 @@ This document tracks the planned and completed development work for Agent Consol
 
 ## Integration in progress
 
+- [ ] **Connected results and inbox** (2026-10-02, #140) — explicit ready/final reports, immutable selected artifacts, sequenced durable handoffs, delivered/consumed acknowledgments, capability-bound agent reporting and shared UI/CLI implemented. Native reporting avoids direct agent writes to Console state. Canonical guide and live staging proof ship with this increment; the remaining scheduler/graph contract stays open.
+
 - [x] **Staging navigation cleanup** (2026-10-02, #90) — route errors clear on recovery; phone navigation has a direct Skills tab; skill cards and policy actions are shortened for the selected policy. Verified in desktop and phone browser scenarios.
 
 - [ ] **Skills v2 registry and delivery** (2026-10-02, #6) — staged implementation: real YAML/namespaced policy, hash-bound trust and approvals, scoped resolution, immutable session copies, durable delivery history, workbench library/launch preview and CLI. Source validation is tracked in [SKILL_REGISTRY.md](SKILL_REGISTRY.md). The full epic remains open for remaining harness discovery and canonical guide migration; see [full revamp acceptance](FULL_REVAMP_ACCEPTANCE.md).

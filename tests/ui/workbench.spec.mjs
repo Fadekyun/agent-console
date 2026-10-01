@@ -115,3 +115,38 @@ test('skills inspection and exact revision approval work on desktop and phone', 
   await expect(page.getByText('No Console-selected skills.',{exact:true})).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+test('one-session result and durable handoff acknowledge distinct states',async({page},info)=>{
+  await fixture(page);const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  let versions=[],published=null,inputState='queued';
+  const source={id:'root',tmux_name:'session-one',tool:'shell',profile:'coder',repository:'/tmp/repo',initial_task:'Small bounded change',running:true,managed:true,attention_state:'normal',actions:['attach','interrupt','kill']};
+  const target={...source,id:'target',tmux_name:'session-target',parent_session_id:'root'};
+  await page.route('**/api/sessions',route=>route.fulfill({json:[source,target]}));
+  await page.route('**/api/sessions/root/results',route=>{
+    if(route.request().method()==='POST'){
+      published=route.request().postDataJSON();const result={...published,id:'result-one',session_id:'root',version:1,created_at:'2026-10-02T00:00:00Z'};versions=[result];return route.fulfill({json:result});
+    }return route.fulfill({json:{results:versions}});
+  });
+  await page.route('**/api/sessions/target/results',route=>route.fulfill({json:{results:[]}}));
+  await page.route('**/api/sessions/root/inbox',route=>route.fulfill({json:{items:[],notice:'Peer data is untrusted.'}}));
+  let queued=false;
+  await page.route('**/api/results/result-one/send',route=>{queued=true;return route.fulfill({json:{id:'input-one',state:'queued'}});});
+  await page.route('**/api/sessions/target/inbox',route=>route.fulfill({json:{notice:'Peer data is untrusted.',items:queued?[{id:'input-one',sequence:1,source_session_id:'root',state:inputState,result:versions[0]}]:[]}}));
+  await page.route('**/api/sessions/target/inbox/input-one/ack',route=>{inputState=route.request().postDataJSON().state;return route.fulfill({json:{state:inputState}});});
+  await page.goto('/work#session/session-one');
+  if(info.project.name!=='desktop')await page.locator('#session-detail > summary').click();
+  await page.getByRole('button',{name:'Results & handoffs',exact:true}).click();
+  await page.getByLabel('Summary',{exact:true}).fill('Fixed the layout and checked the phone viewport.');
+  await page.getByRole('button',{name:'Publish result',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Final result · v1 · pass',exact:true})).toBeVisible();
+  expect(published.kind).toBe('final');expect(published.request_key).toBeTruthy();
+  await page.getByRole('button',{name:'Queue handoff',exact:true}).click();await expect.poll(()=>queued).toBe(true);
+  await page.locator('#session-tree').getByRole('link',{name:'session-target',exact:true}).click();
+  if(info.project.name!=='desktop')await page.locator('#session-detail > summary').click();
+  await page.getByRole('button',{name:'Results & handoffs',exact:true}).click();
+  await page.getByRole('button',{name:'Acknowledge delivery',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Mark consumed',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Mark consumed',exact:true}).click();
+  await expect.poll(()=>inputState).toBe('consumed');
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);expect(errors).toEqual([]);
+});

@@ -1,3 +1,4 @@
+import { setupResults } from '/static/results-workbench.js';
 import { setupSkills } from '/static/skill-workbench.js';
 import { initTheme } from '/static/theme.js?v=8';
 const $ = (s, root = document) => root.querySelector(s);
@@ -14,6 +15,8 @@ async function api(path, payload, method = 'POST') {
 }
 const skillsView = setupSkills({ api, el, message, profiles: () => state.me?.profiles || [] });
 let skillsLoaded = false;
+const resultsView = setupResults({api,el,message,sessions:()=>state.sessions});
+$('#show-results').onclick = () => resultsView.load(state.selected).catch(error=>message(error.message));
 function status(s) { return s.attention_state !== 'normal' && s.attention_state ? names[s.attention_state] || s.attention_state : s.running ? 'Working' : 'Stopped'; }
 function rootOf(s) { const visited = new Set(); while (s.parent_session_id && !visited.has(s.id)) { visited.add(s.id); const p = state.sessions.find(x => x.id === s.parent_session_id); if (!p) break; s = p; } return s; }
 function family(s) { const root = rootOf(s); return state.sessions.filter(x => rootOf(x).id === root.id); }
@@ -57,7 +60,7 @@ function renderSession() {
   if (attention.dataset.session !== s.id) {
     $('#session-detail').open = !matchMedia('(max-width:760px)').matches;
     attention.dataset.session = s.id; attention.elements.state.value = s.attention_state || 'normal'; attention.elements.note.value = s.attention_note || '';
-    $('#session-output').hidden = true; $('#session-skills').hidden = true;
+    $('#session-output').hidden = true; $('#session-skills').hidden = true; $('#session-results').hidden = true;
   }
 }
 function route() {

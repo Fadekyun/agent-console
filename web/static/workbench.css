@@ -15,3 +15,7 @@
 #skills-content .actions { flex-wrap:wrap; }
 #skills-content > .panel > input { width:100%; margin-bottom:.75rem; }
 #skills-content .panel > button { margin:.25rem; }
+
+#session-results .panel { margin:12px 0; overflow-wrap:anywhere; }
+#session-results label { margin:12px 0; }
+#session-results form > details { margin:12px 0; }

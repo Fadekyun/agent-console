@@ -740,6 +740,10 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     async def restart(name: str, _: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         return session_manager.restart(validate_session_name(name))
 
+    from .workflow_api import workflow_routes, agent_workflow_routes
+    app.include_router(agent_workflow_routes(session_manager))
+    app.include_router(workflow_routes(session_manager, require_identity))
+
     from .skill_api import skill_routes
     app.include_router(skill_routes(session_manager, require_identity))
 

@@ -297,6 +297,8 @@ def parser() -> argparse.ArgumentParser:
     deploy_rollback.add_argument("--yes", action="store_true")
     deploy_commands.add_parser("doctor")
 
+    from .workflow_cli import add_commands as add_workflow_commands
+    add_workflow_commands(commands)
     commands.add_parser("doctor")
     return root
 
@@ -318,6 +320,10 @@ def main(argv: list[str] | None = None) -> int:
                 print("--- peer terminal output ends ---")
             else:
                 emit(result)
+            return 0
+        if args.command == "workflow":
+            from .workflow_cli import run as run_workflow_command
+            emit(run_workflow_command(args))
             return 0
         if args.command == "skills":
             from .skill_cli import COMMANDS, run as run_skill_command

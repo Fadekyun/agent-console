@@ -132,6 +132,64 @@ class WebTests(unittest.TestCase):
         self.manager.kill("receipt-fixture")
         self.assertEqual(self.client.get(route, headers=self.headers).json(), before.json())
 
+    def test_versioned_result_and_two_session_handoff(self) -> None:
+        source=self.manager.create(tool="shell",profile="general",name="result-source")
+        target=self.manager.create(tool="shell",profile="general",name="result-target")
+        file=self.workspace / "candidate.txt";file.write_text("Selected revision")
+        route=f"/api/sessions/{source['id']}/results"
+        payload={"kind":"ready","outcome":"pass","summary":"Candidate ready","checks":["Targeted test passed"],"artifacts":[{"path":"candidate.txt"}],"request_key":"ready-1"}
+        self.assertEqual(self.client.post(route,json=payload).status_code,403)
+        response=self.client.post(route,json=payload,headers=self.headers)
+        self.assertEqual(response.status_code,200,response.text)
+        result=response.json()
+        self.assertEqual(self.client.post(route,json=payload,headers=self.headers).json()['id'],result['id'])
+        file.write_text("Later edit")
+        artifact=self.client.get(f"/api/results/{result['id']}/artifacts/0",headers=self.headers)
+        self.assertEqual(artifact.content,b"Selected revision")
+        sent=self.client.post(f"/api/results/{result['id']}/send",json={"target_session_id":target['id'],"request_key":"send-1"},headers=self.headers)
+        self.assertEqual(sent.status_code,200,sent.text)
+        item=sent.json();inbox=f"/api/sessions/{target['id']}/inbox"
+        self.assertEqual(self.client.get(inbox,headers=self.headers).json()['items'][0]['state'],'queued')
+        for state in ['delivered','consumed']:
+            ack=self.client.post(inbox+f"/{item['id']}/ack",json={"state":state},headers=self.headers)
+            self.assertEqual(ack.status_code,200,ack.text)
+            self.assertEqual(ack.json()['state'],state)
+        self.manager.rename('result-target','result-renamed')
+        self.assertEqual(self.client.get(inbox,headers=self.headers).json()['items'][0]['state'],'consumed')
+        self.manager.kill('result-source');self.manager.kill('result-renamed')
+        self.assertEqual(self.client.get(route,headers=self.headers).json()['results'][0]['id'],result['id'])
+
+    def test_workflow_agent_capability_cannot_impersonate_peer(self) -> None:
+        from agent_console.workflow_service import WorkflowService
+        source=self.manager.create(tool="shell",profile="general",name="cap-source")
+        target=self.manager.create(tool="shell",profile="general",name="cap-target")
+        cap='test-capability'
+        with self.manager.database.connect() as db:
+            db.execute('UPDATE sessions SET evidence_capability_hash=? WHERE id=?',(hashlib.sha256(cap.encode()).hexdigest(),source['id']))
+        service=WorkflowService(self.manager)
+        with patch.dict(os.environ,{'AGENT_CONSOLE_SESSION_ID':source['id'],'AGENT_CONSOLE_EVIDENCE_CAPABILITY':cap}):
+            self.assertEqual(service.current()['id'],source['id'])
+            with self.assertRaises(PermissionError):service.current(target['id'])
+        with patch.dict(os.environ,{'AGENT_CONSOLE_SESSION_ID':source['id'],'AGENT_CONSOLE_EVIDENCE_CAPABILITY':'wrong'}):
+            with self.assertRaises(PermissionError):service.current()
+
+    def test_agent_reporting_endpoint_is_capability_bound(self) -> None:
+        source=self.manager.create(tool="shell",profile="general",name="report-source")
+        other=self.manager.create(tool="shell",profile="general",name="report-other")
+        cap='reporting-fixture-capability'
+        with self.manager.database.connect() as db:
+            db.execute('UPDATE sessions SET evidence_capability_hash=? WHERE id=?',(hashlib.sha256(cap.encode()).hexdigest(),source['id']))
+        headers={'Authorization':'Bearer '+cap,'X-Agent-Console-Session':source['id']}
+        command={'command':'publish','payload':{'kind':'final','outcome':'pass','summary':'Native reporting works','request_key':'native-1'}}
+        self.assertEqual(self.client.post('/api/agent-workflow',json=command).status_code,403)
+        self.assertEqual(self.client.post('/api/agent-workflow',json=command,headers={**headers,'X-Agent-Console-Session':other['id']}).status_code,403)
+        response=self.client.post('/api/agent-workflow',json=command,headers=headers)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['session_id'],source['id'])
+        self.assertNotIn(cap,response.text)
+        ack=self.client.post('/api/agent-workflow',json={'command':'ack','payload':{'item_id':'wrong','state':'delivered'}},headers=headers)
+        self.assertEqual(ack.status_code,400)
+
     def test_terminal_history_controls_do_not_send_program_input(self) -> None:
         import time
         self.manager.create(tool="shell", profile="general", name="scroll-history")
