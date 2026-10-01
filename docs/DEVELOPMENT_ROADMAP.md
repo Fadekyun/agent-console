@@ -1,5 +1,9 @@
 # Development Roadmap
 
+### 2026-10-02 — #90 lossless configuration receipt IDs
+
+- Recovery checks exposed JavaScript rounding of nanosecond receipt IDs. APIs now use decimal strings without rewriting historical records; full receipt equality is verified across staging rollback.
+
 ### 2026-10-02 — #90 launch feedback cleanup
 
 - Real staging verification confirmed recipe execution, preserved dirty worktree and one attributed input. Clear save-only feedback once launching, and omit inapplicable model controls from Shell configuration.

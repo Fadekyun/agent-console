@@ -83,6 +83,10 @@ class LaunchCatalog:
             receipts = [json.loads(r[0]) for r in db.execute(
                 'SELECT receipt_json FROM launch_configurations WHERE session_id=? ORDER BY sequence',
                 (session['id'],))]
+        # Nanosecond ordering keys exceed JavaScript's safe integer range. Keep
+        # legacy stored JSON intact while exposing a lossless opaque identifier.
+        for receipt in receipts:
+            receipt['sequence'] = str(receipt['sequence'])
         known = {key: session.get(key) for key in CONFIG_KEYS if key != 'worktree'}
         known['worktree'] = bool(session.get('worktree'))
         return {'session_id': session['id'], 'session_name': session['tmux_name'],
@@ -159,7 +163,7 @@ class LaunchCatalog:
     def record(self, session_id, view, *, workspace, request_id=None):
         receipt = {key: value for key, value in view.items() if key not in {'name', 'task', 'hash'}}
         receipt.update({'workspace': str(workspace), 'request_id': request_id, 'created_at': utc_now(),
-                        'session_id': session_id, 'sequence': time.time_ns()})
+                        'session_id': session_id, 'sequence': str(time.time_ns())})
         with self.store.connect(write=True) as db:
             db.execute('INSERT INTO launch_configurations VALUES(?,?,?,?)',
                        (session_id, receipt['sequence'], receipt['created_at'], canonical(receipt)))

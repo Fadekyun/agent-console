@@ -1,3 +1,10 @@
+## 0.16.2 — 2026-10-02 (staging, #90)
+
+- Impact: configuration receipt sequence IDs round-trip through browsers without losing integer precision. Recovery verification found the old nanosecond integer was rounded by JavaScript; stored records were unchanged.
+- Configuration/migration: receipt APIs emit sequence as a decimal string, including legacy stored receipts; no database rewrite or schema change.
+- Verification: authenticated API asserts lossless string IDs, continuation/receipt regressions and live rollback/restoration compare the full receipt.
+- Rollback: select staging 0.16.1; newer stored string IDs remain readable, while earlier integer receipts regain the old browser precision limitation. Current console is unaffected.
+
 ## 0.16.1 — 2026-10-02 (staging, #90)
 
 - Impact: a successful recipe launch clears the earlier save-only notice. Shell configuration omits inapplicable model/account fields and worktree policy reads Yes/No.

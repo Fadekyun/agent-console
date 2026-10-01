@@ -52,6 +52,8 @@ class WebTests(unittest.TestCase):
         config = self.client.get(path,headers=self.headers).json()
         self.assertEqual(config['latest']['config']['tool'],'shell')
         self.assertEqual(config['latest']['request_id'],'api-recipe')
+        self.assertIsInstance(config['latest']['sequence'], str)
+        self.assertGreater(int(config['latest']['sequence']), 2**53)
         self.manager.kill(run.json()['name'])
         continuation = {'request':config['latest']['config']|{'task':'Continue fixture'},'source_session_id':identity}
         reviewed = self.client.post(endpoint+'/preview',json=continuation,headers=self.headers)
