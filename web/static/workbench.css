@@ -8,3 +8,4 @@
 #session-detail:not([open])>summary {margin-bottom:0;}
 
 #terminal-status{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:12px}.terminal-panel>header>div{flex-shrink:0}
+@media(max-width:760px){#session-view>.heading{display:block}#session-view>.heading h1{font-size:24px}#session-view>.heading .muted{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#session-view>.heading button{width:100%;margin-top:16px}.terminal-panel>header button{min-height:44px}}
