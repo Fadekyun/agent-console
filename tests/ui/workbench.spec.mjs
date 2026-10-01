@@ -269,6 +269,37 @@ test('skills inspection and exact revision approval work on desktop and phone', 
   expect(errors).toEqual([]);
 });
 
+test('Git skill import stages an exact provenance before separate activation', async({page}) => {
+  await fixture(page);
+  const sha='f'.repeat(40), hash='a'.repeat(64), source='https://example.invalid/skills.git';
+  const provenance={kind:'git',source,revision:sha,requested_revision:'main',subdirectory:'guides/portable-guide'};
+  const record={id:'import-git-fixture',name:'portable-guide',hash,status:'imported-unreviewed',provenance};
+  const item={name:'portable-guide',description:'Imported guide',hash,revision:sha,source,scope:'global',risk:'low',approval:'allow',compatible_profiles:[],compatible_harnesses:[],files:['SKILL.md'],required_services:[],issues:[],warnings:[],provenance,provenance_content_matches:true,declared_revision:'claimed-version',declared_source:'https://declared.invalid/repo'};
+  let submitted=null, activated=null;
+  await page.route('**/api/skill-registry',route=>route.fulfill({json:{entries:[],imports:submitted?[record]:[]}}));
+  await page.route('**/api/skill-registry/imports',route=>{submitted=route.request().postDataJSON();return route.fulfill({json:record});});
+  await page.route('**/api/skill-registry/imports/import-git-fixture',route=>route.fulfill({json:{...record,staged_path:'/state/imports/fixture',package:item}}));
+  await page.route('**/api/skill-registry/imports/import-git-fixture/activate',route=>{activated=route.request().postDataJSON();return route.fulfill({json:{hash}});});
+  await page.goto('/work');
+  await page.getByRole('link',{name:'Settings',exact:true}).click();
+  await page.getByRole('link',{name:'Manage skills',exact:true}).click();
+  await page.getByLabel('Skill import source').fill(source);
+  await page.getByText('Git revision and package directory',{exact:true}).click();
+  await page.getByLabel('Git revision',{exact:true}).fill('main');
+  await page.getByLabel('Git package directory').fill('guides/portable-guide');
+  await page.getByRole('button',{name:'Stage import',exact:true}).click();
+  await expect.poll(()=>submitted).toEqual({source,revision:'main',subdirectory:'guides/portable-guide'});
+  expect(activated).toBeNull();
+  await page.getByRole('button',{name:'Inspect staged revision'}).click();
+  await expect(page.getByText(sha,{exact:true})).toBeVisible();
+  await expect(page.getByText('Package-declared revision: claimed-version',{exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  expect(activated).toBeNull();
+  await page.getByRole('button',{name:'Review & activate this revision'}).click();
+  await expect.poll(()=>activated).toEqual({expected_hash:hash,decision:'reviewed',services_verified:false});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
 test('one-session result and durable handoff acknowledge distinct states',async({page},info)=>{
   await fixture(page);const errors=[];page.on('pageerror',e=>errors.push(e.message));
   let versions=[],published=null,inputState='queued';

@@ -10,7 +10,7 @@ The seven guides are maintained in the canonical skills workspace on n100, `/hom
 | agent-console-coordination | 2026-10-02.1 | orchestrator, planner |
 | agent-console-verification | 2026-10-02.1 | reviewer, verifier |
 | agent-console-release | 2026-10-02.1 | release |
-| agent-console-skills | 2026-10-02.1 | general, orchestrator |
+| agent-console-skills | 2026-10-02.2 | general, orchestrator |
 
 Role compatibility is checked before launch. A guide does not expand the profile's permissions. For example, coordination guidance lets a planner propose useful steps without authorizing implementation. Existing unrelated infrastructure `agent-console-ops` guidance is preserved.
 
@@ -18,7 +18,7 @@ Role compatibility is checked before launch. A guide does not expand the profile
 
 The guides describe the implemented controls and commands. Small tasks can finish in one session. Optional next steps carry a reason, output and dependency; suggestion-only is the default. Automatic expansion is bounded by a reviewed operator envelope. Selected immutable inputs and explicit consumption bind check evidence to the actual candidate. Release authorization is a separate exact candidate/action/target operation with observed outcome reconciliation.
 
-Interactive sessions publish through `agentctl workflow`; supervised native attempts return the runner's structured final and do not duplicate publication. Continuation preserves the workspace and an attributed result, starts a new conversation, and discloses unknown native defaults. Skills guidance describes local staged import and does not claim Git fetching is implemented.
+Interactive sessions publish through `agentctl workflow`; supervised native attempts return the runner's structured final and do not duplicate publication. Continuation preserves the workspace and an attributed result, starts a new conversation, and discloses unknown native defaults. Skills guidance covers local and bounded anonymous HTTPS Git staging, inspected activation and fetched-versus-declared provenance.
 
 ## Verification — 2026-10-02
 
@@ -33,7 +33,7 @@ The four new file SHA-256 values, checked on canonical installation and on actua
 | coding | c75134e562e2d85da375f9132fde71a7ef0f7641fd3cbc5f07c917fbcc29c32f |
 | coordination | 8bb699b36c30d5366a212888bf44477b0755b2b3cb76c1fecc47aa208a48247b |
 | verification | e1dd99cd019ce3d8b1d9341841ec1b525bd8c1b0c2eec5cf266be8c1b1db35e1 |
-| skills | 1a22e3f2561d2d290c2a965431423520d8c38cda06039241951a5dccad71ed13 |
+| skills (.2) | 9227ad219aa9b5374fe6d3c1fd0296d112a40d6748ad3b41053b38258382974e |
 
 The package hash also includes supporting files and permissions and differs from the entrypoint file hash. Installation preserves an existing package unless it exactly matches the supplied entrypoint. Local evidence is under `handoffs/console-guides-20261002` in the implementing workspace.
 
@@ -41,4 +41,4 @@ The package hash also includes supporting files and permissions and differs from
 
 Unassign a new staging guide to remove it from future role sessions; existing session snapshots and delivery histories remain intact. Remove a newly installed canonical/mirror package only after checking that it is still the exact owned version and is no longer assigned. Current-console mirror and assignments were not changed. Selecting an older staging source does not undo canonical package or assignment changes.
 
-The complete cross-harness discovery/version matrix, Git import provenance and remaining Workbench acceptance checks are tracked in [the full audit](FULL_REVAMP_ACCEPTANCE.md). Guide completion does not close those requirements.
+The complete cross-harness discovery/version matrix and remaining Workbench acceptance checks are tracked in [the full audit](FULL_REVAMP_ACCEPTANCE.md). Guide completion does not close those requirements. Git import behavior added in 0.19 is documented in [Git imports](SKILL_GIT_IMPORTS.md).

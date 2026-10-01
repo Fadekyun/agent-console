@@ -19,6 +19,8 @@ class PreviewRequest(BaseModel):
 
 class ImportRequest(BaseModel):
     source: str = Field(min_length=1, max_length=2000)
+    revision: str = Field(default='HEAD', min_length=1, max_length=200)
+    subdirectory: str = Field(default='', max_length=500)
 
 
 class DecisionRequest(BaseModel):
@@ -76,8 +78,13 @@ def skill_routes(manager, require_identity):
 
     @router.post('/api/skill-registry/imports')
     def stage(payload: ImportRequest, auth=Depends(require_identity)):
-        source = contained_path(Path(payload.source), manager.settings.workspace_root)
-        result = registry().stage(source)
+        if '://' in payload.source:
+            result = registry().stage_git(payload.source, revision=payload.revision, subdirectory=payload.subdirectory)
+        else:
+            if payload.revision != 'HEAD' or payload.subdirectory:
+                raise ValueError('revision and subdirectory options require a Git HTTPS source')
+            source = contained_path(Path(payload.source), manager.settings.workspace_root)
+            result = registry().stage(source)
         return audit('imported', result['id'], auth, result)
 
     @router.post('/api/skill-registry/imports/{identifier}/activate')

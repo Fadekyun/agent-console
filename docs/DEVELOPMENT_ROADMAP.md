@@ -1,3 +1,8 @@
+## Git skill provenance — 2026-10-02 (#6)
+
+- v0.19 stages a selected Git HTTPS tree at an exact resolved commit, without hooks, checkout filters or installers. UI/CLI inspect before activation; fetched origin survives review and delivery, and local edits do not masquerade as the original commit.
+- Real transport, Git-object, authorization and responsive interaction evidence supports the completed provenance criterion. Provider matrix and final Workbench/UI/CLI acceptance remain tracked in `FULL_REVAMP_ACCEPTANCE.md`.
+
 ## Pi skill delivery — 2026-10-02 (#6)
 
 - v0.18 connects Pi's private agent directory to immutable selected skills and adds a verified 0.99.2 capability. Pi/OpenCode exact-version gates apply to selected-skill launch/restart as well as sync.

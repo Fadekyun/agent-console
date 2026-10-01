@@ -1,3 +1,10 @@
+## 0.19.0 — 2026-10-02 (staging, #6)
+
+- Impact: UI and CLI stage an anonymous HTTPS Git package at a resolved commit without checkout/installers. Inspection and delivery distinguish fetched provenance, package declarations and later local edits; activation remains separate and hash-bound.
+- Configuration/migration: additive import/review/receipt fields in existing policy JSON; no DB migration or credentials. Source/ref/subdirectory inputs and time/size limits are documented in `SKILL_GIT_IMPORTS.md`. Canonical skills guide updated to 2026-10-02.2 for staging.
+- Verification: real Git-object safety/provenance/delivery tests, authenticated API tests, desktop/phone stage-inspect-activate checks and actual unactivated public HTTPS fetch.
+- Rollback: select 0.18 with library/policy/imports/receipts retained. Older code retains trust/hash policy but lacks fetched-origin display and Git staging; use 0.19 to reconcile provenance. Current console unchanged.
+
 ## 0.18.0 — 2026-10-02 (staging, #6)
 
 - Impact: Pi receives assigned/shared skill snapshots through its private agent directory, participates in capability-driven discovery/sync, and preserves conflicting operator paths. Exact-version skill adapters now verify selected delivery before session create/restart, including OpenCode.

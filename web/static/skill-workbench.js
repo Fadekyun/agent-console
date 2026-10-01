@@ -19,6 +19,13 @@ export function setupSkills({ api, el, message, profiles }) {
     const identity = el('dl', null, 'skill-identity');
     for (const [label, value] of [['Revision', packageInfo.revision], ['Content hash', packageInfo.hash], ['Source', packageInfo.source], ['Harnesses', packageInfo.compatible_harnesses.join(', ') || 'Any'], ['Roles', packageInfo.compatible_profiles.join(', ') || 'Any'], ['Files', packageInfo.files.join(', ')]]) identity.append(el('dt', label), el('dd', value || 'Unknown'));
     panel.append(identity);
+    if (packageInfo.provenance) {
+      const p = packageInfo.provenance;
+      panel.append(el('p', `Imported from ${p.kind}${p.subdirectory ? ` · ${p.subdirectory}` : ''}${p.requested_revision ? ` · requested ${p.requested_revision}` : ''}`, 'small'));
+      if (!packageInfo.provenance_content_matches) panel.append(el('p', 'Content differs from the imported revision. Inspect and review the current package.', 'small'));
+      if (packageInfo.declared_source) panel.append(el('p', `Package-declared source: ${packageInfo.declared_source}`, 'small'));
+      if (packageInfo.declared_revision) panel.append(el('p', `Package-declared revision: ${packageInfo.declared_revision}`, 'small'));
+    }
     [...packageInfo.issues, ...packageInfo.warnings].forEach(text => panel.append(el('p', text, 'small')));
     const services = el('label', 'I verified the declared service dependencies for this revision.', 'check'), verified = el('input'); verified.type = 'checkbox'; services.prepend(verified);
     if (packageInfo.required_services.length) panel.append(services);
@@ -43,8 +50,12 @@ export function setupSkills({ api, el, message, profiles }) {
     root.replaceChildren();
     const toolbar = el('div', null, 'panel');
     toolbar.append(el('p', 'Review skills here, then preview the effective set when starting a session. Changes take effect on a new session or an explicit restart.'));
-    const source = el('input'); source.placeholder = 'Absolute package directory inside this workspace'; source.setAttribute('aria-label', 'Skill import source');
-    toolbar.append(source, button('Stage import', () => api('/api/skill-registry/imports', { source: source.value })), button('Validate discovery', async () => { const result = await api('/api/skills/doctor', {}); return [...result.problems, ...result.warnings].join('\n') || 'Discovery checks passed.'; }), button('Sync unrestricted skills', () => api('/api/skills/sync', {})));
+    const source = el('input'); source.placeholder = 'Workspace package directory or Git HTTPS URL'; source.setAttribute('aria-label', 'Skill import source');
+    const gitOptions = el('details'), gitLabel = el('summary', 'Git revision and package directory');
+    const revision = el('input'); revision.value = 'HEAD'; revision.setAttribute('aria-label', 'Git revision');
+    const subdirectory = el('input'); subdirectory.placeholder = 'Package directory within repository'; subdirectory.setAttribute('aria-label', 'Git package directory');
+    gitOptions.append(gitLabel, revision, subdirectory, el('p', 'Anonymous HTTPS fetch only. Import stages files for inspection; it does not activate or execute them.', 'small'));
+    toolbar.append(source, gitOptions, button('Stage import', () => api('/api/skill-registry/imports', { source: source.value, ... (source.value.includes('://') ? { revision: revision.value, subdirectory: subdirectory.value } : {}) })), button('Validate discovery', async () => { const result = await api('/api/skills/doctor', {}); return [...result.problems, ...result.warnings].join('\n') || 'Discovery checks passed.'; }), button('Sync unrestricted skills', () => api('/api/skills/sync', {})));
     root.append(toolbar);
     const cards = el('div', null, 'cards'), details = el('div');
     for (const packageInfo of catalog.entries) {

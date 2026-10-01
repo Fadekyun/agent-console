@@ -1147,6 +1147,10 @@ def isolate_skills(
     for skill in effective_skills:
         name = skill["name"]
         receipt = snapshot_skill(canonical_root / name, isolated_root / name, skill.get("hash"))
+        if skill.get('provenance'):
+            receipt['provenance'] = skill['provenance']
+            receipt['revision'] = skill['revision']
+            receipt['provenance_content_matches'] = receipt['hash'] == skill['provenance'].get('content_hash')
         receipt["selection"] = skill.get("selection", "shared" if skill.get("shared") else "profile")
         receipts.append(receipt)
     # Outside the discovery folders: survives as the exact launch explanation.
@@ -1260,6 +1264,8 @@ def resolve_session_skills(
             validation["issues"].append(f"shared skill {skill['name']!r}: " + "; ".join(policy["reasons"]))
             validation["valid"] = False
         skill.update(hash=policy["hash"], revision=policy["revision"], trust=policy["trust"], selection="shared")
+        if policy.get('provenance'):
+            skill['provenance'] = policy['provenance']
     materialized: list[dict[str, Any]] = list(validation["effective"])
     names = {skill["name"] for skill in materialized}
     for skill in shared:
@@ -1353,6 +1359,7 @@ def get_effective_skills(
             "assigned_by": a["assigned_by"],
             "hash": policy["hash"], "revision": policy["revision"],
             "trust": policy["trust"], "effective_policy": policy["effective_policy"], "selection": "profile",
+            **({'provenance': policy['provenance']} if policy.get('provenance') else {}),
         })
     return {
         "profile": profile,

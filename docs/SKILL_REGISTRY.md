@@ -34,6 +34,7 @@ CLI equivalents:
 agentctl skills list
 agentctl skills inspect bounded-coding
 agentctl skills import /workspace/incoming/bounded-coding
+agentctl skills import https://github.com/OWNER/REPOSITORY.git --revision main --subdirectory skills/bounded-coding
 agentctl skills imports
 agentctl skills inspect-import import-ID
 agentctl skills activate import-ID --hash HASH
@@ -47,6 +48,8 @@ agentctl skills delivery SESSION
 ```
 
 `--services-verified` is an explicit assertion on review/activation when service dependencies exist. It is not a probe. `allow` binds an ask-policy approval to a role and content hash. `deny`, blocked/unreviewed trust, incompatible scope/role/harness, invalid packages and missing dependencies remain denied even with an approval receipt. Changing supporting files or executable bits changes the content hash as well as editing `SKILL.md`.
+
+Since staging 0.19, anonymous HTTPS Git imports record the resolved commit and original content hash separately from package-declared metadata. Fetching/extraction is bounded and inert; activation remains a separate inspected-hash decision. Local edits retain their origin without claiming to match the fetched bytes. See [Git import behavior and evidence](SKILL_GIT_IMPORTS.md).
 
 Global sync only publishes unrestricted, low-risk, globally scoped, allowed skills. Restricted packages are session-only; sync removes only Console-owned links for them and preserves unrelated native content. Harness/version gates still apply. Per-profile assignments remain rejected by launch for tools that cannot isolate them; shared skills use each adapter's supported delivery path. Import, review and assignment do not execute skill scripts.
 

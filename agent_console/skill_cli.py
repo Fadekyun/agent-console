@@ -11,8 +11,12 @@ COMMANDS = {'list', 'inspect', 'import', 'imports', 'inspect-import', 'activate'
 def add_commands(commands):
     commands.add_parser('list')
     commands.add_parser('imports')
-    for command, arg in [('inspect', 'name'), ('import', 'source'), ('inspect-import', 'identifier'), ('delivery', 'session')]:
+    for command, arg in [('inspect', 'name'), ('inspect-import', 'identifier'), ('delivery', 'session')]:
         commands.add_parser(command).add_argument(arg)
+    imported = commands.add_parser('import')
+    imported.add_argument('source')
+    imported.add_argument('--revision', default='HEAD')
+    imported.add_argument('--subdirectory', default='')
     for command in ('review', 'activate', 'allow'):
         parser = commands.add_parser(command)
         parser.add_argument('name' if command != 'activate' else 'identifier')
@@ -41,7 +45,12 @@ def run(args):
     if command == 'inspect': return registry.inspect(args.name)
     if command == 'imports': return registry.imports()
     if command == 'inspect-import': return registry.inspect_import(args.identifier)
-    if command == 'import': return registry.stage(Path(args.source).expanduser())
+    if command == 'import':
+        if '://' in args.source:
+            return registry.stage_git(args.source, revision=args.revision, subdirectory=args.subdirectory)
+        if args.revision != 'HEAD' or args.subdirectory:
+            raise ValueError('revision and subdirectory options require a Git HTTPS source')
+        return registry.stage(Path(args.source).expanduser())
     if command == 'activate':
         return registry.activate(args.identifier, expected_hash=args.expected_hash, actor='CLI-user', services_verified=args.services_verified)
     if command == 'review':

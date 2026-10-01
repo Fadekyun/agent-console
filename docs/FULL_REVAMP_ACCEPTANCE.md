@@ -31,7 +31,7 @@ Objective: finish issues #90, #140 and #6, update development documentation, pus
 ## #6 — skills control plane
 
 - [x] Portable YAML and namespaced metadata/validated sidecar; legacy migration diagnostics.
-- [ ] Provenance/source/revision/content hash, global/project scope, harness/profile compatibility and dependency diagnostics.
+- [x] Provenance/source/revision/content hash, global/project scope, harness/profile compatibility and dependency diagnostics.
 - [x] Local-trusted/imported-unreviewed/reviewed/blocked states; staged import and review before activation.
 - [x] Content drift invalidates approvals; safe paths, duplicate/collision, secret and executable validation.
 - [x] Effective allow/ask/deny before launch, selection reasons and actual session snapshot/delivery.
@@ -105,3 +105,7 @@ The checked registry criteria are supported by the current 95-test skills run (1
 ## Pi delivery checkpoint — 2026-10-02
 
 Version 0.18 fixes the missing link between Pi's per-session agent directory and Console's copied skill selection, adds its verified 0.99.2 capability, and enforces exact-version admission for selected Pi/OpenCode skills before launch/restart. [Native discovery evidence and integration checks](PI_SKILL_DELIVERY.md) distinguish actual installed Pi/Hermes skill readers from inert-launcher tmux tests and from unavailable staging model credentials. The complete provider matrix remains open; this checkpoint does not close #6 or the full goal.
+
+## Git provenance checkpoint — 2026-10-02
+
+Version 0.19 adds bounded, inert anonymous HTTPS Git staging to UI and CLI. The resolved commit/original package hash survive activation, review and actual selected-delivery receipts; declared metadata and locally edited content remain distinguishable. Real Git-object tests plus a real public HTTPS fetch and responsive stage/inspect/activate browser checks support the provenance criterion above. Existing scope/compatibility/dependency tests cover its other parts. See `SKILL_GIT_IMPORTS.md`. Provider matrix, final UI/CLI and remaining Workbench acceptance remain required for the whole goal.

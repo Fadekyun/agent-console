@@ -32,6 +32,24 @@ from agent_console.web import create_app
     "tmux required",
 )
 class WebTests(unittest.TestCase):
+    def test_git_skill_import_requires_identity_and_preserves_selected_revision(self):
+        path = '/api/skill-registry/imports'
+        payload = {'source':'https://example.invalid/skills.git', 'revision':'main', 'subdirectory':'guides/fixture'}
+        with patch('agent_console.skill_registry.SkillRegistry.stage_git', return_value={'id':'import-fixture','hash':'a'*64}) as stage:
+            self.assertEqual(self.client.post(path,json=payload).status_code,403)
+            stage.assert_not_called()
+            response = self.client.post(path,json=payload,headers=self.headers)
+            self.assertEqual(response.status_code,200,response.text)
+            stage.assert_called_once_with(payload['source'],revision='main',subdirectory='guides/fixture')
+        with patch('agent_console.skill_git.GitReader.fetch') as fetch:
+            secret_source='https://user:private-value@example.invalid/repo'
+            response=self.client.post(path,json={'source':secret_source},headers=self.headers)
+            self.assertEqual(response.status_code,400,response.text)
+            self.assertNotIn('private-value',response.text)
+            fetch.assert_not_called()
+        response=self.client.post(path,json={'source':str(self.workspace),'revision':'main'},headers=self.headers)
+        self.assertEqual(response.status_code,400)
+
     def test_recipe_configuration_and_continuation_require_operator_auth(self):
         request = {'tool':'shell','profile':'general','repository':str(self.workspace),'task':'Inspect the fixture'}
         endpoint = '/api/workbench/launches'

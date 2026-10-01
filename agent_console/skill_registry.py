@@ -246,11 +246,15 @@ class SkillRegistry:
         if not ID.fullmatch(name):
             raise ValueError("invalid skill id")
         result = inspect_package(self.root / name, name=name)
-        review = self.read()["reviews"].get(name)
+        state = self.read()
+        review = state["reviews"].get(name)
         result["trust"] = "local-trusted"
         if review:
             result["trust"] = review["decision"] if review["hash"] == result["hash"] else "imported-unreviewed" if review.get("imported") else "review-required"
             result["review"] = review
+            imported = state['imports'].get(review.get('import_id'))
+            if imported:
+                self._provenance(result, imported)
         result["validation"] = "invalid" if result["issues"] else "valid"
         return result
 
@@ -265,8 +269,11 @@ class SkillRegistry:
         if decision == "reviewed" and package["required_services"] and not services_verified:
             raise ValueError("verify declared services before approving this revision")
         with self.edit() as data:
-            imported = data["reviews"].get(name, {}).get("imported", False)
+            previous = data["reviews"].get(name, {})
+            imported = previous.get("imported", False)
             data["reviews"][name] = {"hash": expected_hash, "decision": decision, "actor": actor, "at": utc_now(), "imported": imported, "services_verified": services_verified}
+            if previous.get('import_id'):
+                data['reviews'][name]['import_id'] = previous['import_id']
         return self.inspect(name)
 
     def approve(self, name: str, profile: str, *, expected_hash: str, actor: str) -> dict:
@@ -310,8 +317,31 @@ class SkillRegistry:
         return package
 
     def stage(self, source: Path) -> dict:
+        if SECRET.search(str(source)):
+            raise ValueError('import path contains possible credential material')
+        return self._stage(source, {'kind': 'local', 'source': str(source)})
+
+    def stage_git(self, source: str, *, revision: str = 'HEAD', subdirectory: str = '') -> dict:
+        from .skill_git import git_package
+        with git_package(source, revision, subdirectory) as (package, provenance):
+            return self._stage(package, provenance)
+
+    @staticmethod
+    def _provenance(package: dict, record: dict) -> dict:
+        provenance = record.get('provenance')
+        if provenance:
+            package['provenance'] = provenance
+            package['provenance_content_matches'] = package['hash'] == record['hash']
+            package['declared_source'] = package['source']
+            package['declared_revision'] = package['revision']
+            package['source'] = provenance['source']
+            package['revision'] = provenance.get('revision', package['revision'])
+        return package
+
+    def _stage(self, source: Path, provenance: dict) -> dict:
         package = inspect_package(source)
         if package["issues"]: raise ValueError("import rejected: " + "; ".join(package["issues"]))
+        provenance = {**provenance, 'content_hash': package['hash']}
         identifier = "import-" + uuid.uuid4().hex
         target = self.state / "skill-imports" / identifier / package["name"]
         target.parent.mkdir(parents=True, mode=0o700)
@@ -319,7 +349,7 @@ class SkillRegistry:
         if inspect_package(target)["hash"] != package["hash"]:
             shutil.rmtree(target.parent)
             raise ValueError("skill changed during import; retry after source is stable")
-        record = {"id": identifier, "name": package["name"], "hash": package["hash"], "source": str(source), "status": "imported-unreviewed", "at": utc_now()}
+        record = {"id": identifier, "name": package["name"], "hash": package["hash"], "source": provenance['source'], "provenance": provenance, "status": "imported-unreviewed", "at": utc_now()}
         with self.edit() as data: data["imports"][identifier] = record
         return record
 
@@ -329,7 +359,8 @@ class SkillRegistry:
     def inspect_import(self, identifier: str) -> dict:
         record = self.read()["imports"].get(identifier)
         if not record: raise KeyError("unknown staged skill import")
-        return {**record, "staged_path": str(self.state / "skill-imports" / identifier / record["name"]), "package": inspect_package(self.state / "skill-imports" / identifier / record["name"])}
+        package = inspect_package(self.state / "skill-imports" / identifier / record["name"])
+        return {**record, "staged_path": str(self.state / "skill-imports" / identifier / record["name"]), "package": self._provenance(package, record)}
 
     def activate(self, identifier: str, *, expected_hash: str, actor: str, services_verified: bool = False) -> dict:
         staged = self.inspect_import(identifier)
@@ -345,13 +376,13 @@ class SkillRegistry:
         # A crash at either boundary remains deny-by-default on the next launch.
         with self.edit() as data:
             if target.exists() or target.is_symlink(): raise ValueError("skill id already exists; existing content is preserved")
-            data["reviews"][staged["name"]] = {"hash": expected_hash, "decision": "imported-unreviewed", "actor": actor, "at": utc_now(), "imported": True, "services_verified": False}
+            data["reviews"][staged["name"]] = {"hash": expected_hash, "decision": "imported-unreviewed", "actor": actor, "at": utc_now(), "imported": True, "import_id": identifier, "services_verified": False}
         _copy_validated(source, target, package)
         if inspect_package(target)["hash"] != expected_hash:
             shutil.rmtree(target)
             raise ValueError("import changed during activation")
         with self.edit() as data:
-            data["reviews"][staged["name"]] = {"hash": expected_hash, "decision": "reviewed", "actor": actor, "at": utc_now(), "imported": True, "services_verified": services_verified}
+            data["reviews"][staged["name"]] = {"hash": expected_hash, "decision": "reviewed", "actor": actor, "at": utc_now(), "imported": True, "import_id": identifier, "services_verified": services_verified}
             data["imports"][identifier]["status"] = "activated"
         return self.inspect(staged["name"])
 
