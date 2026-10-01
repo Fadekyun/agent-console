@@ -1,0 +1,29 @@
+{
+  "browser": "131.0.6778.33",
+  "scope": "Offline design fixtures only; no production runtime tested",
+  "checks": [
+    "A: proposal/edit/start, scope target, draft/focus/selection/scroll/order preservation, coalesced rerun, pause/resume, delivery vs consumption, failure/retry, capability-gated attachment, stop",
+    "A: keyboard activation, composer and movement without drag",
+    "A: 1440px light/dark, no horizontal overflow, explicit touch mode controls",
+    "A: 1024px light/dark, no horizontal overflow, explicit touch mode controls",
+    "A: 390px light/dark, no horizontal overflow, explicit touch mode controls",
+    "B: proposal/edit/start, scope target, draft/focus/selection/scroll/order preservation, coalesced rerun, pause/resume, delivery vs consumption, failure/retry, capability-gated attachment, stop",
+    "B: keyboard activation, composer and movement without drag",
+    "B: 1440px light/dark, no horizontal overflow, explicit touch mode controls",
+    "B: 1024px light/dark, no horizontal overflow, explicit touch mode controls",
+    "B: 390px light/dark, no horizontal overflow, explicit touch mode controls",
+    "A: touch tap on output preserves Scroll mode; explicit Type focuses composer",
+    "B: touch tap on output preserves Scroll mode; explicit Type focuses composer",
+    "No JavaScript errors or HTTP(S) requests"
+  ],
+  "frames": [
+    "A1-overview.png",
+    "A2-connected.png",
+    "A3-changed.png",
+    "A4-phone.png",
+    "B1-overview.png",
+    "B2-connected.png",
+    "B3-changed.png",
+    "B4-phone.png"
+  ]
+}
