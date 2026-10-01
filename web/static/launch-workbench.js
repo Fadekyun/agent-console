@@ -110,6 +110,7 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
     const source=state.selected,button=$('#continue-session');if(!source)return;button.disabled=true;
     try{
       const data=await api(`/api/workbench/sessions/${source.id}/configuration`);
+      if(state.selected?.id!==source.id)return;
       if(!data.latest||data.latest.invalidated){
         const panel=$('#session-configuration');panel.hidden=false;panel.replaceChildren(el('p',data.latest?.invalidated||data.notice));
         const draft=el('button','New session from known settings');panel.append(draft);

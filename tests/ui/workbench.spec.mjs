@@ -85,6 +85,46 @@ test('configuration and continuation preserve settings and invalidate an edited 
   await page.getByRole('button',{name:'Review continuation',exact:true}).click();await expect(page.locator('#launch-preview')).toContainText('A revised next task');
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
+
+test('pending status updates deduplicate through refresh and errors remain attributed',async({page},info)=>{
+  const {sessions}=await fixture(page);sessions.push({...sessions[0],id:'other',tmux_name:'other-session'});
+  let count=0,release;
+  await page.route('**/api/sessions/session-one/attention',async route=>{
+    count++;await new Promise(resolve=>{release=resolve;});
+    await route.fulfill({status:409,json:{detail:'Status changed; reload and retry'}});
+  });
+  await page.goto('/work#session/session-one');
+  if(info.project.name!=='desktop')await page.locator('#session-detail > summary').click();
+  const submit=page.locator('#attention-form button[type=submit]');
+  await submit.click();await expect(submit).toBeDisabled();
+  await page.locator('#attention-form').dispatchEvent('submit');
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect(submit).toBeDisabled();expect(count).toBe(1);
+  await page.evaluate(()=>{location.hash='#session/other-session';});
+  await expect(page.locator('#session-title')).toHaveText('other-session');
+  await expect(submit).toBeEnabled();release();
+  await expect(page.locator('#notice')).toContainText('session-one: Status changed');
+  await expect(page.locator('#session-title')).toHaveText('other-session');
+});
+
+test('late continuation response cannot open a draft over another session',async({page},info)=>{
+  const {sessions}=await fixture(page);sessions[0].running=false;
+  sessions.push({...sessions[0],id:'other',tmux_name:'other-session'});
+  let release;
+  await page.route('**/api/workbench/sessions/root/configuration',async route=>{
+    await new Promise(resolve=>{release=resolve;});
+    await route.fulfill({json:{latest:{config:{tool:'shell',profile:'coder',repository:'/tmp/repo'}}}});
+  });
+  await page.goto('/work#session/session-one');
+  if(info.project.name!=='desktop')await page.locator('#session-detail > summary').click();
+  await page.locator('#continue-session').click();
+  await expect(page.locator('#continue-session')).toBeDisabled();
+  await expect.poll(()=>typeof release).toBe('function');
+  await page.evaluate(()=>{location.hash='#session/other-session';});
+  await expect(page.locator('#session-title')).toHaveText('other-session');release();
+  await expect(page.locator('#continue-session')).toBeEnabled();
+  await expect(page.locator('#create-dialog')).not.toBeVisible();
+});
 test('work, manual child, drafts and mobile terminal use the real components',async({page},info)=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));const {requests}=await fixture(page);
   await page.goto('/work'); await expect(page.getByRole('heading',{name:'Work in progress'})).toBeVisible();

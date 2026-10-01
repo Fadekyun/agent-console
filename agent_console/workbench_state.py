@@ -112,7 +112,12 @@ class WorkbenchState:
         return {'sessions':sessions,'nodes':list(nodes.values()),'groups':groups,'aliases':alias,'readiness':self.readiness()}
 
     def history(self, identity, before=2147483647, audit_before=2147483647):
-        svc=WorkflowService(self.manager);session=svc.session(identity);store=svc.store;graph=svc.graph()
+        # Reading operator history must also work for imported/unmanaged and
+        # integration records. The interactive-only gate belongs on mutations.
+        with self.manager.database.connect() as db:
+            session=db.execute('SELECT id,tmux_name FROM sessions WHERE id=? OR tmux_name=?',(identity,identity)).fetchone()
+        if session is None:raise KeyError('session not found')
+        svc=WorkflowService(self.manager);store=svc.store;graph=svc.graph()
         with store.connect() as db:
             logical=graph._logical(db,session['id'])
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='workflow_attempts'").fetchone():

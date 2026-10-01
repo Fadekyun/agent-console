@@ -7,6 +7,13 @@ const $ = (s, root = document) => root.querySelector(s);
 const form = $('#create-form');
 const state = { sessions: [], me: null, selected: null, work: null, selectedNodeId: null, loading: false, frames: new Map() };
 const names = { normal: 'Working', needs_input: 'Needs input', blocked: 'Blocked', ready_for_review: 'Ready for review' };
+const pendingSessionActions = new Set();
+function renderPendingActions() {
+  for (const [selector, action] of [['#interrupt-session','interrupt'],['#stop-session','kill'],['#attention-form button[type=submit]','attention']]) {
+    const button=$(selector),pending=pendingSessionActions.has(`${state.selected?.id}:${action}`);
+    button.disabled=pending;button.setAttribute('aria-busy',String(pending));
+  }
+}
 function el(tag, text, cls) { const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node; }
 function message(text, kind = 'general') { $('#notice').textContent = text; $('#notice').hidden = !text; $('#notice').dataset.kind = kind; }
 async function api(path, payload, method = 'POST') {
@@ -44,6 +51,7 @@ function renderSession() {
   $('#continue-session').hidden=!!s.running||!s.managed||s.execution_kind==='integration-plan';
   $('#interrupt-session').hidden = !s.actions?.includes('interrupt');
   $('#stop-session').hidden = !s.actions?.includes('kill');
+  renderPendingActions();
   // Refresh session state without replacing a status note the user is editing.
   const attention = $('#attention-form');
   if (attention.dataset.session !== s.id) {
@@ -177,10 +185,19 @@ form.onsubmit = async event => {
   } catch (error) { $('#create-error').textContent = error.message; }
   finally { submit.disabled = false; }
 };
-async function sessionAction(action, payload) { const s = state.selected; if (!s) return; try { await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${action}`, payload); await refresh(); } catch (error) { message(error.message); } }
+async function sessionAction(action, payload, method='POST') {
+  const s=state.selected;if(!s)return;
+  const key=`${s.id}:${action}`;if(pendingSessionActions.has(key))return;
+  pendingSessionActions.add(key);renderPendingActions();
+  try {
+    await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${action}`,payload,method);await refresh();
+    if(action==='attention')message(`Status updated for ${s.tmux_name}.`);
+  } catch(error) { message(`${s.tmux_name}: ${error.message}`); }
+  finally { pendingSessionActions.delete(key);renderPendingActions(); }
+}
 $('#interrupt-session').onclick = () => { if (confirm(`Interrupt ${state.selected.tmux_name}?`)) sessionAction('interrupt', {}); };
 $('#stop-session').onclick = () => { if (confirm(`Stop ${state.selected.tmux_name}? Its files and transcript will be kept.`)) sessionAction('kill', { confirmed: true }); };
-$('#attention-form').onsubmit = async event => { event.preventDefault(); const f = event.target; try { await api(`/api/sessions/${encodeURIComponent(state.selected.tmux_name)}/attention`, { state: f.elements.state.value, note: f.elements.note.value }, 'PATCH'); await refresh(); message('Session status updated.'); } catch (e) { message(e.message); } };
+$('#attention-form').onsubmit = event => { event.preventDefault();const f=event.target;sessionAction('attention',{state:f.elements.state.value,note:f.elements.note.value},'PATCH'); };
 $('#show-output').onclick = async () => { const s = state.selected; try { const output = await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/review?lines=500`); if (s.id !== state.selected?.id) return; $('#output-text').textContent = output.content || 'No captured output.'; $('#session-output').hidden = false; } catch (e) { message(e.message); } };
 $('#show-skills').onclick = async () => {
   const s = state.selected;

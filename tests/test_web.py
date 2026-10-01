@@ -80,6 +80,13 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.client.get(path).status_code,403)
         history=self.client.get(path,headers=self.headers).json();self.assertTrue(any(e['action']=='result.published' for e in history['events']))
         self.assertNotIn('evidence_capability',json.dumps(view)+json.dumps(history))
+        endpoint='/api/workbench/sessions/'+first['id']+'/history'
+        self.assertEqual(self.client.get(endpoint).status_code,403)
+        self.manager.kill(first['tmux_name'])
+        with self.manager.database.connect() as db:
+            db.execute("UPDATE sessions SET execution_kind='integration-plan' WHERE id=?",(first['id'],))
+        self.assertEqual(self.client.get(endpoint,headers=self.headers).status_code,200)
+        self.assertEqual(self.client.get('/api/workbench/sessions/missing/history',headers=self.headers).status_code,400)
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()

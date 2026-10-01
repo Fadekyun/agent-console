@@ -8,7 +8,7 @@ from pathlib import Path
 import time
 
 from .database import utc_now
-from .profiles import PROFILE_SCHEMA, validate_profile_capability
+from .profiles import PROFILE_SCHEMA, profile_text, validate_profile_capability
 from .providers import provider_adapter
 from .skill_registry import SkillRegistry, read_deliveries
 from .skills import _resolve_canonical_root, resolve_session_skills
@@ -116,7 +116,8 @@ class WorkflowEngine:
         if selected['validation']['effective'] and not adapter.can_isolate_skills:raise ValueError('setup required: selected skills cannot be isolated')
         registry=SkillRegistry(_resolve_canonical_root(),self.manager.database.path.parent)
         skills=sorted([{'name':s['name'],'hash':registry.inspect(s['name'])['hash']} for s in selected['materialized']],key=lambda s:s['name'])
-        value={'config':config,'skills':skills,'adapter':adapter_info}
+        role_hash=hashlib.sha256(profile_text(self.manager.settings.profile_dir,config['profile']).strip().encode()).hexdigest()
+        value={'config':config,'skills':skills,'adapter':adapter_info,'profile_hash':role_hash}
         return {**value,'hash':hashlib.sha256(canonical(value).encode()).hexdigest()}
 
     def propose(self,identity,*,task,reason,expected_output,config,dependencies,request_key,actor):
@@ -384,7 +385,11 @@ class WorkflowEngine:
         self._prepare(attempt,session)
 
     def _prepare(self,attempt,session):
+        from .workbench_launch import LaunchCatalog
         frozen=json.loads(attempt['config_json']);delivery=read_deliveries(self.manager.settings.state_dir,session['id'])
+        receipt=LaunchCatalog(self.manager).configuration(session['id'])['latest']
+        if not receipt or not frozen.get('profile_hash') or receipt['profile_hash']!=frozen['profile_hash']:
+            self._attempt_state(attempt['id'],'failed','Role instructions changed during launch; review again');self.retire(attempt);return
         actual=sorted([{'name':s['name'],'hash':s['hash']} for s in (delivery.get('latest') or {}).get('skills',[])],key=lambda s:s['name'])
         if actual!=frozen['skills']:
             self._attempt_state(attempt['id'],'failed','Skill content changed during launch; review again');self.retire(attempt);return

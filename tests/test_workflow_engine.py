@@ -109,6 +109,38 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
         with self.assertRaisesRegex(ValueError,'no verified native'):self.accept(step)
         self.assertEqual(self.engine.step(step['id'])['attempts'],[])
 
+    def test_changed_role_requires_review_before_dispatch(self):
+        step=self.propose();self.accept(step)
+        (self.settings.profile_dir/'general.md').write_text('# Changed role instructions')
+        self.engine.tick()
+        current=self.engine.step(step['id'])
+        self.assertEqual(current['attempts'],[])
+        self.assertIn('changed',current['error'])
+        self.assertFalse(self.calls.exists())
+
+    def test_role_change_during_creation_cannot_reach_native_task(self):
+        step=self.propose();self.accept(step);create=self.manager.create
+        def change_role(**kwargs):
+            (self.settings.profile_dir/'general.md').write_text('# Role changed during admission')
+            return create(**kwargs)
+        with patch.object(self.manager,'create',side_effect=change_role):self.engine.tick()
+        current=self.engine.step(step['id'])
+        self.assertEqual(current['attempts'][0]['state'],'failed')
+        self.assertIn('Role instructions changed',current['attempts'][0]['error'])
+        self.assertFalse(self.calls.exists())
+        self.assertFalse(self.manager.tmux.exists(current['attempts'][0]['name']))
+
+    def test_failed_input_blocks_dependent_while_independent_work_finishes(self):
+        self.engine.svc.publish(self.root['id'],{'kind':'final','outcome':'fail','summary':'Prerequisite check failed','checks':[],'artifacts':[],'request_key':'failed-input'},'test')
+        dependent=self.propose(key='dependent',dependencies=[{'source_id':self.root['id'],'readiness':'after-final'}])
+        independent=self.propose(key='independent')
+        self.accept(dependent);self.accept(independent)
+        completed=self.finish(independent['id'])
+        self.assertEqual(completed['attempts'][0]['state'],'completed')
+        self.assertEqual(self.engine.step(dependent['id'])['attempts'],[])
+        self.assertTrue(self.engine.graph.inspect(dependent['id'])['readiness'][dependent['id']]['blocked'])
+        self.assertEqual(self.calls.read_text().splitlines(),['started'])
+
     def test_changed_inputs_coalesce_until_current_attempt_finishes(self):
         self.publish();step=self.propose(task='slow-native',dependencies=[{'source_id':self.root['id'],'readiness':'after-final'}]);self.accept(step)
         self.engine.tick()

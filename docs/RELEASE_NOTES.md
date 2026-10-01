@@ -1,3 +1,10 @@
+## 0.16.3 — 2026-10-02 (staging, #90 / #140)
+
+- Impact: operator history includes imported and integration records; status/interrupt/stop requests show pending state and deduplicate through refresh. A delayed continuation response cannot open the wrong session's draft. Workflow approval now binds the exact role instruction hash and checks the actual launch receipt before native startup.
+- Configuration/migration: no schema change. Previously accepted, not-yet-launched workflow steps lack the role hash and need a fresh edit/preview/review. Existing running attempts retain their launch instructions.
+- Verification: history authentication and scope tests; native workflow role-drift/race, independent-branch, coalescing and recovery regressions; desktop/phone pending/navigation scenarios.
+- Rollback: select the previous staging release with the same state. Pause/settle active workflows first. The old version does not enforce role-hash approvals; current console is unchanged.
+
 ## 0.16.2 — 2026-10-02 (staging, #90)
 
 - Impact: configuration receipt sequence IDs round-trip through browsers without losing integer precision. Recovery verification found the old nanosecond integer was rounded by JavaScript; stored records were unchanged.

@@ -29,6 +29,7 @@ export function setupWorkflow({api,el,message,editStep,openSession}) {
           actions.append(action('Preview launch',async()=>{
             const preview=await api(`/api/workflow/steps/${step.id}/preview`,{});
             previewBox.replaceChildren(el('p',`${preview.config.profile} using ${preview.config.tool}/${preview.config.auth_context} · ${preview.adapter?.version||'native adapter'} · ${preview.config.worktree?'isolated worktree':'existing repository'}`,'small'));
+            if(preview.profile_hash)previewBox.append(el('p',`Role revision · ${preview.profile_hash.slice(0,12)}`,'small muted'));
             for(const skill of preview.skills)previewBox.append(el('p',`${skill.name} · ${skill.hash.slice(0,12)}`,'small muted'));
             if(!preview.skills.length)previewBox.append(el('p','No Console-selected skills.','small muted'));
             previewBox.append(el('p','Accepting authorizes this task and configuration to start when its required inputs and capacity are ready.','small'),action('Accept next step',async()=>{await api(`/api/workflow/steps/${step.id}/review`,{decision:'accepted',expected_version:step.version,preview_hash:preview.hash});await load(root,session);}));

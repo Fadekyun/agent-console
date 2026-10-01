@@ -81,3 +81,18 @@ class WorkbenchTests(unittest.TestCase):
         session['attention_updated_at']=(datetime.fromisoformat(result['created_at'])+timedelta(seconds=1)).isoformat()
         node=self.state.snapshot()['nodes'][0]
         self.assertFalse(node['needs_attention']);self.assertEqual(node['result_state'],'failed')
+
+    def test_history_reads_noninteractive_records_without_granting_workflow_access(self):
+        for name,managed,kind in [('imported',False,'interactive'),('integration',True,'integration-plan')]:
+            session=self.session(name)
+            session.update(managed=managed,execution_kind=kind)
+            with self.manager.database.connect() as db:
+                db.execute('UPDATE sessions SET managed=?,execution_kind=? WHERE id=?',(managed,kind,session['id']))
+            self.manager.database.audit('session.imported',session['id'],'success',actor='operator',details={'private':'not returned'})
+            history=self.state.history(session['id'])
+            self.assertEqual(history['audit'][0]['action'],'session.imported')
+            self.assertNotIn('private',json.dumps(history))
+            self.assertEqual(history,self.state.history(name))
+            with self.assertRaisesRegex(ValueError,'managed interactive'):
+                self.engine.svc.session(session['id'])
+        with self.assertRaises(KeyError):self.state.history('missing')

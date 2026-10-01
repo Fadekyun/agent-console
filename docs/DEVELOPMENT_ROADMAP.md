@@ -1,3 +1,9 @@
+## Staging reliability — 2026-10-02 (#90 / #140)
+
+- v0.16.3: history covers all persisted session kinds, session mutations remain pending/deduplicated through polling and navigation, and stale continuation responses are discarded.
+- Workflow review includes role text identity; the dispatcher checks the role actually used by the new session before releasing native execution. Changed roles require review, including admission races. Failed-input isolation has native adapter regression coverage.
+- Full revamp acceptance remains tracked in `FULL_REVAMP_ACCEPTANCE.md`; external release gates and remaining skills/provider guide work are still open.
+
 # Development Roadmap
 
 ### 2026-10-02 — #90 lossless configuration receipt IDs
