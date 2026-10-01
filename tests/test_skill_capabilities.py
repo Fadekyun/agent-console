@@ -26,6 +26,21 @@ def write_skill(root: Path, name: str = "fixture", tools: str = "opencode") -> P
 
 
 class SkillCapabilityTests(unittest.TestCase):
+    def test_native_verified_matrix_and_unknown_versions_are_explicit(self):
+        from agent_console.skills import _version_diagnostics
+        versions = {'codex': '0.159.2', 'codex-pro': '0.159.2', 'claude': '2.1.287',
+                    'hermes': '0.21.4', 'pi': '0.99.2', 'opencode': '1.18.31'}
+        for tool, version in versions.items():
+            diagnostic = _version_diagnostics({tool}, lambda _tool, _binary: version)[tool]
+            self.assertEqual(diagnostic['version_state'], 'verified')
+            self.assertTrue(diagnostic['mutation_allowed'])
+            capability = SKILL_TOOL_CAPABILITIES[tool]
+            self.assertFalse(capability.configured_sources_inspected)
+            self.assertTrue(capability.as_dict()['supports_project_skills'])
+            unknown = _version_diagnostics({tool}, lambda _tool, _binary: '99.0.0')[tool]
+            self.assertEqual(unknown['version_state'], 'unverified-version')
+            self.assertEqual(unknown['mutation_allowed'], capability.unverified_version_policy == 'allow')
+
     def setUp(self) -> None:
         self.catalog_patch = patch("agent_console.skills.SKILL_CATALOG", [])
         self.catalog_patch.start()

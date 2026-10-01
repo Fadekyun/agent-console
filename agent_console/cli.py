@@ -230,7 +230,7 @@ def parser() -> argparse.ArgumentParser:
     skills_doctor.add_argument("--quiet", action="store_true")
     skills_effective = skills_commands.add_parser("effective")
     skills_effective.add_argument("profile", choices=sorted(PROFILES))
-    skills_validate = skills_commands.add_parser("validate")
+    skills_validate = skills_commands.add_parser("validate-profile", help="Validate effective assignments for a profile")
     skills_validate.add_argument("profile", choices=sorted(PROFILES))
     skills_approve = skills_commands.add_parser("approve")
     skills_approve.add_argument("profile", choices=sorted(PROFILES))
@@ -328,13 +328,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "skills":
             from .skill_cli import COMMANDS, run as run_skill_command
             if args.skills_command in COMMANDS:
-                emit(run_skill_command(args))
-                return 0
+                result = run_skill_command(args)
+                emit(result)
+                return 1 if args.skills_command == 'validate' and not result['valid'] else 0
             if args.skills_command == "effective":
                 manager = SessionManager()
                 emit(get_effective_skills(manager.database, args.profile))
                 return 0
-            if args.skills_command == "validate":
+            if args.skills_command == "validate-profile":
                 manager = SessionManager()
                 from .skills import validate_profile_skills
                 result = validate_profile_skills(manager.database, args.profile)

@@ -33,6 +33,8 @@ CLI equivalents:
 ```sh
 agentctl skills list
 agentctl skills inspect bounded-coding
+agentctl skills validate bounded-coding
+agentctl skills validate-profile coder
 agentctl skills import /workspace/incoming/bounded-coding
 agentctl skills import https://github.com/OWNER/REPOSITORY.git --revision main --subdirectory skills/bounded-coding
 agentctl skills imports
@@ -42,7 +44,7 @@ agentctl skills review bounded-coding --decision reviewed --hash HASH
 agentctl skills assign bounded-coding --profile coder
 agentctl skills allow bounded-coding --profile coder --hash HASH
 agentctl skills disallow bounded-coding --profile coder
-agentctl skills remove bounded-coding --profile coder
+agentctl skills unassign bounded-coding --profile coder  # remove remains an alias
 agentctl skills preview --profile coder --tool codex --repository /workspace/repo
 agentctl skills delivery SESSION
 ```
@@ -68,3 +70,5 @@ Install the pinned PyYAML dependency with the package. No SQLite schema change i
 Keep canonical reusable guides in the authoritative skills workspace on n100; generated per-session copies are not the editing source. The remaining cross-harness verification and guide migration are tracked in [FULL_REVAMP_ACCEPTANCE.md](FULL_REVAMP_ACCEPTANCE.md).
 
 To roll staging back, select its prior runtime release and keep the state and library backup. An older release does not enforce this new registry policy: do not launch newly imported or restricted skills through it until the operator has reconciled the library. Returning to the separate current-console URL does not touch staging data or policy.
+
+Package validation reads the current bytes and exits nonzero for invalid or missing packages. Legacy `validate PROFILE` continues to validate assignments; use `validate NAME --package` when a package name also names a profile. Inspect → Check harness delivery exposes native global sync/version/discovery diagnostics without confusing them with the selected session receipt. See [verified native delivery](NATIVE_SKILL_MATRIX.md).

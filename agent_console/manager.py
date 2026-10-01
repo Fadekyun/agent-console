@@ -1329,7 +1329,10 @@ class SessionManager:
             lines.append("set -a\n")
             lines.append(f". {shlex.quote(str(secret_file))}\n")
             lines.append("set +a\n")
-        lines.append("exec " + shlex.join(spec.argv) + "\n")
+        command = "exec " + shlex.join(spec.argv)
+        if merged.get("AGENT_CONSOLE_CLAUDE_SKILLS_DIR"):
+            command += ' --add-dir "$AGENT_CONSOLE_CLAUDE_SKILLS_DIR"'
+        lines.append(command + "\n")
         path.write_text("".join(lines), encoding="utf-8")
         path.chmod(0o700)
         return path
@@ -1363,13 +1366,17 @@ class SessionManager:
             skills_link.symlink_to(isolated_skills_root, target_is_directory=True)
             overlay_env["CODEX_HOME"] = str(overlay)
         elif tool == "claude":
-            overlay = base / "claude-home"
+            # Native Claude loads added-directory .claude/skills. CLAUDE_HOME
+            # is not a supported discovery override. Preserve native account
+            # configuration and expose only the selected snapshot directory.
+            added = base / "claude-skills"
+            overlay = added / ".claude"
             overlay.mkdir(parents=True, exist_ok=True, mode=0o700)
             skills_link = overlay / "skills"
             if skills_link.exists():
                 skills_link.unlink()
             skills_link.symlink_to(isolated_skills_root, target_is_directory=True)
-            overlay_env["CLAUDE_HOME"] = str(overlay)
+            overlay_env["AGENT_CONSOLE_CLAUDE_SKILLS_DIR"] = str(added)
         elif tool == "opencode":
             # OpenCode accepts additional discovery paths in its config. Register
             # the same per-session isolated root Codex uses (assigned + shared
@@ -1950,6 +1957,14 @@ class SessionManager:
             else:
                 insert_pos = launcher_text.index("exec ") if "exec " in launcher_text else len(launcher_text)
                 launcher_text = launcher_text[:insert_pos] + line + launcher_text[insert_pos:]
+        if overlay_env.get("AGENT_CONSOLE_CLAUDE_SKILLS_DIR"):
+            argument = ' --add-dir "$AGENT_CONSOLE_CLAUDE_SKILLS_DIR"'
+            # Upgrade legacy launchers on explicit restart without accumulating
+            # duplicate arguments. The variable follows subsequent renames.
+            launcher_text = "\n".join(
+                line + argument if line.startswith("exec ") and argument not in line else line
+                for line in launcher_text.splitlines()
+            ) + "\n"
         launcher_path.write_text(launcher_text, encoding="utf-8")
         launcher_path.chmod(0o700)
         provider_adapter(tool, self.auth).configure_shared_skills(

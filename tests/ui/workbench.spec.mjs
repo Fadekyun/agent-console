@@ -252,6 +252,11 @@ test('skills inspection and exact revision approval work on desktop and phone', 
   const item={name:'bounded-coding',description:'Apply a small fix',hash:'a'.repeat(64),revision:'rev-1',source:'/workspace/skills/bounded-coding',scope:'global',risk:'low',approval:'ask',compatible_profiles:[],compatible_harnesses:['codex'],files:['SKILL.md'],required_services:[],issues:[],warnings:[],trust:'local-trusted',validation:'valid'};
   let approved=null;
   await page.route('**/api/skill-registry', route=>route.fulfill({json:{entries:[item],imports:[]}}));
+  await page.route('**/api/skills', route=>route.fulfill({json:{
+    entries:[{name:item.name,assigned_to:[{profile:'coder'}]}],
+    providers:[{tool:'codex',discovery:{status:'uncertain',uncertainty_reasons:['configured discovery sources are not inspected']}}],
+    diagnostics:[{skill:item.name,tool:'codex',linked:true,state:'present',version_state:'verified',installed_version:'0.159.2',materialized_path:'/fixture/native/skills/bounded-coding'}]
+  }}));
   await page.route('**/api/skill-registry/bounded-coding/approve',route=>{approved=route.request().postDataJSON();return route.fulfill({json:{hash:item.hash}});});
   await page.goto('/work#session/missing-fixture');
   await expect(page.getByText('This session is no longer available. Return to Work.',{exact:true})).toBeVisible();
@@ -261,6 +266,12 @@ test('skills inspection and exact revision approval work on desktop and phone', 
   await expect(page.getByRole('heading',{name:'Skills',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Inspect',exact:true}).click();
   await expect(page.getByText(item.hash,{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Check harness delivery',exact:true}).click();
+  await expect(page.getByText('codex: synced · discovery uncertain',{exact:true})).toBeVisible();
+  await expect(page.getByText('Current role assignments: coder',{exact:true})).toBeVisible();
+  await page.getByText('codex diagnostics',{exact:true}).click();
+  await expect(page.getByText('Version: 0.159.2 (verified)',{exact:true})).toBeVisible();
+  await expect(page.getByText('Discovery: configured discovery sources are not inspected',{exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Approve revision for role'}).click();
   await expect.poll(()=>approved).toEqual({profile:'coder',expected_hash:item.hash});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);

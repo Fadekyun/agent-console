@@ -1,3 +1,9 @@
+## Native skill matrix and final surfaces — 2026-10-02 (#6 / #90)
+
+- v0.20 records actual native discovery for every supported harness, including all seven rewritten guides. Claude's previously ineffective environment override is replaced by supported additional-directory delivery; explicit restart upgrades legacy launchers and retains native account configuration.
+- OpenCode1.18.31 joins the verified gate. Codex/Claude/Hermes keep their compatibility policy while unknown versions are marked unverified; static inventories no longer claim exhaustive configured-source inspection.
+- Package/profile CLI validation, unassignment alias and per-harness Skills diagnostics complete the identified UI/CLI gaps. Full Workbench desktop/phone fixture acceptance passes; final live publication/current preservation remain in the audit.
+
 ## Native MCP parity — 2026-10-02 (#6 / #123)
 
 - v0.19.3 emits native Pi configuration and matches Hermes server selection/timeouts. Installed native clients verified four local authenticated tool calls each without wrapper translation. Disabled/relaunch and trusted-project precedence are explicit; host configuration remains untouched.

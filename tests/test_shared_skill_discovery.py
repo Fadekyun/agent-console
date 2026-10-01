@@ -259,6 +259,7 @@ class SharedSkillSessionTests(unittest.TestCase):
             {
                 "codex": self.fake_agent,
                 "codex-pro": self.fake_agent,
+                "claude": self.fake_agent,
                 "hermes": self.fake_agent,
                 "opencode": self.fake_agent,
                 "pi": self.fake_agent,
@@ -333,6 +334,30 @@ class SharedSkillSessionTests(unittest.TestCase):
         isolated = self.isolated_root("hermes-shared")
         self.assertTrue((isolated / "typesafe-ai").is_dir())
         self.assertFalse((isolated / "unrelated-skill").exists())
+
+    def test_claude_native_additional_directory_and_legacy_restart_refresh(self) -> None:
+        data = self.manager.auth._read()
+        data['contexts']['claude']['default'].update(enabled=True, verified=True)
+        self.manager.auth._write(data)
+        self.manager.create(tool='claude', profile='general', name='claude-shared', repository=str(self.workspace))
+        added = self.settings.state_dir / 'tool-overlays/claude-shared/claude-skills'
+        delivered = added / '.claude/skills/typesafe-ai/SKILL.md'
+        original = delivered.read_bytes()
+        launcher = self.settings.state_dir / 'launchers/claude-shared.sh'
+        argument = ' --add-dir "$AGENT_CONSOLE_CLAUDE_SKILLS_DIR"'
+        self.assertEqual(launcher.read_text().count(argument), 1)
+        self.assertNotIn('CLAUDE_CONFIG_DIR=', launcher.read_text())
+        self.assertNotIn('CLAUDE_HOME=', launcher.read_text())
+        with (self.skills_root / 'typesafe-ai/SKILL.md').open('a') as stream:
+            stream.write('Updated canonical guide.\n')
+        self.assertEqual(delivered.read_bytes(), original)
+        # Simulate a pre-fix launcher: explicit restart upgrades it once.
+        launcher.write_text(launcher.read_text().replace(argument, ''))
+        self.manager.restart('claude-shared')
+        self.assertNotEqual(delivered.read_bytes(), original)
+        self.assertEqual(launcher.read_text().count(argument), 1)
+        self.manager.restart('claude-shared')
+        self.assertEqual(launcher.read_text().count(argument), 1)
 
     def test_pi_assigned_and_shared_skills_remain_frozen_until_explicit_restart(self) -> None:
         self.configure_commandcode('pi')

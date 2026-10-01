@@ -7,10 +7,10 @@ Objective: finish issues #90, #140 and #6, update development documentation, pus
 - [x] Conditional attention/readiness strip; priority ordering; running/waiting/recent work.
 - [x] Distinct mechanical, attention and result states; repository/project, role, harness/model and activity.
 - [x] Compact child completion progress; structured recent results, failed/retryable results and next action.
-- [ ] New session, reusable recipe preview/run, exact-configuration resume/retry.
-- [ ] Session overview, terminal, result/handoff, children, effective configuration and history.
+- [x] New session, reusable recipe preview/run, reviewed continuation/retry using recorded configuration with explicit unknowns.
+- [x] Session overview, terminal, result/handoff, children, effective configuration and history.
 - [x] Project/profile/harness/mechanical/attention/result/root filters with local preferences.
-- [ ] Shared desktop/mobile state, keyboard navigation and pending/errors; terminal focus survives refresh.
+- [x] Shared desktop/mobile state, keyboard navigation and pending/errors; terminal focus survives refresh.
 - [x] Real terminal matrix: embedded/expanded, wheel/touch, normal/alternate screen, output while reading, selection/copy/paste and denied clipboard, resize/keyboard/orientation, reconnect and multiple terminals.
 - [ ] Playwright acceptance scenarios from the issue plus real staging verification.
 
@@ -35,10 +35,10 @@ Objective: finish issues #90, #140 and #6, update development documentation, pus
 - [x] Local-trusted/imported-unreviewed/reviewed/blocked states; staged import and review before activation.
 - [x] Content drift invalidates approvals; safe paths, duplicate/collision, secret and executable validation.
 - [x] Effective allow/ask/deny before launch, selection reasons and actual session snapshot/delivery.
-- [ ] Capability/version-aware Codex/Pro, Claude, OpenCode, Hermes and Pi delivery; honest isolation limitations.
-- [ ] Inspect/validate/sync/assign/remove through UI and CLI; source/content secrets never returned.
+- [x] Capability/version-aware Codex/Pro, Claude, OpenCode, Hermes and Pi delivery; honest isolation limitations.
+- [x] Inspect/validate/sync/assign/remove through UI and CLI; source/content secrets never returned.
 - [x] Immutable running-session skill content; explicit refresh/restart semantics and migration/rollback.
-- [ ] Canonical operating guides updated on n100, not only generated session roots; real harness discovery evidence.
+- [x] Canonical operating guides updated on n100, not only generated session roots; real harness discovery evidence.
 
 ## Publication / deployment gates
 
@@ -117,3 +117,11 @@ Version 0.19.2 removes the separate connected-step launch validation path: previ
 ## Native MCP configuration checkpoint — 2026-10-02
 
 Version 0.19.3 corrects Pi's retired adapter schema and aligns native Pi/Hermes managed server selection and timeouts. [Native verification](NATIVE_MCP_VERIFICATION.md) records four authenticated loopback tool discoveries/calls per installed harness, disabled entry validation and trusted-project override behavior. The source wrapper points to the current Pi package scope. Current-console wrappers and credentials are preserved. This closes the identified MCP format gap without claiming complete tool isolation or authenticated staging model use; full provider skill discovery and remaining Workbench/final acceptance items are still required.
+
+## Native matrix and Workbench acceptance — 2026-10-02
+
+Version 0.20 completes the identified #6 delivery and operator-surface gaps. [Native skill matrix](NATIVE_SKILL_MATRIX.md) records actual readers for all six harness identifiers and all seven guide packages. Native Claude testing found its ineffective environment override; additional-directory delivery now works through the actual generated launcher, with a real-tmux legacy-restart/idempotence regression. The Skills inspector exposes per-harness native sync/version/discovery status; CLI package validation and explicit profile validation/unassignment complete the command surface. Registry, trust, secret-redaction, compatibility, API and session lifecycle tests support the other checked skill requirements.
+
+All 42 current Workbench browser scenarios pass at desktop/360/390 widths: new/recipe preview and one launch, configuration and continuation drift, pending deduplication and errors, stale responses, release observation, Add session/drafts/mobile terminal, reconnect/scrolling, skills approval/import/delivery, results/inbox/attachment, attention/readiness/filter priority, empty state and keyboard/focus through refresh. Current source and earlier real staging recipe/continuation, history and terminal evidence support the three newly checked Workbench rows. Final current-release live verification remains a separate publication gate below.
+
+The earlier internal shorthand "exact-configuration resume" exceeded #90's actual requirement for accessible new/recipe/resume actions if interpreted as native chat restoration or recovery of historically unrecorded defaults. The implemented contract preserves recorded settings and workspace, detects drift, attributes the prior result, and labels the new conversation and unknown defaults. This matches the original issue and the accepted design's context/permission boundaries; no native history restoration or invented setting is claimed. See `WORKBENCH_LAUNCHES.md` and its native/real-session evidence.

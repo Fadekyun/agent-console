@@ -1,4 +1,6 @@
 // All library text uses textContent; imported packages are never rendered as HTML.
+import { skillToolDiagnostic } from './skill-diagnostics.js';
+
 export function setupSkills({ api, el, message, profiles }) {
   const root = document.querySelector('#skills-content');
   let selected = null, loading = false;
@@ -19,6 +21,28 @@ export function setupSkills({ api, el, message, profiles }) {
     const identity = el('dl', null, 'skill-identity');
     for (const [label, value] of [['Revision', packageInfo.revision], ['Content hash', packageInfo.hash], ['Source', packageInfo.source], ['Harnesses', packageInfo.compatible_harnesses.join(', ') || 'Any'], ['Roles', packageInfo.compatible_profiles.join(', ') || 'Any'], ['Files', packageInfo.files.join(', ')]]) identity.append(el('dt', label), el('dd', value || 'Unknown'));
     panel.append(identity);
+    if (!imported) {
+      const delivery = el('div'), check = el('button', 'Check harness delivery');
+      check.onclick = async () => {
+        check.disabled = true;
+        delivery.replaceChildren(el('p', 'Checking native paths and versions…', 'small'));
+        try {
+          const catalog = await api('/api/skills');
+          const diagnostics = (catalog.diagnostics || []).filter(item => item.skill === packageInfo.name);
+          delivery.replaceChildren(el('p', 'Global sync status. Session Configuration shows its frozen selected copy. Native user, project and plugin skills may also be discovered.', 'small muted'));
+          const entry = (catalog.entries || []).find(item => item.name === packageInfo.name);
+          delivery.append(el('p', entry ? `Current role assignments: ${(entry.assigned_to || []).map(item => item.profile).join(', ') || 'None'}` : 'Current assignment details are unavailable.', 'small'));
+          for (const diagnostic of diagnostics) {
+            const provider = (catalog.providers || []).find(item => item.tool === diagnostic.tool) || {};
+            delivery.append(skillToolDiagnostic(diagnostic, provider));
+          }
+          if (!diagnostics.length) delivery.append(el('p', 'No supported harness delivery paths are configured for this package.', 'small'));
+        } catch (error) {
+          delivery.replaceChildren(el('p', error.message, 'small'));
+        } finally { check.disabled = false; }
+      };
+      panel.append(check, delivery);
+    }
     if (packageInfo.provenance) {
       const p = packageInfo.provenance;
       panel.append(el('p', `Imported from ${p.kind}${p.subdirectory ? ` · ${p.subdirectory}` : ''}${p.requested_revision ? ` · requested ${p.requested_revision}` : ''}`, 'small'));

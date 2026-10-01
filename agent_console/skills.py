@@ -234,7 +234,7 @@ def _version_diagnostics(
             version_state = "unsupported"
         elif output is None and not binary_present:
             version_state = "missing-binary"
-        elif capability.verification == "exact-version":
+        elif capability.verification in {"exact-version", "recorded-version"}:
             version_state = "verified" if version in capability.verified_versions else "unverified-version"
         elif version is None:
             version_state = "unverified-version"
@@ -454,7 +454,7 @@ def _scan_discovery(
     uncertainty_reasons: list[str] = []
     if truncated:
         uncertainty_reasons.append("discovery scan reached its entry bound")
-    if capability.verification == "exact-version" and version_state != "verified":
+    if capability.verification in {"exact-version", "recorded-version"} and version_state != "verified":
         uncertainty_reasons.append("installed version is not verified")
     if not capability.configured_sources_inspected:
         uncertainty_reasons.append("configured discovery sources are not inspected")

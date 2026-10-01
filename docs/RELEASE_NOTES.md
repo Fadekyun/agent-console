@@ -1,3 +1,10 @@
+## 0.20.0 — 2026-10-02 (staging, #6 / #90)
+
+- Impact: adds package validation and explicit profile-validation/unassignment CLI commands; Skills inspection exposes per-harness delivery diagnostics. Fixes Claude shared-snapshot delivery through its supported additional-directory argument, including legacy launcher upgrade on explicit restart.
+- Configuration/migration: no DB migration. Capability records identify native-tested Codex/Pro 0.159.2, Claude 2.1.287, Hermes 0.21.4, Pi 0.99.2 and OpenCode 1.18.30/1.18.31. Existing permissive unknown-version policy remains for Codex/Claude/Hermes, now visibly unverified; Pi/OpenCode retain strict admission. Native user/project/plugin sources remain explicit; no claim of complete isolation. Maintenance guide revision .3 is canonical and staging only; existing copies remain frozen.
+- Verification: native readers discover all seven guides without model calls or account credentials; native Claude uses the actual Console launcher. Capability/CLI and real-tmux lifecycle tests, authenticated API checks and all 42 desktop/phone Workbench scenarios pass. See `NATIVE_SKILL_MATRIX.md` and final audit for scope.
+- Rollback: select 0.19.3 with data retained. Older source lacks package validation and native Claude snapshot wiring. Existing launchers remain; avoid restarting Claude through the older overlay writer. Restore the exact backed-up .2 maintenance guide only after checking for operator edits. Current console is unchanged.
+
 ## 0.19.3 — 2026-10-02 (staging, #6 / #123)
 
 - Impact: generates native Pi MCP configuration without the retired adapter schema; Pi/Hermes receive the same credential-enabled n8n, Directus, OpenRouter and Bushi descriptors and second-based request timeouts. Source Pi launcher uses the current package scope.

@@ -5,12 +5,15 @@ from .skill_registry import SkillRegistry, read_deliveries
 from .skills import _resolve_canonical_root, _discover_skills
 from .validation import PROFILES, TOOLS
 
-COMMANDS = {'list', 'inspect', 'import', 'imports', 'inspect-import', 'activate', 'review', 'allow', 'disallow', 'preview', 'delivery', 'assign', 'remove'}
+COMMANDS = {'list', 'inspect', 'validate', 'import', 'imports', 'inspect-import', 'activate', 'review', 'allow', 'disallow', 'preview', 'delivery', 'assign', 'remove', 'unassign'}
 
 
 def add_commands(commands):
     commands.add_parser('list')
     commands.add_parser('imports')
+    validate = commands.add_parser('validate', help='Validate a package (legacy profile names remain supported)')
+    validate.add_argument('name')
+    validate.add_argument('--package', action='store_true', help='Treat a profile-named package as a package')
     for command, arg in [('inspect', 'name'), ('inspect-import', 'identifier'), ('delivery', 'session')]:
         commands.add_parser(command).add_argument(arg)
     imported = commands.add_parser('import')
@@ -27,7 +30,7 @@ def add_commands(commands):
             parser.add_argument('--services-verified', action='store_true')
         if command == 'review':
             parser.add_argument('--decision', choices=['reviewed', 'blocked'], required=True)
-    for command in ('disallow', 'assign', 'remove'):
+    for command in ('disallow', 'assign', 'remove', 'unassign'):
         parser = commands.add_parser(command)
         parser.add_argument('name')
         parser.add_argument('--profile', choices=sorted(PROFILES), required=True)
@@ -43,6 +46,13 @@ def run(args):
     command = args.skills_command
     if command == 'list': return [registry.inspect(e['name']) for e in _discover_skills(registry.root)]
     if command == 'inspect': return registry.inspect(args.name)
+    if command == 'validate':
+        if args.name in PROFILES and not args.package:
+            from .manager import SessionManager
+            from .skills import validate_profile_skills
+            return validate_profile_skills(SessionManager(settings).database, args.name)
+        package = registry.inspect(args.name)
+        return {**package, 'valid': package['validation'] == 'valid', 'target_kind': 'package'}
     if command == 'imports': return registry.imports()
     if command == 'inspect-import': return registry.inspect_import(args.identifier)
     if command == 'import':
@@ -62,7 +72,7 @@ def run(args):
     from .manager import SessionManager
     manager = SessionManager(settings)
     if command == 'delivery': return read_deliveries(settings.state_dir, manager.inspect(args.session)['id'])
-    if command in {'assign', 'remove'}:
+    if command in {'assign', 'remove', 'unassign'}:
         from .skills import assign_skill, unassign_skill
         return (assign_skill if command == 'assign' else unassign_skill)(manager.database, args.profile, args.name, actor='CLI-user')
     from .skills import resolve_session_skills, get_profile_assignments
