@@ -22,7 +22,7 @@ export function setupReleases({api,el,message}) {
       if(!targets.length)root.append(el('p','No release targets configured. An operator must install an action adapter and a read-only outcome check before releases can run.'));
       else if(!candidates.length)root.append(el('p','Publish a passing final result with the exact commit and actual checks to prepare a release.'));
       else{
-        const form=el('form'),candidate=field('Candidate'),target=field('Release target'),operation=field('Action'),evidence=el('fieldset'),legend=el('legend','Check evidence'),preview=el('div');
+        const form=el('form'),candidate=field('Candidate'),target=field('Release target'),operation=field('Action'),evidence=el('fieldset',null,'release-evidence'),legend=el('legend','Check evidence'),preview=el('div');
         candidate.input.append(...candidates.map(r=>option(r.id,`v${r.version} · ${r.artifacts.find(a=>a.kind==='commit').sha.slice(0,12)} · ${r.summary.slice(0,70)}`)));
         target.input.append(...targets.map(t=>option(t.id,t.label)));
         form.append(candidate.wrapper,target.wrapper,operation.wrapper,evidence);root.append(form,preview);

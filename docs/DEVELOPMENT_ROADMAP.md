@@ -1,3 +1,9 @@
+## Release acceptance checkpoint — 2026-10-02 (#140)
+
+- Verified one real isolated target apply, an unknown external outcome, web restart and read-only reconciliation to the exact candidate without a duplicate. Unknown release attention clears only after observation.
+- Canonical release guide is validated, assigned to staging release sessions and verified in a fresh Codex Pro snapshot. Four remaining role bundles plus skills/provider discovery and the final full-revamp audit remain open.
+- v0.17.2 aligns evidence controls for phone widths. Evidence and limits are recorded in `WORKFLOW_RELEASE_VERIFICATION.md`.
+
 ## Release status follow-up — 2026-10-02 (#140)
 
 - v0.17.1 keeps release history current while preserving the candidate form, and discards obsolete concurrent loads. Live target verification continues to use one durable attempt through lost acknowledgment/restart.

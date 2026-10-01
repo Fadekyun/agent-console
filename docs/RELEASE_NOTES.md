@@ -1,3 +1,10 @@
+## 0.17.2 — 2026-10-02 (staging, #140)
+
+- Impact: release evidence checkboxes align with their labels at phone widths. Records the completed live candidate/action/outcome verification and canonical release-guide delivery.
+- Configuration/migration: no source schema change; canonical `agent-console-release` revision 2026-10-02.1 is assigned to the staging release profile only. The verification target is isolated test storage and is removed from the live target catalog after testing.
+- Verification: responsive release browser scenarios, real single-apply/lost-acknowledgment/restart/probe recovery, native copied guide receipt, and additive rollback/restoration. See `WORKFLOW_RELEASE_VERIFICATION.md`.
+- Rollback: select 0.17.1 for UI; unassign the staging release guide to remove it from future release sessions. Retain completed receipts and selected artifacts. No current-console cutover.
+
 ## 0.17.1 — 2026-10-02 (staging, #140)
 
 - Impact: release status refreshes update only history, preserve the candidate form, and poll active workers until their outcome is known. Late loads cannot append obsolete status after a newer refresh. Live staging exposed a queued-card race while the backend correctly retained an unknown outcome.

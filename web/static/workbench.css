@@ -30,3 +30,5 @@
 
 .configuration-list{display:grid;grid-template-columns:minmax(110px,1fr) minmax(0,2fr);gap:8px;font-size:13px}.configuration-list dt{font-weight:600}.configuration-list dd{margin:0;overflow-wrap:anywhere}#launch-preview{border-top:1px solid var(--line);padding-top:18px}#launch-preview>p,#recipe-list .brief{overflow-wrap:anywhere}#recipe-list .panel{margin:14px 0}#recipe-list .brief{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}#session-configuration{margin-top:18px}
 @media(max-width:760px){#work-view>.heading{display:block}#work-view>.heading .session-actions button{flex:1}.configuration-list{grid-template-columns:1fr 1.5fr}}
+
+.release-evidence{min-width:0;margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:7px}.release-evidence label{display:flex;align-items:flex-start;gap:10px;min-height:44px;padding:8px 0}.release-evidence input[type=checkbox]{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;padding:0}.release-evidence label span{min-width:0;overflow-wrap:anywhere}

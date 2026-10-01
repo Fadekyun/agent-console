@@ -22,10 +22,10 @@ Objective: finish issues #90, #140 and #6, update development documentation, pus
 - [x] Ownership distinct from DAG dependencies; after-ready/after-final/alongside; joins and cycle rejection.
 - [x] Explicit reviewed auto envelope for repositories/actions/roles/harnesses/targets/budgets, versioned expansions and limits.
 - [x] Durable launch receipts; restart reconciliation without duplicate dispatch; capacity/backoff and unsupported adapter explanation.
-- [ ] Failed inputs block dependents; independent branches continue; changes stale downstream results and review evidence.
+- [x] Failed inputs block dependents; independent branches continue; changes stale downstream results and review evidence.
 - [x] Coalesced replacement after current attempt; rerun limits; history retained.
 - [x] Pause blocks new dispatch; stop cancels/interrupts with durable history.
-- [ ] Exact-candidate release evidence and authorized action/target; uncertain external outcomes require reconciliation before retry.
+- [x] Exact-candidate release evidence and authorized action/target; uncertain external outcomes require reconciliation before retry.
 - [ ] Rewrite all seven Console guide bundles against implemented commands and verify a real two-session handoff.
 
 ## #6 — skills control plane
@@ -89,3 +89,9 @@ The checked #90 summary/filter requirements are covered by WorkbenchState tests,
 ## Launch configuration checkpoint — 2026-10-02
 
 Version 0.16 adds [recipes and configuration receipts](WORKBENCH_LAUNCHES.md), shared preview/create validation, idempotent operator launch requests and continuation in the existing workspace with an attributed result input. It reproduces recorded Console configuration and blocks changed role/skill/launcher settings; unknown native defaults and pre-receipt sessions are explicit. It starts a new conversation and does not claim native conversation restoration. Full shared UI/attention/error, release and skills requirements remain open above.
+
+## Release verification checkpoint — 2026-10-02
+
+Versions 0.17–0.17.2 add explicit operator release grants for selected immutable commits and matching current check results, configured action/target adapters, durable worker receipts and observed external outcomes. [Release verification](WORKFLOW_RELEASE_VERIFICATION.md) records real isolated target execution, unknown-outcome handling across web restart, no duplicate apply and responsive UI evidence. Native regression tests verify failed-prerequisite isolation and stale candidate/check rejection. These support the two checked #140 requirements above.
+
+The canonical release guide is the third implemented guide bundle after Workbench/session basics and Results/handoffs. Coding, coordination, review/verification and skills maintenance remain required, along with the remaining #90/#6 and final publication/audit requirements. This checkpoint does not complete the full goal.
