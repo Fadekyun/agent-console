@@ -85,3 +85,7 @@ The checked #90 summary/filter requirements are covered by WorkbenchState tests,
 ## Terminal verification checkpoint — 2026-10-02
 
 [Workbench verification](WORKBENCH_VERIFICATION.md) records real staging tmux/WebSocket tests at desktop and emulated phone widths, native/denied clipboard browser tests and the selection/dismissal fixes in 0.15.1. The terminal matrix checkbox reflects these explicit tests; physical-device certification is not claimed. Recipes, exact continuation, effective configuration, release gates and remaining skills/guide requirements above remain open.
+
+## Launch configuration checkpoint — 2026-10-02
+
+Version 0.16 adds [recipes and configuration receipts](WORKBENCH_LAUNCHES.md), shared preview/create validation, idempotent operator launch requests and continuation in the existing workspace with an attributed result input. It reproduces recorded Console configuration and blocks changed role/skill/launcher settings; unknown native defaults and pre-receipt sessions are explicit. It starts a new conversation and does not claim native conversation restoration. Full shared UI/attention/error, release and skills requirements remain open above.

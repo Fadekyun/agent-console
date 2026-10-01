@@ -1149,8 +1149,9 @@ class SessionManager:
         project_name: str | None = None,
         project_repository: str | None = None,
         workflow_attempt: str | None = None,
+        profile_content: str | None = None,
     ) -> LaunchSpec:
-        role = profile_text(self.settings.profile_dir, profile).strip()
+        role = profile_content if profile_content is not None else profile_text(self.settings.profile_dir, profile).strip()
         session_identity = (
             f"Your session name ({session_name or 'not-yet-assigned'}) is available in the "
             "`AGENT_CONSOLE_SESSION_NAME` environment variable. "
@@ -1405,33 +1406,44 @@ class SessionManager:
         )
         return target.resolve()
 
-    def create(
-        self,
-        *,
-        tool: str,
-        profile: str,
-        name: str | None = None,
-        task: str | None = None,
-        repository: str | None = None,
-        worktree: bool = False,
-        creator_surface: str = "CLI",
-        parent_session_id: str | None = None,
-        linked_plan_id: str | None = None,
-        auth_context: str | None = None,
-        agent_mode: str | None = None,
-        provider: str | None = None,
-        model: str | None = None,
-        reasoning_effort: str | None = None,
-        plan_reasoning_effort: str | None = None,
-        project_id: str | None = None,
-        _workflow_attempt: str | None = None,
-        _workflow_session_id: str | None = None,
+    def prepare_launch(
+        self, *, tool: str, profile: str, repository: str | None = None,
+        worktree: bool = False, auth_context: str | None = None,
+        agent_mode: str | None = None, provider: str | None = None,
+        model: str | None = None, reasoning_effort: str | None = None,
+        plan_reasoning_effort: str | None = None, project_id: str | None = None,
     ) -> dict[str, Any]:
+        """Resolve the same operator configuration for preview and actual launch.
+
+        Does not create terminals, worktrees, contexts or skill snapshots.
+        """
         validate_tool(tool)
         validate_profile(profile)
         capability = validate_profile_capability(profile, tool, agent_mode, worktree=worktree)
         if not capability["allowed"]:
             raise ValueError(capability["reason"])
+        project_info: dict[str, Any] | None = None
+        if project_id is not None:
+            with self.database.connect() as conn:
+                proj = conn.execute(
+                    "SELECT id, name, repository, status FROM projects WHERE id=?", (project_id,)
+                ).fetchone()
+            if proj is None:
+                raise KeyError(f"project not found: {project_id}")
+            if proj["status"] != "active":
+                raise ValueError(f"project is {proj['status']!r}, only active projects can host sessions")
+            proj_repo = proj["repository"]
+            if proj_repo and repository and proj_repo != repository:
+                raise ValueError(
+                    f"requested repository {repository!r} does not match project repository {proj_repo!r}"
+                )
+            if proj_repo and not repository:
+                repository = proj_repo
+            project_info = {"id": proj["id"], "name": proj["name"], "repository": proj["repository"]}
+        repository = str(contained_path(
+            Path(repository) if repository else self.settings.workspace_root,
+            self.settings.workspace_root,
+        ))
         session_skills = resolve_session_skills(
             self.database,
             profile,
@@ -1526,24 +1538,57 @@ class SessionManager:
             provider = context.get("provider")
             model = None
             permission_mode = None
-        project_info: dict[str, Any] | None = None
-        if project_id is not None:
-            with self.database.connect() as conn:
-                proj = conn.execute(
-                    "SELECT id, name, repository, status FROM projects WHERE id=?", (project_id,)
-                ).fetchone()
-            if proj is None:
-                raise KeyError(f"project not found: {project_id}")
-            if proj["status"] != "active":
-                raise ValueError(f"project is {proj['status']!r}, only active projects can host sessions")
-            proj_repo = proj["repository"]
-            if proj_repo and repository and proj_repo != repository:
-                raise ValueError(
-                    f"requested repository {repository!r} does not match project repository {proj_repo!r}"
-                )
-            if proj_repo and not repository:
-                repository = proj_repo
-            project_info = {"id": proj["id"], "name": proj["name"], "repository": proj["repository"]}
+        return {
+            "config": {
+                "tool": tool, "profile": profile, "repository": repository,
+                "worktree": worktree, "auth_context": context["name"],
+                "agent_mode": agent_mode, "provider": provider, "model": model,
+                "reasoning_effort": reasoning_effort,
+                "plan_reasoning_effort": plan_reasoning_effort, "project_id": project_id,
+            },
+            "context": context, "skills": session_skills, "capability": capability,
+            "project": project_info, "permission_mode": permission_mode,
+            "profile_content": profile_text(self.settings.profile_dir, profile).strip(),
+        }
+
+    def create(
+        self,
+        *,
+        tool: str,
+        profile: str,
+        name: str | None = None,
+        task: str | None = None,
+        repository: str | None = None,
+        worktree: bool = False,
+        creator_surface: str = "CLI",
+        parent_session_id: str | None = None,
+        linked_plan_id: str | None = None,
+        auth_context: str | None = None,
+        agent_mode: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        plan_reasoning_effort: str | None = None,
+        project_id: str | None = None,
+        _workflow_attempt: str | None = None,
+        _workflow_session_id: str | None = None,
+        _reviewed_launch: dict | None = None,
+        _launch_request: str | None = None,
+        _continue_from: str | None = None,
+    ) -> dict[str, Any]:
+        prepared = self.prepare_launch(
+            tool=tool, profile=profile, repository=repository, worktree=worktree,
+            auth_context=auth_context, agent_mode=agent_mode, provider=provider,
+            model=model, reasoning_effort=reasoning_effort,
+            plan_reasoning_effort=plan_reasoning_effort, project_id=project_id,
+        )
+        config = prepared["config"]
+        repository, agent_mode = config["repository"], config["agent_mode"]
+        provider, model = config["provider"], config["model"]
+        context, capability = prepared["context"], prepared["capability"]
+        session_skills, project_info = prepared["skills"], prepared["project"]
+        skill_validation = session_skills["validation"]
+        permission_mode = prepared["permission_mode"]
         name = validate_session_name(name or self.generated_name(tool, profile))
         if self.tmux.exists(name):
             raise FileExistsError(f"tmux session already exists: {name}")
@@ -1552,7 +1597,7 @@ class SessionManager:
             existing = conn.execute(
                 "SELECT id FROM sessions WHERE tmux_name=?", (name,)
             ).fetchone()
-        if _workflow_attempt and existing is not None:
+        if (_workflow_attempt or _launch_request) and existing is not None:
             raise FileExistsError('workflow launch identity already exists; reconcile its receipt')
         session_id = _workflow_session_id or (existing["id"] if existing is not None else f"sess-{uuid.uuid4().hex}")
         if bool(_workflow_attempt)!=bool(_workflow_session_id):
@@ -1608,15 +1653,26 @@ class SessionManager:
                     "SELECT id, execution_kind FROM sessions WHERE tmux_name=?", (name,)
                 ).fetchone()
             if locked_existing is not None:
-                if _workflow_attempt:raise FileExistsError("workflow launch identity appeared during admission; reconcile its receipt")
+                if _workflow_attempt or _launch_request:raise FileExistsError("workflow launch identity appeared during admission; reconcile its receipt")
                 if locked_existing["execution_kind"] == "integration-plan":
                     raise FileExistsError(
                         f"session name is reserved by an integration request: {name}"
                     )
                 session_id = locked_existing["id"]
+            from .workbench_launch import LaunchCatalog
+            launch_catalog = LaunchCatalog(self)
+            launch_view = launch_catalog.describe(prepared, task=task,
+                name=_reviewed_launch.get("name") if _reviewed_launch else name,
+                source_id=_continue_from)
+            if _reviewed_launch and launch_view["hash"] != _reviewed_launch["hash"]:
+                raise ValueError("Launch configuration changed; review the current preview")
             # The lock stays held through tmux creation and persistence, so another
             # create/request process cannot observe free capacity in this interval.
-            if worktree:
+            if _continue_from:
+                source = launch_catalog.session(_continue_from)
+                cwd = contained_path(Path(source.get("worktree") or source["repository"]), self.settings.workspace_root)
+                worktree_path = cwd if source.get("worktree") else None
+            elif worktree:
                 worktree_path = self._create_worktree(cwd, name)
                 cwd = worktree_path
                 worktree_created = True
@@ -1645,12 +1701,17 @@ class SessionManager:
                 project_name=project_info["name"] if project_info else None,
                 project_repository=project_info["repository"] if project_info else None,
                 workflow_attempt=_workflow_attempt,
+                profile_content=prepared["profile_content"],
             )
 
             canonical_root = _resolve_canonical_root()
             isolated_root = self.settings.state_dir / "skills-isolated" / name
             effective = session_skills["materialized"]
             isolate_skills(isolated_root, canonical_root, effective)
+            delivered = json.loads((isolated_root / "delivery.json").read_text())["skills"]
+            actual_skills = sorted([{"name": item["name"], "hash": item["hash"]} for item in delivered], key=lambda item:item["name"])
+            if actual_skills != launch_view["skills"]:
+                raise ValueError("Selected skill content changed before launch; review again")
             overlay_env = self._create_session_tool_overlay(
                 name, tool, context, isolated_root,
             )
@@ -1739,6 +1800,7 @@ class SessionManager:
                 )
             record_delivery(self.settings.state_dir, session_id, isolated_root, tool=tool, profile=profile,
                             isolated=provider_adapter(tool, self.auth).can_isolate_skills)
+            launch_catalog.record(session_id, launch_view, workspace=cwd, request_id=_launch_request)
             self.database.audit(
                 "session.created", name, "success", surface=creator_surface,
                 details={
@@ -1907,6 +1969,8 @@ class SessionManager:
             self.tmux_for_name(name).restart(name, launcher_path)
         record_delivery(self.settings.state_dir, session["id"], isolated_root, tool=tool, profile=profile,
                         isolated=provider_adapter(tool, self.auth).can_isolate_skills)
+        from .workbench_launch import LaunchCatalog
+        LaunchCatalog(self).invalidate(session["id"], "Explicit restart refreshed native context/skills; review a new launch before continuation")
         self.database.audit(
             "session.restarted", name, "success",
             details={

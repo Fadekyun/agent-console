@@ -32,6 +32,36 @@ from agent_console.web import create_app
     "tmux required",
 )
 class WebTests(unittest.TestCase):
+    def test_recipe_configuration_and_continuation_require_operator_auth(self):
+        request = {'tool':'shell','profile':'general','repository':str(self.workspace),'task':'Inspect the fixture'}
+        endpoint = '/api/workbench/launches'
+        self.assertEqual(self.client.post(endpoint+'/preview',json={'request':request}).status_code,403)
+        self.assertEqual(self.client.post('/api/workbench/recipes',json={'title':'Fixture','request':request}).status_code,403)
+        recipe = self.client.post('/api/workbench/recipes',json={'title':'Fixture','request':request},headers=self.headers)
+        self.assertEqual(recipe.status_code,200,recipe.text)
+        request = recipe.json()['request']
+        preview = self.client.post(endpoint+'/preview',json={'request':request},headers=self.headers)
+        self.assertEqual(preview.status_code,200,preview.text)
+        payload = {'request':request,'request_key':'api-recipe','expected_hash':preview.json()['hash']}
+        self.assertEqual(self.client.post(endpoint,json=payload).status_code,403)
+        run = self.client.post(endpoint,json=payload,headers=self.headers)
+        self.assertEqual(run.status_code,200,run.text);identity=run.json()['session_id']
+        self.assertEqual(self.client.post(endpoint,json=payload,headers=self.headers).json()['session_id'],identity)
+        path = '/api/workbench/sessions/'+identity+'/configuration'
+        self.assertEqual(self.client.get(path).status_code,403)
+        config = self.client.get(path,headers=self.headers).json()
+        self.assertEqual(config['latest']['config']['tool'],'shell')
+        self.assertEqual(config['latest']['request_id'],'api-recipe')
+        self.manager.kill(run.json()['name'])
+        continuation = {'request':config['latest']['config']|{'task':'Continue fixture'},'source_session_id':identity}
+        reviewed = self.client.post(endpoint+'/preview',json=continuation,headers=self.headers)
+        self.assertEqual(reviewed.status_code,200,reviewed.text)
+        continued=self.client.post(endpoint,json=continuation|{'expected_hash':reviewed.json()['hash'],'request_key':'api-continuation'},headers=self.headers)
+        self.assertEqual(continued.status_code,200,continued.text)
+        self.assertEqual(self.manager.inspect(continued.json()['name'])['parent_session_id'],identity)
+        self.assertEqual(self.client.get(endpoint+'/api-continuation').status_code,403)
+        self.assertEqual(self.client.post(endpoint+'/preview',json={'request':{'tool':'shell'}},headers=self.headers).status_code,400)
+
     def test_workbench_ownership_results_history_and_authentication(self):
         from agent_console.workflow_service import WorkflowService
         first=self.manager.create(tool='shell',profile='general',name='workbench-first')

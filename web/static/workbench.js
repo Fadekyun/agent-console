@@ -1,3 +1,4 @@
+import { setupLaunches } from '/static/launch-workbench.js';
 import { setupOverview } from '/static/work-overview.js';
 import { setupResults } from '/static/results-workbench.js';
 import { setupSkills } from '/static/skill-workbench.js';
@@ -22,6 +23,7 @@ $('#show-results').onclick = () => { location.hash = `#results/${encodeURICompon
 function status(s) { return s.attention_state !== 'normal' && s.attention_state ? names[s.attention_state] || s.attention_state : s.running ? 'Working' : 'Stopped'; }
 function sessionLink(s) { return `#session/${encodeURIComponent(s.tmux_name)}`; }
 const overview=setupOverview({state,el,openCreate});
+const launches=setupLaunches({api,el,state,openCreate,getRequest:createRequest,refresh,message,openSession:name=>{location.hash=`#session/${encodeURIComponent(name)}`;route();openTerminal();}});
 function renderWork(){overview.renderWork();}
 function renderSession() {
   const s = state.selected;
@@ -39,6 +41,7 @@ function renderSession() {
     if(historical)$('#session-statuses').append(el('p',`Historical attempt ${historical.generation}. The tree links to the current attempt.`,'small muted'));
   }
   $('#open-terminal').disabled = !s.running;
+  $('#continue-session').hidden=!!s.running||!s.managed||s.execution_kind==='integration-plan';
   $('#interrupt-session').hidden = !s.actions?.includes('interrupt');
   $('#stop-session').hidden = !s.actions?.includes('kill');
   // Refresh session state without replacing a status note the user is editing.
@@ -46,7 +49,7 @@ function renderSession() {
   if (attention.dataset.session !== s.id) {
     $('#session-detail').open = !matchMedia('(max-width:760px)').matches;
     attention.dataset.session = s.id; attention.elements.state.value = s.attention_state || 'normal'; attention.elements.note.value = s.attention_note || '';
-    $('#session-output').hidden = true; $('#session-skills').hidden = true; $('#session-history').hidden=true;
+    $('#session-output').hidden = true; $('#session-skills').hidden = true; $('#session-history').hidden=true;$('#session-configuration').hidden=true;
   }
 }
 function route() {
@@ -124,7 +127,7 @@ function configureTool() {
 }
 function openCreate(parent = null, step = null) {
   if (!state.me) { message('Tool information is still loading. Try again shortly.'); return; }
-  form.reset(); form.elements.parent.value = parent?.id || '';
+  form.reset(); launches.reset(parent); form.elements.parent.value = parent?.id || '';
   form.dataset.step = step ? JSON.stringify(step) : '';
   $('#next-step-options').hidden=!parent;form.elements.name.disabled=!!parent;form.elements.name.closest('label').hidden=!!parent;
   form.elements.reason.value=step?.reason||'A separate session for this specific task.';form.elements.expected_output.value=step?.expected_output||'Complete the stated task and report the result, checks and selected artifacts.';
@@ -142,14 +145,22 @@ function openCreate(parent = null, step = null) {
   if(step){for(const [key,value] of Object.entries(step.config))if(form.elements[key]&&key!=='worktree')form.elements[key].value=value;configureTool();configureRole();if(step.config.auth_context)form.elements.auth_context.value=step.config.auth_context;form.elements.task.value=step.task;form.elements.worktree.checked=step.config.worktree;form.elements.readiness.value=step.dependencies.find(d=>d.source_id===step.owner_id)?.readiness||'alongside';}
   $('#create-dialog').showModal(); previewSkills();
 }
+function createRequest(){
+  const fields = form.elements;
+  const saved=form.dataset.launchConfig?JSON.parse(form.dataset.launchConfig):{};
+  const data = { ...saved, tool: fields.tool.value, profile: fields.profile.value, task: fields.task.value, worktree: fields.worktree.checked && !fields.worktree.disabled };
+  for (const key of ['name','repository','auth_context','model','reasoning_effort']) {if (fields[key].value.trim() && !fields[key].disabled) data[key] = fields[key].value.trim();else delete data[key];}
+  const profile = state.me.profiles.find(x => x.name === data.profile);
+  if(saved.tool&&saved.tool!==data.tool){delete data.provider;delete data.agent_mode;delete data.plan_reasoning_effort;}
+  if(saved.profile&&saved.profile!==data.profile)delete data.agent_mode;
+  if (data.tool === 'opencode'&&!data.agent_mode) data.agent_mode = profile?.read_write_capability === 'read_only' ? 'plan' : 'build';
+  return data;
+}
 form.onsubmit = async event => {
   event.preventDefault(); const submit = $('button[type=submit]', form); if (submit.disabled) return; submit.disabled = true; $('#create-error').textContent = '';
-  const fields = form.elements, parent = fields.parent.value;
-  const data = { tool: fields.tool.value, profile: fields.profile.value, task: fields.task.value, worktree: fields.worktree.checked && !fields.worktree.disabled };
-  for (const key of ['name','repository','auth_context','model','reasoning_effort']) if (fields[key].value.trim() && !fields[key].disabled) data[key] = fields[key].value.trim();
-  const profile = state.me.profiles.find(x => x.name === data.profile);
-  if (data.tool === 'opencode') data.agent_mode = profile?.read_write_capability === 'read_only' ? 'plan' : 'build';
+  const fields=form.elements,parent=fields.parent.value,data=createRequest();
   try {
+    if(!parent&&form.dataset.review){await launches.reviewLaunch(data);return;}
     if(parent){
       const existing=form.dataset.step?JSON.parse(form.dataset.step):null;
       const owner=existing?.owner_id||parent;

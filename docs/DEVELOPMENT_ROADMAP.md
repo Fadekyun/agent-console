@@ -1,5 +1,11 @@
 # Development Roadmap
 
+### 2026-10-02 — #90 recipes and recorded configuration
+
+- Added reusable task/settings recipes, actual launch preview, explicit launch receipts and idempotent request handling. Shared validation covers repository/project, roles, account/model settings and skill policy.
+- Configuration inspection retains safe model/effort/role/launcher/skill details after Stop. Reviewed continuation preserves the existing workspace and sends the selected latest result; changed or unknown settings are explained without silent replay. This starts a new conversation, and supervised workflow retries remain in Next steps.
+- Remaining shared-state/pending checks, release gates, guide rewrite and skill-provider verification stay tracked in `FULL_REVAMP_ACCEPTANCE.md`.
+
 ### 2026-10-02 — #90 terminal clipboard correction
 
 - Real staging tests found Copy selection losing its selection on pointer focus. Preserve it and expose manual copy fallback for denied clipboard access; verify real PTY scrolling, alternate-screen paging/capture, phone viewport changes and independent terminal drafts. Full workbench scope remains tracked in `FULL_REVAMP_ACCEPTANCE.md`.

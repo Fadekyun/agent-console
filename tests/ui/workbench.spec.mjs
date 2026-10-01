@@ -38,8 +38,52 @@ async function fixture(page) {
     await route.fulfill({json:body});
   });
   await page.routeWebSocket('**/ws/sessions/**', ws => { ws.send('Connected to staging\r\n'); });
-  return {requests};
+  return {requests,sessions};
 }
+
+test('recipes save without launching, review configuration and launch once',async({page})=>{
+  const {sessions}=await fixture(page),recipes=[],launches=[];
+  await page.route('**/api/workbench/recipes',async route=>{
+    if(route.request().method()==='POST'){const value=route.request().postDataJSON();const recipe={id:'recipe-one',revision:1,title:value.title,request:value.request};recipes.push(recipe);await route.fulfill({json:recipe});}
+    else await route.fulfill({json:recipes});
+  });
+  await page.route('**/api/workbench/launches/preview',route=>{const request=route.request().postDataJSON().request;return route.fulfill({json:{hash:'a'.repeat(64),config:request,task:request.task,workspace:request.repository,skills:[{name:'workbench-guide',hash:'b'.repeat(64)}],warnings:[],profile_hash:'c'.repeat(64),launcher:{path:'/bin/shell',version:'1.0',sha256:'d'.repeat(64)}}});});
+  await page.route('**/api/workbench/launches',async route=>{
+    const value=route.request().postDataJSON();launches.push(value);sessions.push({...sessions[0],id:'recipe-session',tmux_name:'recipe-run',initial_task:value.request.task});
+    await route.fulfill({json:{state:'created',session_id:'recipe-session',name:'recipe-run'}});
+  });
+  await page.goto('/work');await page.locator('#new-session').click();
+  await page.locator('[name=task]').fill('Run the bounded repository check');
+  await page.locator('#recipe-save-panel > summary').click();await page.locator('[name=recipe_title]').fill('Repository check');await page.locator('#save-recipe').click();
+  await expect(page.locator('#save-recipe')).toHaveText('Update recipe');expect(launches).toHaveLength(0);
+  await page.locator('#cancel-create').click();await page.locator('#run-recipe').click();
+  await page.getByRole('button',{name:'Use recipe',exact:true}).click();
+  await expect(page.locator('[name=task]')).toHaveValue('Run the bounded repository check');
+  await page.getByRole('button',{name:'Review launch',exact:true}).click();
+  await expect(page.locator('#launch-preview')).toContainText('Repository');expect(launches).toHaveLength(0);
+  await page.locator('#confirm-launch').click();await expect(page.locator('#session-title')).toHaveText('recipe-run');
+  expect(launches).toHaveLength(1);expect(launches[0].expected_hash).toBe('a'.repeat(64));
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  const frame=page.frameLocator('iframe:not([hidden])');await expect(frame.locator('#connection')).toHaveText('Connected');
+});
+
+test('configuration and continuation preserve settings and invalidate an edited preview',async({page},info)=>{
+  const {sessions}=await fixture(page);sessions[0].running=false;sessions[0].actions=[];
+  const config={tool:'shell',profile:'coder',repository:'/tmp/repo',worktree:true,auth_context:'default',model:null,reasoning_effort:null,plan_reasoning_effort:null,project_id:'project-one',agent_mode:null,provider:'local'};
+  await page.route('**/api/workbench/sessions/root/configuration',route=>route.fulfill({json:{notice:'Recorded Console settings.',receipts:[{}],latest:{config,skills:[],created_at:'2026-10-02T00:00:00Z',workspace:'/tmp/preserved-worktree'}}}));
+  const previews=[];
+  await page.route('**/api/workbench/launches/preview',route=>{
+    const body=route.request().postDataJSON();previews.push(body);return route.fulfill({json:{hash:'e'.repeat(64),config:body.request,task:body.request.task,workspace:'/tmp/preserved-worktree',skills:[],warnings:['New conversation in the preserved workspace.']}});
+  });
+  await page.goto('/work#session/session-one');if(info.project.name!=='desktop')await page.locator('#session-detail > summary').click();
+  await page.locator('#show-configuration').click();await expect(page.locator('#session-configuration')).toContainText('/tmp/preserved-worktree');
+  await page.locator('#continue-session').click();await page.getByRole('button',{name:'Review continuation',exact:true}).click();
+  await expect(page.locator('#confirm-launch')).toBeVisible();expect(previews[0].source_session_id).toBe('root');
+  expect(previews[0].request.project_id).toBe('project-one');expect(previews[0].request.plan_reasoning_effort).toBe(null);
+  await page.locator('[name=task]').fill('A revised next task');await expect(page.locator('#launch-preview')).toBeHidden();
+  await page.getByRole('button',{name:'Review continuation',exact:true}).click();await expect(page.locator('#launch-preview')).toContainText('A revised next task');
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
 test('work, manual child, drafts and mobile terminal use the real components',async({page},info)=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));const {requests}=await fixture(page);
   await page.goto('/work'); await expect(page.getByRole('heading',{name:'Work in progress'})).toBeVisible();
