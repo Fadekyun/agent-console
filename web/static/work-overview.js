@@ -10,6 +10,7 @@ export function setupOverview({state,el,openCreate}) {
     const wrap=el('div',null,'work-statuses');
     for(const text of [`Terminal: ${node.mechanical}`,`Attention: ${attentionNames[node.attention]||node.attention}`,`Result: ${node.result_state}`])wrap.append(el('span',text,'badge'));
     if(node.readiness?.stale)wrap.append(el('span','Inputs changed','badge attention'));
+    if(node.release)wrap.append(el('span',`Release: ${node.release.state}`,'badge'+(node.release.state==='unknown'?' attention':'')));
     if(node.waiting)wrap.append(el('span',node.decision==='proposed'?'Proposed':'Waiting for inputs or capacity','badge'));
     return wrap;
   }

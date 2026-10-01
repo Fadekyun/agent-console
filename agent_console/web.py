@@ -754,6 +754,8 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
 
     from .workflow_dispatch_api import dispatch_routes
     app.include_router(dispatch_routes(session_manager, require_identity))
+    from .workflow_release_api import release_routes
+    app.include_router(release_routes(session_manager, require_identity))
     from .workbench_state import workbench_routes
     app.include_router(workbench_routes(session_manager, require_identity))
     from .workbench_launch_api import launch_routes

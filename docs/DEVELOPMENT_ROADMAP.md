@@ -1,3 +1,9 @@
+## Connected release actions — 2026-10-02 (#140)
+
+- v0.17 connects immutable candidate results and check evidence to exact operator action/target grants and durable adapter attempts. Explicit observation resolves uncertain external outcomes; retries remain separate and bounded by fresh evidence. Small tasks can use their own checks.
+- Trusted adapters are configured host-locally; no automatic release authority is added to agent suggestions/envelopes. Unknown releases appear in Work attention, and Pause/Stop cover dispatch and interruption.
+- See `WORKFLOW_RELEASES.md` for configuration, protocol, recovery, validation and rollback. Remaining skills/provider/guide and final full-revamp acceptance work remains tracked in `FULL_REVAMP_ACCEPTANCE.md`.
+
 ## Staging reliability — 2026-10-02 (#90 / #140)
 
 - v0.16.3: history covers all persisted session kinds, session mutations remain pending/deduplicated through polling and navigation, and stale continuation responses are discarded.

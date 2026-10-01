@@ -1,9 +1,11 @@
 import { setupWorkflow } from '/static/workflow-workbench.js';
 import { setupConnections } from '/static/connections-workbench.js';
+import { setupReleases } from '/static/release-workbench.js';
 function requestKey(){return Array.from(crypto.getRandomValues(new Uint8Array(16)),value=>value.toString(16).padStart(2,'0')).join('');}
 export function setupResults({api,el,message,sessions,editStep,openSession}) {
   const workflow=setupWorkflow({api,el,message,editStep,openSession});
   const connections=setupConnections({api,el,message,sessions});
+  const releases=setupReleases({api,el,message});
   const root=document.querySelector('#session-results');let selected=null;
   function action(label,fn){const button=el('button',label);button.type='button';button.onclick=async()=>{button.disabled=true;try{await fn();}catch(error){message(error.message);}finally{button.disabled=false;}};return button;}
   function field(label,tag='input'){const wrapper=el('label',label),input=el(tag);wrapper.append(input);return {wrapper,input};}
@@ -52,7 +54,9 @@ export function setupResults({api,el,message,sessions,editStep,openSession}) {
     let loaded=false;connected.ontoggle=()=>{if(connected.open&&!loaded){loaded=true;connections.load(connectionRoot,session,()=>load(session));}};
     const next=el('details',null,'panel'),nextRoot=el('div');next.id='workflow-next-steps';next.append(el('summary','Next steps'),nextRoot);
     let nextLoaded=false;next.ontoggle=()=>{if(next.open&&!nextLoaded){nextLoaded=true;workflow.load(nextRoot,session);}};
-    root.append(next,connected);
+    const release=el('details',null,'panel'),releaseRoot=el('div');release.id='workflow-releases';release.append(el('summary','Release actions'),releaseRoot);
+    let releaseLoaded=false;release.ontoggle=()=>{if(release.open&&!releaseLoaded){releaseLoaded=true;releases.load(releaseRoot,session,results.results);}};
+    root.append(next,connected,release);
     root.append(publish,el('h2','Inbox'),el('p',inbox.notice,'small muted'));
     if(!inbox.items.length)root.append(el('p','No handoffs yet.'));
     function inputCard(item){

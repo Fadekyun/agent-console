@@ -210,6 +210,11 @@ class WorkflowEngine:
             if previous['state']=='stopped' and state!='stopped':raise ValueError('stopped workflow cannot be resumed')
             db.execute('INSERT OR REPLACE INTO workflow_policies VALUES(?,?,?,?,?,?)',(root,state,previous['version']+1,canonical(previous['policy']),actor,utc_now()))
             self.store.event(db,'workflow.'+state,root,{},actor)
+        if state=='stopped':
+            with self.store.connect() as db:has_releases=db.execute("SELECT 1 FROM sqlite_master WHERE name='release_attempts'").fetchone()
+            if has_releases:
+                from .workflow_release import ReleaseService
+                ReleaseService(self.manager).stop_workflow(root,actor)
         return self.inspect(root)
 
     def inspect(self,identity):

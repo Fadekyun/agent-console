@@ -43,6 +43,17 @@ class WorkbenchState:
             steps={r['id']:dict(r) for r in db.execute('SELECT * FROM workflow_steps')} if 'workflow_steps' in tables else {}
             attempts=[dict(r) for r in db.execute('SELECT * FROM workflow_attempts ORDER BY generation')] if 'workflow_attempts' in tables else []
             policies={r['root_id']:r['state'] for r in db.execute('SELECT root_id,state FROM workflow_policies')} if 'workflow_policies' in tables else {}
+            releases={}
+            if 'release_attempts' in tables:
+                from .workflow_release import ReleaseService
+                for row in db.execute('''SELECT g.source_session_id,g.id,g.action,g.target,a.state,a.updated_at,a.pid,a.boot_id
+                    FROM release_grants g JOIN release_attempts a ON a.grant_id=g.id
+                    WHERE a.rowid=(SELECT MAX(rowid) FROM release_attempts WHERE grant_id=g.id)
+                    ORDER BY a.updated_at'''):
+                    entry=dict(row);previous=releases.get(row['source_session_id'])
+                    if entry['state'] in {'queued','running'} and not ReleaseService.busy(entry):entry['state']='unknown'
+                    entry.pop('pid');entry.pop('boot_id')
+                    if not previous or previous['state']!='unknown':releases[row['source_session_id']]=entry
             bindings={r['node_id']:r['session_id'] for r in db.execute('SELECT * FROM work_node_bindings')}
             ownership={r['session_id']:dict(r) for r in db.execute('SELECT * FROM work_nodes')}
             readiness={}
@@ -61,6 +72,7 @@ class WorkbenchState:
             session=by_id.get(native_id);config=json.loads(step['config_json']) if step else {}
             owner=ownership[identity]['owner_id'] if identity in ownership else (session or {}).get('parent_session_id')
             owner=alias.get(owner,owner);result=latest.get(native_id)
+            release=releases.get(native_id)
             running=bool(session and session['running']);state=attempt['state'] if attempt else None
             mechanical='running' if running else 'ended' if state=='completed' else 'stopped'
             result_state=('completed' if result['outcome']=='pass' and result['kind']=='final' else 'in-progress' if result['outcome']=='pass' else result['outcome'].replace('fail','failed')) if result else 'in-progress' if state=='running' or running else 'cancelled' if state=='cancelled' else 'failed' if state=='failed' else 'unknown'
@@ -74,7 +86,9 @@ class WorkbenchState:
             reviewed_at=(session or {}).get('attention_updated_at') or ''
             unresolved_failure=result_state in {'failed','blocked'} and workflow_state!='stopped' and (not reviewed_at or reviewed_at<evidence_at)
             needs_attention=attention!='normal' or state=='unknown' or unresolved_failure or bool(ready.get('stale') and workflow_state!='stopped') or bool(step and step['decision']=='proposed' and workflow_state!='stopped')
+            needs_attention=needs_attention or bool(release and release['state']=='unknown')
             activity=max(filter(None,[(session or {}).get('last_activity'),(session or {}).get('created_at'),(session or {}).get('attention_updated_at'),(result or {}).get('created_at'),(attempt or {}).get('updated_at'),(step or {}).get('created_at')]),default='')
+            activity=max(activity,(release or {}).get('updated_at',''))
             nodes[identity]={
                 'id':identity,'owner_id':owner,'native_id':native_id if session else None,'native_name':(session or {}).get('tmux_name'),
                 'title':step['task'] if step else (session or {}).get('tmux_name') or ownership[identity]['purpose'],
@@ -89,6 +103,7 @@ class WorkbenchState:
                 'decision':step['decision'] if step else None,'attempt_state':state,'attempts':history,
                 'readiness':ready,'error':(step or {}).get('error') or (attempt or {}).get('error') or '',
                 'workflow_state':workflow_state,
+                'release':release,
             }
         for node in nodes.values():
             node['project_name']=projects.get(node['project_id'])
@@ -127,6 +142,8 @@ class WorkbenchState:
             work_id=work['id'] if work else None
             selection='target IN (?,?) OR workflow_id=? OR target IN (SELECT id FROM results WHERE session_id=?) OR target IN (SELECT id FROM inbox WHERE target_session_id=?) OR target IN (SELECT session_id FROM work_nodes WHERE graph_id=?)'
             parameters=[session['id'],logical,work_id,session['id'],session['id'],work_id]
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='release_grants'").fetchone():
+                selection+=' OR target IN (SELECT id FROM release_grants WHERE source_session_id=?)';parameters.append(session['id'])
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='workflow_attempts'").fetchone():
                 selection+=' OR target IN (SELECT a.id FROM workflow_attempts a JOIN work_nodes n ON n.session_id=a.step_id WHERE n.graph_id=?)';parameters.append(work_id)
             rows=db.execute('SELECT * FROM workflow_events WHERE sequence<? AND ('+selection+') ORDER BY sequence DESC LIMIT 50',(before,*parameters)).fetchall()

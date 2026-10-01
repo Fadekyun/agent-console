@@ -125,6 +125,33 @@ test('late continuation response cannot open a draft over another session',async
   await expect(page.locator('#continue-session')).toBeEnabled();
   await expect(page.locator('#create-dialog')).not.toBeVisible();
 });
+
+test('exact release preview authorizes once and uncertainty exposes observation instead of retry',async({page})=>{
+  await fixture(page);const requests=[],grants=[];
+  const result={id:'candidate',session_id:'root',version:1,kind:'final',outcome:'pass',summary:'Bounded change verified',checks:['Relevant tests passed'],artifacts:[{kind:'commit',sha:'a'.repeat(40),hash:'b'.repeat(64),label:'Candidate'}],created_at:'2026-10-02T00:00:00Z'};
+  const view={candidate_sha:'a'.repeat(40),target:'test-stage',target_label:'Test staging',action:'deploy',evidence:[{id:'candidate'}],hash:'c'.repeat(64)};
+  await page.route('**/api/sessions/root/results',route=>route.fulfill({json:{results:[result]}}));
+  await page.route('**/api/workflow/release-targets',route=>route.fulfill({json:[{id:'test-stage',label:'Test staging',actions:['deploy']}]}));
+  await page.route('**/api/sessions/root/releases',route=>route.fulfill({json:grants}));
+  await page.route('**/api/workflow/releases/evidence/candidate',route=>route.fulfill({json:[{...result,eligible:true,reason:''}]}));
+  await page.route('**/api/workflow/releases/preview',route=>route.fulfill({json:view}));
+  await page.route('**/api/workflow/releases/authorize',route=>{requests.push(route.request().postDataJSON());const grant={id:'release-one',preview:view,attempts:[]};grants.push(grant);return route.fulfill({json:grant});});
+  await page.route('**/api/workflow/releases/release-one/attempts',route=>{
+    const request=route.request().postDataJSON();requests.push(request);
+    const attempt={id:'attempt-'+requests.length,mode:request.mode,state:request.mode==='apply'?'unknown':'applied',active:false,created_at:'2026-10-02',summary:request.mode==='apply'?'Acknowledgment lost':'Observed exact candidate'};
+    grants[0].attempts.push(attempt);return route.fulfill({json:attempt});
+  });
+  await page.goto('/work#results/session-one');await page.locator('#workflow-releases > summary').click();
+  await page.getByRole('button',{name:'Preview release',exact:true}).click();
+  await expect(page.locator('#workflow-releases')).toContainText('a'.repeat(40));expect(requests).toHaveLength(0);
+  await page.getByRole('button',{name:'Authorize and run',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Check external outcome',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Retry authorized release',exact:true})).toHaveCount(0);
+  expect(requests).toHaveLength(2);expect(requests[0].expected_hash).toBe(view.hash);expect(requests[1].mode).toBe('apply');
+  await page.getByRole('button',{name:'Check external outcome',exact:true}).click();
+  await expect(page.locator('#workflow-releases')).toContainText('Observed exact candidate');expect(requests[2].mode).toBe('probe');
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
 test('work, manual child, drafts and mobile terminal use the real components',async({page},info)=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));const {requests}=await fixture(page);
   await page.goto('/work'); await expect(page.getByRole('heading',{name:'Work in progress'})).toBeVisible();

@@ -1,3 +1,10 @@
+## 0.17.0 — 2026-10-02 (staging, #140)
+
+- Impact: connected results can preview and authorize an exact commit/check/action/target release, then run a configured trusted adapter with a separate external outcome probe. Lost acknowledgments deduplicate; unknown outcomes require observation before explicit retry. Unknown releases appear in Work attention. Workflow Pause/Stop also govern release dispatch/interruption.
+- Configuration/migration: optional owner-controlled `release-targets.json` plus installed adapters; no default production target or credentials. Additive release schema 1 in the companion database and `release-attempts/` worker files. See `WORKFLOW_RELEASES.md` for the adapter protocol and trust boundary.
+- Verification: real adapter process, causal evidence, stale input, auth, idempotency, timeout, orphan, pause/stop and web restart behavior; desktop/phone release preview and reconciliation controls. Live staging verification uses an explicitly isolated filesystem target, not a production release.
+- Rollback: pause/settle or stop/reconcile active operations; select 0.16.3 while preserving state and pinned worker source. Older UI ignores release records and cannot reconcile them. Restore 0.17 for those controls; current console remains independent.
+
 ## 0.16.3 — 2026-10-02 (staging, #90 / #140)
 
 - Impact: operator history includes imported and integration records; status/interrupt/stop requests show pending state and deduplicate through refresh. A delayed continuation response cannot open the wrong session's draft. Workflow approval now binds the exact role instruction hash and checks the actual launch receipt before native startup.
