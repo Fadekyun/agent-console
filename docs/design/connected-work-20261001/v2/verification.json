@@ -1,0 +1,29 @@
+{
+  "browser": "131.0.6778.33",
+  "scope": "Offline revision-2 fixtures; native scroll container only, not production xterm/WebSocket",
+  "checks": [
+    "One session for simple work; larger work suggests two without launching; draft survives task navigation",
+    "Add session below any node with a task, role and explicit dependency; no fixed Review/Deploy chain",
+    "Changing expansion preference does not launch fixture agents",
+    "A simple task finishes in its existing session without extra review agents",
+    "Desktop nested wheel scrolling; no parent scroll chaining; new output preserves reading position; explicit Latest follows; draft survives expand/back",
+    "1440px: Work, Session, Terminal and Skills fit; phone Session hides terminal; full terminal has no page scroll",
+    "1024px: Work, Session, Terminal and Skills fit; phone Session hides terminal; full terminal has no page scroll",
+    "390px: Work, Session, Terminal and Skills fit; phone Session hides terminal; full terminal has no page scroll",
+    "360px: Work, Session, Terminal and Skills fit; phone Session hides terminal; full terminal has no page scroll",
+    "Short viewport keeps composer visible (keyboard-height layout approximation)",
+    "Theme control stays in Settings; dark theme remains available",
+    "Skill search and inspection expose effective delivery and actionable stale guidance",
+    "Touch-enabled Chromium swipe scrolls output without scrolling page or entering Type; explicit Type focuses composer",
+    "No JavaScript errors or HTTP(S) requests"
+  ],
+  "frames": [
+    "B2-01-desktop-work.png",
+    "B2-02-desktop-tree.png",
+    "B2-03-phone-work.png",
+    "B2-04-phone-session.png",
+    "B2-05-phone-terminal.png",
+    "B2-06-skills.png",
+    "B2-07-added-session.png"
+  ]
+}

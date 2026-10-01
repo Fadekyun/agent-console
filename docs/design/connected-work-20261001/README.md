@@ -1,5 +1,7 @@
 # Agent Console design review · 01 October 2026
 
+**Latest: B was selected. [Revision 2](v2/README.md) simplifies mobile and adds an adaptive session tree, manual Add session and a unified terminal/skills revamp plan.** The original comparison below is preserved for review history.
+
 Two alternatives for the same connected terminal workflow. **Design review only; application implementation starts after the operator chooses or revises a concept.** All visible repositories, sessions, files, commits and messages are fictional fixtures.
 
 - **A — Quiet workbench (recommended):** keep the terminal central, with a stable work list, compact dependency strip and collapsible inspector.
