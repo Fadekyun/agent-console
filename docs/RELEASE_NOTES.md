@@ -1,5 +1,13 @@
 ## 0.12.0 (unreleased staging)
 
+## 0.12.1 — 2026-10-02 (staging, #90)
+
+- Impact: Results and handoffs open in a dedicated view on phones and desktop. Publishing is collapsed until requested, with inbox content visible immediately and a return to the session. Session refresh preserves the result form and existing terminal frame. Phone navigation has Work and Settings; Skills remains accessible from Settings. Failed result loads offer retry.
+- Configuration/migration: none; result and inbox APIs/data are unchanged.
+- Verification: desktop, 360px and 390px Playwright handoff journeys; version consistency; live staging inbox and skill delivery check.
+- Rollback: select the prior staging release and restart only the preview service; current Console and stored results are unaffected.
+
+
 - Date: 2026-10-02. Issue: #140.
 - Impact: one-session ready/final results, immutable selected file/commit artifacts, source/version-attributed durable inbox, separate delivery/consumption acknowledgments, capability-bound native reporting, and integrated desktop/phone result/handoff controls.
 - Configuration/migration: companion `connected-work.sqlite3` schema 1 plus `result-objects/`; no sessions schema change. Native launchers export the reporting URL; older sessions need an explicit restart to adopt it. Add the canonical `agent-console-results` guide to staging's shared allowlist. See [RESULTS_AND_HANDOFFS.md](RESULTS_AND_HANDOFFS.md).

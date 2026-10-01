@@ -16,7 +16,8 @@ async function api(path, payload, method = 'POST') {
 const skillsView = setupSkills({ api, el, message, profiles: () => state.me?.profiles || [] });
 let skillsLoaded = false;
 const resultsView = setupResults({api,el,message,sessions:()=>state.sessions});
-$('#show-results').onclick = () => resultsView.load(state.selected).catch(error=>message(error.message));
+let resultsSession = null;
+$('#show-results').onclick = () => { location.hash = `#results/${encodeURIComponent(state.selected.tmux_name)}`; };
 function status(s) { return s.attention_state !== 'normal' && s.attention_state ? names[s.attention_state] || s.attention_state : s.running ? 'Working' : 'Stopped'; }
 function rootOf(s) { const visited = new Set(); while (s.parent_session_id && !visited.has(s.id)) { visited.add(s.id); const p = state.sessions.find(x => x.id === s.parent_session_id); if (!p) break; s = p; } return s; }
 function family(s) { const root = rootOf(s); return state.sessions.filter(x => rootOf(x).id === root.id); }
@@ -60,27 +61,38 @@ function renderSession() {
   if (attention.dataset.session !== s.id) {
     $('#session-detail').open = !matchMedia('(max-width:760px)').matches;
     attention.dataset.session = s.id; attention.elements.state.value = s.attention_state || 'normal'; attention.elements.note.value = s.attention_note || '';
-    $('#session-output').hidden = true; $('#session-skills').hidden = true; $('#session-results').hidden = true;
+    $('#session-output').hidden = true; $('#session-skills').hidden = true;
   }
 }
 function route() {
-  const hash = location.hash || '#work';
+  const hash = location.hash || '#work', showingResults = hash.startsWith('#results/');
   let sessionName = null;
-  try { sessionName = hash.startsWith('#session/') ? decodeURIComponent(hash.slice(9)) : null; } catch { message('Invalid session link. Return to Work.'); }
+  try { sessionName = (hash.startsWith('#session/') || showingResults) ? decodeURIComponent(hash.slice(9)) : null; } catch { message('Invalid session link. Return to Work.'); }
   const previous = state.selected?.tmux_name;
   state.selected = state.sessions.find(s => s.tmux_name === sessionName) || null;
   $('#work-view').hidden = Boolean(sessionName) || ['#settings', '#skills'].includes(hash);
   $('#skills-view').hidden = hash !== '#skills';
   if (hash === '#skills' && !skillsLoaded && state.me) { skillsLoaded = true; skillsView.load().catch(error => { skillsLoaded = false; message(error.message); }); }
   $('#settings-view').hidden = hash !== '#settings';
-  $('#session-view').hidden = !state.selected;
-  document.querySelectorAll('.mobile-nav a').forEach(a => a.setAttribute('aria-current', a.hash === (['#settings','#skills'].includes(hash) ? hash : '#work') ? 'page' : 'false'));
+  $('#session-view').hidden = !state.selected || showingResults;
+  $('#results-view').hidden = !state.selected || !showingResults;
+  if (showingResults && state.selected) {
+    $('#results-back').href = sessionLink(state.selected);
+    $('#results-session').textContent = state.selected.tmux_name;
+    if (resultsSession !== state.selected.id) {
+      resultsSession = state.selected.id;
+      resultsView.load(state.selected).catch(error => message(error.message));
+      $('#results-view h1').focus({preventScroll:true});
+      window.scrollTo(0, 0);
+    }
+  } else resultsSession = null;
+  document.querySelectorAll('.mobile-nav a').forEach(a => a.setAttribute('aria-current', a.hash === (['#settings','#skills'].includes(hash) ? '#settings' : '#work') ? 'page' : 'false'));
   if (sessionName && !state.selected) message('This session is no longer available. Return to Work.', 'route');
   else if ($('#notice').dataset.kind === 'route') message('');
   renderWork(); renderSession();
   for (const [name, frame] of state.frames) frame.hidden = name !== state.selected?.tmux_name;
   if (!state.selected || !state.frames.has(state.selected.tmux_name)) $('#terminal-panel').hidden = true;
-  if (state.selected?.running && previous !== state.selected.tmux_name && !matchMedia('(max-width:760px)').matches) openTerminal();
+  if (!showingResults && state.selected?.running && previous !== state.selected.tmux_name && !matchMedia('(max-width:760px)').matches) openTerminal();
 }
 async function refresh() {
   if (state.loading) return state.loading;

@@ -1,5 +1,11 @@
 # Development Roadmap
 
+### 2026-10-02 — #90 focused results view
+
+- Results and handoffs have a shared navigated view with collapsed publishing, immediate inbox access and return navigation. Desktop and phone journeys verify publishing and acknowledgment without nested session controls.
+- The broader #90/#140/#6 acceptance checklist remains open in `FULL_REVAMP_ACCEPTANCE.md`.
+
+
 This document tracks the planned and completed development work for Agent Console.
 
 ## Integration in progress

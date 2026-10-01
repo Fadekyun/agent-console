@@ -22,10 +22,15 @@ export function setupResults({api,el,message,sessions}) {
   }
   async function load(session){
     selected=session.id;root.hidden=false;root.replaceChildren(el('p','Loading results and inputs…'));
-    const [results,inbox]=await Promise.all([api(`/api/sessions/${session.id}/results`),api(`/api/sessions/${session.id}/inbox`)]);
+    let results,inbox;
+    try { [results,inbox]=await Promise.all([api(`/api/sessions/${session.id}/results`),api(`/api/sessions/${session.id}/inbox`)]); }
+    catch(error){
+      if(selected===session.id)root.replaceChildren(el('p',error.message),action('Retry loading results',()=>load(session)));
+      return;
+    }
     if(selected!==session.id)return;
-    root.replaceChildren(el('h3','Results & handoffs'));
-    const form=el('form',null,'panel'),kind=field('Result type','select'),outcome=field('Outcome','select'),summary=field('Summary','textarea'),checks=field('Checks performed (one per line)','textarea'),files=field('Selected files (one repository-relative path per line)','textarea'),commit=field('Exact commit SHA (optional)');
+    root.replaceChildren();
+    const form=el('form'),kind=field('Result type','select'),outcome=field('Outcome','select'),summary=field('Summary','textarea'),checks=field('Checks performed (one per line)','textarea'),files=field('Selected files (one repository-relative path per line)','textarea'),commit=field('Exact commit SHA (optional)');
     kind.input.append(option('final','Final result'),option('ready','Ready checkpoint'));outcome.input.append(option('pass','Passed'),option('fail','Failed'),option('blocked','Blocked'));
     summary.input.required=true;summary.input.maxLength=32000;summary.input.rows=3;
     form.append(el('p','A small task can finish here. Publish only the checks and artifacts this session actually produced.','small muted'),kind.wrapper,outcome.wrapper,summary.wrapper);
@@ -36,7 +41,8 @@ export function setupResults({api,el,message,sessions}) {
       const artifacts=lines(files.input).map(path=>({kind:'file',path}));if(commit.input.value.trim())artifacts.push({kind:'commit',sha:commit.input.value.trim()});
       await api(`/api/sessions/${session.id}/results`,{kind:kind.input.value,outcome:outcome.input.value,summary:summary.input.value,checks:lines(checks.input),artifacts,request_key:key});key=requestKey();message('Result published. Its selected artifact snapshots are preserved.');await load(session);
     }catch(error){message(error.message);}finally{submit.disabled=false;}};
-    root.append(form,el('h3','Inbox'),el('p',inbox.notice,'small muted'));
+    const publish = el('details',null,'panel');publish.append(el('summary','Publish a result'),form);
+    root.append(publish,el('h2','Inbox'),el('p',inbox.notice,'small muted'));
     if(!inbox.items.length)root.append(el('p','No handoffs yet.'));
     function inputCard(item){
       const card=renderResult(item.result,[]);card.prepend(el('p',`Input ${item.sequence} · ${item.state} · from ${item.source_session_id}`,'badge'));
@@ -55,7 +61,7 @@ export function setupResults({api,el,message,sessions}) {
         after=page.next_sequence;if(page.items.length<5)more.remove();
       });root.append(more);
     }
-    root.append(el('h3','Published versions'));
+    root.append(el('h2','Published versions'));
     const targets=sessions().filter(s=>s.id!==session.id&&s.managed&&s.execution_kind!=='integration-plan');
     if(!results.results.length)root.append(el('p','No explicit ready or final result has been published. Terminal output and attention status do not publish a result automatically.'));
     for(const result of results.results)root.append(renderResult(result,targets));

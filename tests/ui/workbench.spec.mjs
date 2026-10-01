@@ -102,7 +102,8 @@ test('skills inspection and exact revision approval work on desktop and phone', 
   await page.route('**/api/skill-registry/bounded-coding/approve',route=>{approved=route.request().postDataJSON();return route.fulfill({json:{hash:item.hash}});});
   await page.goto('/work#session/missing-fixture');
   await expect(page.getByText('This session is no longer available. Return to Work.',{exact:true})).toBeVisible();
-  await page.getByRole('link',{name:'Skills',exact:true}).click();
+  await page.getByRole('link',{name:'Settings',exact:true}).click();
+  await page.getByRole('link',{name:'Manage skills',exact:true}).click();
   await expect(page.locator('#notice')).toBeHidden();
   await expect(page.getByRole('heading',{name:'Skills',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Inspect',exact:true}).click();
@@ -136,11 +137,16 @@ test('one-session result and durable handoff acknowledge distinct states',async(
   await page.goto('/work#session/session-one');
   if(info.project.name!=='desktop')await page.locator('#session-detail > summary').click();
   await page.getByRole('button',{name:'Results & handoffs',exact:true}).click();
+  await expect(page.locator('#session-view')).toBeHidden();
+  await page.getByText('Publish a result',{exact:true}).click();
   await page.getByLabel('Summary',{exact:true}).fill('Fixed the layout and checked the phone viewport.');
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect(page.getByLabel('Summary',{exact:true})).toHaveValue('Fixed the layout and checked the phone viewport.');
   await page.getByRole('button',{name:'Publish result',exact:true}).click();
   await expect(page.getByRole('heading',{name:'Final result · v1 · pass',exact:true})).toBeVisible();
   expect(published.kind).toBe('final');expect(published.request_key).toBeTruthy();
   await page.getByRole('button',{name:'Queue handoff',exact:true}).click();await expect.poll(()=>queued).toBe(true);
+  await page.getByRole('link',{name:'Back to session'}).click();
   await page.locator('#session-tree').getByRole('link',{name:'session-target',exact:true}).click();
   if(info.project.name!=='desktop')await page.locator('#session-detail > summary').click();
   await page.getByRole('button',{name:'Results & handoffs',exact:true}).click();

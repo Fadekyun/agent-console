@@ -19,3 +19,7 @@
 #session-results .panel { margin:12px 0; overflow-wrap:anywhere; }
 #session-results label { margin:12px 0; }
 #session-results form > details { margin:12px 0; }
+
+.session-actions{display:flex;gap:8px;flex-wrap:wrap}
+#results-view{max-width:840px;margin:auto}#results-session{overflow-wrap:anywhere}#session-results>details:not([open])>summary{margin:0;min-height:24px}#session-results>h2{margin-top:24px}
+@media(max-width:760px){.session-actions{margin-top:16px}#session-view>.heading .session-actions button{margin-top:0;width:auto;flex:1}#results-view h1{font-size:26px}}
