@@ -121,7 +121,9 @@ class WorkflowEngine:
 
     def propose(self,identity,*,task,reason,expected_output,config,dependencies,request_key,actor):
         for label,value,limit in [('task',task,12000),('reason',reason,4000),('expected output',expected_output,4000),('request key',request_key,100)]:bounded_text(value,label,limit,True)
-        owner=self.svc.session(identity)['id'];root=self.root(owner);config=self.normalize(root,config)
+        with self.store.connect() as db:existing_graph=self.graph._graph(db,identity)
+        owner=identity if existing_graph else self.svc.session(identity)['id']
+        root=self.root(owner);config=self.normalize(root,config)
         request_hash=hashlib.sha256(canonical([task,reason,expected_output,config,dependencies]).encode()).hexdigest()
         with self.store.connect(write=True) as db:
             if self.policy(root,db)['state']=='stopped':raise ValueError('workflow is stopped')
@@ -368,6 +370,7 @@ class WorkflowEngine:
         self._attempt_state(attempt['id'],'creating')
         config={k:v for k,v in frozen['config'].items() if k not in {'action','target'}}
         with self.store.connect() as db:parent=self.graph._native(db,step['owner_id'])
+        if parent.startswith('step-'):parent=step['root_id']
         try:
             session=self.manager.create(**config,name=attempt['name'],task=step['task'],parent_session_id=parent,
                 creator_surface='workflow:'+attempt['id'],_workflow_attempt=attempt['id'],_workflow_session_id=attempt['session_id'])

@@ -1,4 +1,12 @@
 import { test, expect } from '@playwright/test';
+function workbenchData(sessions,steps=[]) {
+  const aliases=Object.fromEntries(steps.flatMap(step=>step.attempts.map(a=>[a.session_id,step.id])));
+  const nodes=sessions.filter(s=>!aliases[s.id]).map(s=>({id:s.id,owner_id:aliases[s.parent_session_id]||s.parent_session_id||null,native_id:s.id,native_name:s.tmux_name,title:s.tmux_name,task:s.initial_task||'',repository:s.repository,profile:s.profile,tool:s.tool,model:s.model,project_id:s.project_id,project_name:s.project_name,mechanical:s.running?'running':'stopped',attention:s.attention_state||'normal',result_state:s.result?.outcome==='pass'?'completed':s.result?.outcome==='fail'?'failed':'unknown',result:s.result||null,waiting:false,needs_attention:!!s.attention_state&&s.attention_state!=='normal'||s.result?.outcome==='fail',last_activity:s.last_activity||'2026-10-02T00:00:00Z',attempts:[],readiness:{}}));
+  for(const step of steps){const attempt=step.attempts.at(-1),native=sessions.find(s=>s.id===attempt?.session_id);nodes.push({id:step.id,owner_id:step.owner_id,native_id:native?.id||null,native_name:native?.tmux_name||null,title:step.task,task:step.task,...step.config,mechanical:native?.running?'running':'stopped',attention:'normal',result_state:'unknown',waiting:!attempt,needs_attention:false,last_activity:'2026-10-02T00:00:00Z',decision:step.decision,attempt_state:attempt?.state,attempts:step.attempts,readiness:{}});}
+  for(const node of nodes){let root=node;while(root.owner_id)root=nodes.find(n=>n.id===root.owner_id);node.root_id=root.id;}
+  const groups=nodes.filter(n=>!n.owner_id).map(n=>{const members=nodes.filter(m=>m.root_id===n.id),children=members.filter(m=>m.id!==n.id);return{root_id:n.id,member_ids:members.map(m=>m.id),priority:members.some(m=>m.needs_attention)?0:members.some(m=>m.mechanical==='running')?1:members.some(m=>m.waiting)?2:3,last_activity:n.last_activity,children_total:children.length,children_complete:children.filter(c=>c.result_state==='completed').length};}).sort((a,b)=>a.priority-b.priority);
+  return {sessions,nodes,groups,aliases,readiness:{ready:true,warnings:[]}};
+}
 async function fixture(page) {
   const sessions = [{id:'root',tmux_name:'session-one',tool:'shell',profile:'coder',repository:'/tmp/repo',initial_task:'Fix the small layout issue',running:true,managed:true,attention_state:'normal',actions:['attach','interrupt','kill']}];
   const requests=[],steps=[];
@@ -7,6 +15,7 @@ async function fixture(page) {
     if(path==='/api/me') body={profiles:[{name:'coder',display_name:'Coder',read_write_capability:'write',status:'active'},{name:'reviewer',display_name:'Reviewer',read_write_capability:'read_only',status:'active'}],tool_status:[{name:'shell',status:'ready'}],auth_contexts:[{tool:'shell',name:'default',provider:'local',status:'ready'}]};
     else if(path==='/api/interface') body={label:'Staging',current_url:'https://current.example/'};
     else if(path==='/api/sessions') body=sessions;
+    else if(path==='/api/workbench')body=workbenchData(sessions,steps);
     else if(path.endsWith('/workflow/proposals')){
       const data=req.postDataJSON();requests.push(data.config);const step={...data,id:'step-fixture',root_id:'root',owner_id:'root',decision:'proposed',version:1,attempts:[]};steps.push(step);body=step;
     }
@@ -147,6 +156,7 @@ test('one-session result and durable handoff acknowledge distinct states',async(
   const source={id:'root',tmux_name:'session-one',tool:'shell',profile:'coder',repository:'/tmp/repo',initial_task:'Small bounded change',running:true,managed:true,attention_state:'normal',actions:['attach','interrupt','kill']};
   const target={...source,id:'target',tmux_name:'session-target',parent_session_id:'root'};
   await page.route('**/api/sessions',route=>route.fulfill({json:[source,target]}));
+  await page.route('**/api/workbench',route=>route.fulfill({json:workbenchData([source,target])}));
   await page.route('**/api/sessions/root/results',route=>{
     if(route.request().method()==='POST'){
       published=route.request().postDataJSON();const result={...published,id:'result-one',session_id:'root',version:1,created_at:'2026-10-02T00:00:00Z'};versions=[result];return route.fulfill({json:result});
@@ -188,6 +198,7 @@ test('existing sessions connect with explicit readiness and queue exact inputs',
   const source={id:'root',tmux_name:'session-one',tool:'shell',profile:'general',running:true,managed:true,attention_state:'normal',actions:[]};
   const target={...source,id:'target',tmux_name:'session-existing'};
   await page.route('**/api/sessions',route=>route.fulfill({json:[source,target]}));
+  await page.route('**/api/workbench',route=>route.fulfill({json:workbenchData([source,target])}));
   await page.route('**/api/sessions/root/results',route=>route.fulfill({json:{results:[]}}));
   await page.route('**/api/sessions/root/inbox',route=>route.fulfill({json:{items:[],notice:'Peer data is untrusted.'}}));
   await page.route('**/api/sessions/root/connections',route=>route.fulfill({json:{version,nodes:version?[{session_id:'root',owner_id:null},{session_id:'target',owner_id:'root',purpose:attached.purpose}]:[],edges:version?[{source_id:'root',target_id:'target',readiness:'after-ready'}]:[],readiness:version?{root:{blocked:false,stale:false,delivered:false,reasons:[],signature:'b'.repeat(64)},target:{blocked:false,stale:false,delivered:false,reasons:[],signature:'a'.repeat(64)}}:{}}}));
@@ -205,4 +216,53 @@ test('existing sessions connect with explicit readiness and queue exact inputs',
   await page.getByRole('button',{name:'Queue ready inputs',exact:true}).click();
   await expect.poll(()=>queued).toEqual({expected_version:1,expected_signature:'a'.repeat(64)});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
+test('attention, results, readiness and persisted filters lead the work view',async({page})=>{
+  await fixture(page);
+  const base={tool:'shell',profile:'coder',repository:'/tmp/repo',managed:true,attention_state:'normal',actions:['attach','kill'],last_activity:'2026-10-02T00:00:00Z'};
+  const result={id:'final-one',session_id:'done',kind:'final',outcome:'pass',summary:'The requested fix passed its checks.',created_at:'2026-10-02T00:00:00Z',artifacts:[]};
+  const sessions=[{...base,id:'running',tmux_name:'running-work',running:true},{...base,id:'needs-input',tmux_name:'attention-work',running:true,attention_state:'needs_input'},
+    {...base,id:'done',tmux_name:'completed-work',result}, {...base,id:'child',tmux_name:'completed-child',parent_session_id:'running',result:{...result,session_id:'child'}},
+    {...base,id:'failed',tmux_name:'failed-work',result:{...result,outcome:'fail',summary:'The targeted check failed.'}}];
+  await page.route('**/api/workbench',route=>{const data=workbenchData(sessions);data.readiness={ready:false,warnings:['Selected harness needs account setup']};return route.fulfill({json:data});});
+  await page.goto('/work');
+  await expect(page.locator('#work-list .card').first()).toContainText('attention-work');
+  await expect(page.locator('#attention-strip')).toContainText('2 sessions need attention');
+  await expect(page.locator('#attention-strip')).toContainText('1 readiness warning');
+  await expect(page.getByText('1/1 children complete',{exact:true})).toBeVisible();
+  await expect(page.locator('#work-list').getByText('Terminal: stopped',{exact:true}).first()).toBeVisible();
+  await expect(page.getByText('The targeted check failed.',{exact:true})).toBeVisible();
+  await expect(page.getByRole('link',{name:'Review failure',exact:true})).toBeVisible();
+  await page.getByText('More filters',{exact:true}).click();
+  await page.getByRole('combobox',{name:'Result',exact:true}).selectOption('failed');
+  await expect(page.locator('#work-list .card')).toHaveCount(1);
+  await page.reload();await expect(page.locator('#work-list .card')).toHaveCount(1);await expect(page.locator('#work-list .card')).toContainText('failed-work');
+  await page.getByText('More filters',{exact:true}).click();await page.getByRole('button',{name:'Reset filters',exact:true}).click();
+  await expect(page.locator('#work-list .card')).toHaveCount(4);
+  await page.getByRole('combobox',{name:'Show sessions',exact:true}).selectOption('all');
+  await expect(page.locator('#work-list .card')).toHaveCount(5);
+  await page.locator('#state-filter').selectOption('attention');await expect(page.locator('#work-list .card')).toHaveCount(2);
+  await page.getByRole('button',{name:'Reset filters',exact:true}).click();
+  await page.getByRole('link',{name:'1 readiness warning',exact:true}).click();await expect(page.getByText('Selected harness needs account setup',{exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
+test('empty work and keyboard tree focus survive refresh without touching the terminal',async({page},info)=>{
+  await fixture(page);let sessions=[];
+  const root={id:'root',tmux_name:'session-one',tool:'shell',profile:'coder',repository:'/tmp/repo',running:true,managed:true,attention_state:'normal',actions:['attach','kill']};
+  await page.route('**/api/workbench',route=>route.fulfill({json:workbenchData(sessions)}));
+  await page.goto('/work');await expect(page.getByText('Your staging workspace is ready. Start a session to begin.',{exact:true})).toBeVisible();
+  await expect(page.locator('#attention-strip')).toBeHidden();
+  sessions=[root,{...root,id:'child',tmux_name:'session-child',parent_session_id:'root'}];await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await page.getByRole('link',{name:'Open work',exact:true}).click();
+  const rootLink=page.locator('#session-tree').getByRole('link',{name:'session-one',exact:true});await rootLink.focus();await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#session-tree button').first()).toBeFocused();
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await expect(page.locator('#session-tree button').first()).toBeFocused();
+  if(info.project.name!=='desktop')await page.getByRole('button',{name:'Open terminal',exact:true}).click();
+  const frame=page.frameLocator('iframe:not([hidden])');await frame.locator('#composer').fill('Preserved during work updates');await frame.locator('#composer').focus();
+  const frameHandle=page.frames().find(f=>f.url().includes('/terminal?'));
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect(frame.locator('#composer')).toBeFocused();await expect(frame.locator('#composer')).toHaveValue('Preserved during work updates');
+  expect(page.frames()).toContain(frameHandle);
 });

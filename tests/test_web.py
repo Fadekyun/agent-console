@@ -32,6 +32,23 @@ from agent_console.web import create_app
     "tmux required",
 )
 class WebTests(unittest.TestCase):
+    def test_workbench_ownership_results_history_and_authentication(self):
+        from agent_console.workflow_service import WorkflowService
+        first=self.manager.create(tool='shell',profile='general',name='workbench-first')
+        second=self.manager.create(tool='shell',profile='general',name='workbench-second')
+        svc=WorkflowService(self.manager)
+        svc.attach(first['id'],second['id'],purpose='Connected check',dependencies=[],expected_version=0,actor='test')
+        svc.publish(second['id'],{'kind':'final','outcome':'fail','summary':'One check failed','checks':[],'artifacts':[],'request_key':'result-1'},'test')
+        self.assertEqual(self.client.get('/api/workbench').status_code,403)
+        response=self.client.get('/api/workbench',headers=self.headers);self.assertEqual(response.status_code,200,response.text)
+        view=response.json();node=next(n for n in view['nodes'] if n['id']==second['id'])
+        self.assertEqual(node['owner_id'],first['id']);self.assertEqual(node['mechanical'],'running');self.assertEqual(node['attention'],'normal');self.assertEqual(node['result_state'],'failed')
+        self.assertEqual(view['groups'][0]['children_total'],1)
+        path='/api/workbench/sessions/'+second['id']+'/history'
+        self.assertEqual(self.client.get(path).status_code,403)
+        history=self.client.get(path,headers=self.headers).json();self.assertTrue(any(e['action']=='result.published' for e in history['events']))
+        self.assertNotIn('evidence_capability',json.dumps(view)+json.dumps(history))
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)

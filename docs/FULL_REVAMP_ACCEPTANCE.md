@@ -4,12 +4,12 @@ Objective: finish issues #90, #140 and #6, update development documentation, pus
 
 ## #90 — workbench
 
-- [ ] Conditional attention/readiness strip; priority ordering; running/waiting/recent work.
-- [ ] Distinct mechanical, attention and result states; repository/project, role, harness/model and activity.
-- [ ] Compact child completion progress; structured recent results, failed/retryable results and next action.
+- [x] Conditional attention/readiness strip; priority ordering; running/waiting/recent work.
+- [x] Distinct mechanical, attention and result states; repository/project, role, harness/model and activity.
+- [x] Compact child completion progress; structured recent results, failed/retryable results and next action.
 - [ ] New session, reusable recipe preview/run, exact-configuration resume/retry.
 - [ ] Session overview, terminal, result/handoff, children, effective configuration and history.
-- [ ] Project/profile/harness/mechanical/attention/result/root filters with local preferences.
+- [x] Project/profile/harness/mechanical/attention/result/root filters with local preferences.
 - [ ] Shared desktop/mobile state, keyboard navigation and pending/errors; terminal focus survives refresh.
 - [ ] Real terminal matrix: embedded/expanded, wheel/touch, normal/alternate screen, output while reading, selection/copy/paste and denied clipboard, resize/keyboard/orientation, reconnect and multiple terminals.
 - [ ] Playwright acceptance scenarios from the issue plus real staging verification.
@@ -75,3 +75,9 @@ Unit/native-fixture, API and browser evidence covers dispatch, crash recovery, c
 The checked #140 items above are supported by [native dispatch verification](WORKFLOW_DISPATCH_VERIFICATION.md), not by terminal exit status alone. A real Codex Pro attempt consumed a selected immutable snapshot after its original file was removed, published a passing structured final and survived a web restart with one durable launch. Rollback to 0.13 and restoration preserved all 14 workflow table counts. Current-console PID/release and both switching routes were unchanged.
 
 This verifies those protocol portions only. The launch tree still needs connected ownership/attempt navigation, exact external release gates remain unsupported, and the unchecked workbench/skills/guide/provider requirements remain necessary for the full goal.
+
+## Work overview checkpoint — 2026-10-02
+
+Version 0.15 unifies main Work/Session navigation with connected ownership and logical steps. Native attempts collapse under their task with explicit history links. Backend summaries keep terminal, attention and result states separate; stopped terminals without reports remain unknown. Explicitly acknowledged failures remain failed but can leave the attention queue. Results, child completion, readiness warnings, priority groups and locally persisted secondary filters are visible without opening a terminal. History exposes attributed workflow/session audit events with separate cursors. Refresh preserves tree focus and active terminal frames.
+
+The checked #90 summary/filter requirements are covered by WorkbenchState tests, authenticated API coverage, browser scenarios and live staging evidence. Recipes, exact-configuration continuation, effective configuration and the complete terminal matrix remain open; this is not whole-goal completion.

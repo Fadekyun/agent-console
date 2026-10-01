@@ -1,5 +1,11 @@
 # Development Roadmap
 
+### 2026-10-02 — #90 shared work and ownership overview
+
+- Unified main navigation with connected ownership/logical steps and current native bindings, retaining historical attempts. Added distinct status fields, priority groups, results/child progress, warnings, locally persisted filters, keyboard focus preservation and bounded history.
+- Manual Add session can propose work beneath an unlaunched step; alongside work uses its workflow root as the native launch parent until the logical owner launches. Required-input semantics remain explicit.
+- Recipes, exact-configuration continuation and effective configuration remain the next workbench requirements; the full terminal/skills/release audit remains open.
+
 ### 2026-10-02 — #90 compact workflow details
 
 - Long next-step prompts use a short heading with full task/configuration available on demand. Result handoff forms are collapsed until requested; stopped workflow guidance is trimmed. Tested across desktop and phone widths.

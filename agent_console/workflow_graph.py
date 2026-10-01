@@ -50,6 +50,10 @@ class WorkflowGraph:
     @staticmethod
     def _logical(db,session_id):
         row=db.execute('SELECT node_id FROM work_node_bindings WHERE session_id=?',(session_id,)).fetchone()
+        if not row and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_attempts'").fetchone():
+            version=db.execute('SELECT version FROM dispatch_schema').fetchone()
+            if not version or version[0]!=1:raise ValueError('unsupported workflow dispatch schema')
+            row=db.execute('SELECT step_id FROM workflow_attempts WHERE session_id=?',(session_id,)).fetchone()
         return row[0] if row else session_id
 
     @staticmethod

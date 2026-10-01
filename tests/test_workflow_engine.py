@@ -69,6 +69,17 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
         self.engine.tick();self.assertEqual(self.calls.read_text().splitlines(),['started'])
         native=done['attempts'][0]['session_id'];self.assertEqual(self.engine.store.results(native)[0]['outcome'],'pass')
 
+    def test_alongside_child_can_launch_beneath_a_pending_logical_owner(self):
+        owner=self.propose(key='pending-owner')
+        child=self.engine.propose(owner['id'],task='Independent alongside work',reason='Does not require the pending output',expected_output='A separate result',
+            config={'tool':'codex','profile':'general','worktree':False},dependencies=[{'source_id':owner['id'],'readiness':'alongside'}],request_key='alongside-child',actor='test')
+        self.accept(child);done=self.finish(child['id'])
+        self.assertEqual(done['attempts'][0]['state'],'completed',done)
+        self.assertEqual(self.engine.step(owner['id'])['attempts'],[])
+        native=self.manager.inspect(done['attempts'][0]['name'])
+        self.assertEqual(native['parent_session_id'],self.root['id'])
+        self.assertEqual(done['owner_id'],owner['id'])
+
     def test_after_final_waits_then_passes_exact_input_to_native_task(self):
         step=self.propose(dependencies=[{'source_id':self.root['id'],'readiness':'after-final'}]);self.accept(step);self.engine.tick();self.assertFalse(self.calls.exists())
         self.publish('ready');self.engine.tick();self.assertFalse(self.calls.exists())

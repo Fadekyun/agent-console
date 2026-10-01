@@ -1,9 +1,10 @@
+import { setupOverview } from '/static/work-overview.js';
 import { setupResults } from '/static/results-workbench.js';
 import { setupSkills } from '/static/skill-workbench.js';
 import { initTheme } from '/static/theme.js?v=8';
 const $ = (s, root = document) => root.querySelector(s);
 const form = $('#create-form');
-const state = { sessions: [], me: null, selected: null, loading: false, frames: new Map() };
+const state = { sessions: [], me: null, selected: null, work: null, selectedNodeId: null, loading: false, frames: new Map() };
 const names = { normal: 'Working', needs_input: 'Needs input', blocked: 'Blocked', ready_for_review: 'Ready for review' };
 function el(tag, text, cls) { const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node; }
 function message(text, kind = 'general') { $('#notice').textContent = text; $('#notice').hidden = !text; $('#notice').dataset.kind = kind; }
@@ -19,23 +20,9 @@ const resultsView = setupResults({api,el,message,sessions:()=>state.sessions,edi
 let resultsSession = null, resultsReady = Promise.resolve();
 $('#show-results').onclick = () => { location.hash = `#results/${encodeURIComponent(state.selected.tmux_name)}`; };
 function status(s) { return s.attention_state !== 'normal' && s.attention_state ? names[s.attention_state] || s.attention_state : s.running ? 'Working' : 'Stopped'; }
-function rootOf(s) { const visited = new Set(); while (s.parent_session_id && !visited.has(s.id)) { visited.add(s.id); const p = state.sessions.find(x => x.id === s.parent_session_id); if (!p) break; s = p; } return s; }
-function family(s) { const root = rootOf(s); return state.sessions.filter(x => rootOf(x).id === root.id); }
 function sessionLink(s) { return `#session/${encodeURIComponent(s.tmux_name)}`; }
-function renderWork() {
-  const q = $('#search').value.toLowerCase().trim(), filter = $('#state-filter').value;
-  const roots = state.sessions.filter(s => rootOf(s).id === s.id).filter(s => {
-    const members = family(s);
-    return members.some(x => (!q || `${x.tmux_name} ${x.initial_task || ''} ${x.repository || ''}`.toLowerCase().includes(q)) && (filter === 'all' || (filter === 'active' ? x.running : ['needs_input','blocked','ready_for_review'].includes(x.attention_state))));
-  });
-  $('#work-list').replaceChildren(...roots.map(s => {
-    const members = family(s), attention = members.find(x => ['blocked','needs_input','ready_for_review'].includes(x.attention_state));
-    const card = el('article', null, 'card');
-    card.append(el('span', attention ? status(attention) : members.some(x => x.running) ? 'Working' : 'Stopped', `badge${attention ? ' attention' : ''}`), el('h2', s.tmux_name), el('p', s.initial_task || 'Open this session to continue your work.', 'brief muted'), el('p', `${members.length} session${members.length === 1 ? '' : 's'} · ${s.repository || 'No repository'}`, 'meta'));
-    const link = el('a', 'Open work', 'button'); link.href = sessionLink(attention || s); card.append(link); return card;
-  }));
-  if (!roots.length) $('#work-list').append(el('p', state.sessions.length ? 'No work matches these filters.' : 'Your staging workspace is ready. Start a session to begin.', 'empty'));
-}
+const overview=setupOverview({state,el,openCreate});
+function renderWork(){overview.renderWork();}
 function renderSession() {
   const s = state.selected;
   if (!s) return;
@@ -43,16 +30,14 @@ function renderSession() {
   $('#session-state').textContent = status(s);
   $('#session-meta').textContent = `${s.tool || 'Terminal'} · ${s.profile || 'Session'} · ${s.repository || ''}`;
   $('#session-brief').textContent = s.initial_task || 'No stored task brief.';
-  const members = family(s), root = rootOf(s), nodes = [], visited = new Set();
-  function visit(node, depth) {
-    if (visited.has(node.id)) return; visited.add(node.id);
-    const item = el('div', null, `node${node.id === s.id ? ' active' : ''}`); item.style.setProperty('--depth', depth);
-    const link = el('a', node.tmux_name); link.href = sessionLink(node); if (node.id === s.id) link.setAttribute('aria-current','page');
-    item.append(link, el('small', `${node.profile || 'Session'} · ${status(node)}`));
-    if (node.managed && node.execution_kind !== 'integration-plan') { const add = el('button', '+ Add session'); add.onclick = () => openCreate(node); item.append(add); }
-    nodes.push(item); members.filter(x => x.parent_session_id === node.id).forEach(child => visit(child, depth + 1));
+  overview.renderTree(s,state.selectedNodeId);
+  const node=overview.nodeFor(s);
+  if(node){
+    const historical=node.native_id!==s.id?node.attempts.find(a=>a.session_id===s.id):null;
+    const displayed=historical?{...node,mechanical:s.running?'running':'stopped',attention:s.attention_state||'normal',result_state:historical.result?.outcome==='pass'?'completed':historical.result?.outcome==='fail'?'failed':'unknown',readiness:{}}:node;
+    $('#session-statuses').replaceChildren(overview.statuses(displayed));
+    if(historical)$('#session-statuses').append(el('p',`Historical attempt ${historical.generation}. The tree links to the current attempt.`,'small muted'));
   }
-  visit(root, 0); $('#session-tree').replaceChildren(...nodes);
   $('#open-terminal').disabled = !s.running;
   $('#interrupt-session').hidden = !s.actions?.includes('interrupt');
   $('#stop-session').hidden = !s.actions?.includes('kill');
@@ -61,13 +46,17 @@ function renderSession() {
   if (attention.dataset.session !== s.id) {
     $('#session-detail').open = !matchMedia('(max-width:760px)').matches;
     attention.dataset.session = s.id; attention.elements.state.value = s.attention_state || 'normal'; attention.elements.note.value = s.attention_note || '';
-    $('#session-output').hidden = true; $('#session-skills').hidden = true;
+    $('#session-output').hidden = true; $('#session-skills').hidden = true; $('#session-history').hidden=true;
   }
 }
 function route() {
-  const hash = location.hash || '#work', showingResults = hash.startsWith('#results/');
+  const hash = location.hash || '#work', showingStep=hash.startsWith('#step/'), showingResults = hash.startsWith('#results/')||showingStep;
   let sessionName = null;
-  try { sessionName = (hash.startsWith('#session/') || showingResults) ? decodeURIComponent(hash.slice(9)) : null; } catch { message('Invalid session link. Return to Work.'); }
+  try {
+    state.selectedNodeId=showingStep?decodeURIComponent(hash.slice(6)):null;
+    const step=showingStep?state.work?.nodes.find(n=>n.id===state.selectedNodeId):null;
+    sessionName=showingStep?(state.work?.nodes.find(n=>n.id===step?.root_id)?.native_name||'missing-step'):(hash.startsWith('#session/')||showingResults)?decodeURIComponent(hash.slice(9)):null;
+  } catch { message('Invalid session link. Return to Work.'); }
   const previous = state.selected?.tmux_name;
   state.selected = state.sessions.find(s => s.tmux_name === sessionName) || null;
   $('#work-view').hidden = Boolean(sessionName) || ['#settings', '#skills'].includes(hash);
@@ -85,6 +74,7 @@ function route() {
       $('#results-view h1').focus({preventScroll:true});
       window.scrollTo(0, 0);
     }
+    if(showingStep)resultsReady.then(()=>{const next=$('#workflow-next-steps');if(next)next.open=true;});
   } else resultsSession = null;
   document.querySelectorAll('.mobile-nav a').forEach(a => a.setAttribute('aria-current', a.hash === (['#settings','#skills'].includes(hash) ? '#settings' : '#work') ? 'page' : 'false'));
   if (sessionName && !state.selected) message('This session is no longer available. Return to Work.', 'route');
@@ -96,10 +86,11 @@ function route() {
 }
 async function refresh() {
   if (state.loading) return state.loading;
+  $('#refresh').disabled=true;$('#work-list').setAttribute('aria-busy','true');
   state.loading = (async () => {
-    try { state.sessions = await api('/api/sessions'); route(); }
+    try { const work=await api('/api/workbench'); if(!Array.isArray(work.nodes)||!Array.isArray(work.sessions))throw new Error('Work summary unavailable');state.work=work;state.sessions=work.sessions;route(); }
     catch (error) { message(`Could not refresh sessions: ${error.message}`); }
-    finally { state.loading = null; }
+    finally { state.loading = null;$('#refresh').disabled=false;$('#work-list').setAttribute('aria-busy','false'); }
   })();
   return state.loading;
 }
@@ -133,7 +124,7 @@ function configureTool() {
 }
 function openCreate(parent = null, step = null) {
   if (!state.me) { message('Tool information is still loading. Try again shortly.'); return; }
-  form.reset(); form.elements.parent.value = parent?.tmux_name || '';
+  form.reset(); form.elements.parent.value = parent?.id || '';
   form.dataset.step = step ? JSON.stringify(step) : '';
   $('#next-step-options').hidden=!parent;form.elements.name.disabled=!!parent;form.elements.name.closest('label').hidden=!!parent;
   form.elements.reason.value=step?.reason||'A separate session for this specific task.';form.elements.expected_output.value=step?.expected_output||'Complete the stated task and report the result, checks and selected artifacts.';
@@ -161,13 +152,13 @@ form.onsubmit = async event => {
   try {
     if(parent){
       const existing=form.dataset.step?JSON.parse(form.dataset.step):null;
-      const owner=existing?.owner_id||state.sessions.find(s=>s.tmux_name===parent)?.id;
+      const owner=existing?.owner_id||parent;
       const config={...data};delete config.task;delete config.name;
+      if(existing){for(const key of ['action','target','project_id','agent_mode'])if(existing.config[key]!=null)config[key]=existing.config[key];if(existing.config.profile!==config.profile)delete config.action;if(existing.config.profile!==config.profile||existing.config.tool!==config.tool)delete config.agent_mode;}
       const dependencies=(existing?.dependencies||[]).filter(d=>d.source_id!==owner);dependencies.push({source_id:owner,readiness:fields.readiness.value});
       const proposal={task:data.task,reason:fields.reason.value,expected_output:fields.expected_output.value,config,dependencies};
-      if(existing)await api(`/api/workflow/steps/${existing.id}/edit`,{...proposal,expected_version:existing.version});
-      else await api(`/api/sessions/${encodeURIComponent(parent)}/workflow/proposals`,{...proposal,request_key:Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('')});
-      $('#create-dialog').close();resultsSession=null;location.hash=`#results/${encodeURIComponent(parent)}`;route();await resultsReady;if($('#workflow-next-steps'))$('#workflow-next-steps').open=true;
+      const proposed=existing?await api(`/api/workflow/steps/${existing.id}/edit`,{...proposal,expected_version:existing.version}):await api(`/api/sessions/${encodeURIComponent(parent)}/workflow/proposals`,{...proposal,request_key:Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('')});
+      $('#create-dialog').close();resultsSession=null;await refresh();location.hash=`#step/${encodeURIComponent(proposed.id)}`;route();await resultsReady;if($('#workflow-next-steps'))$('#workflow-next-steps').open=true;
       message('Next step proposed. Preview its launch and accept it when the scope is right.');
     }else{
       const session=await api('/api/sessions',data);$('#create-dialog').close();if(state.loading)await state.loading;await refresh();location.hash=sessionLink(session);route();openTerminal();
@@ -195,6 +186,18 @@ $('#show-skills').onclick = async () => {
     panel.hidden = false;
   } catch (error) { message(error.message); }
 };
+$('#show-history').onclick=async()=>{
+  const session=state.selected,button=$('#show-history');button.disabled=true;
+  try{
+    const data=await api(`/api/workbench/sessions/${session.id}/history`);if(session.id!==state.selected?.id)return;
+    const panel=$('#session-history');panel.replaceChildren(el('h3','History'),el('p',data.notice,'small muted'));
+    function append(events){for(const event of events)panel.append(el('p',`${event.at} · ${event.action}${event.outcome?' · '+event.outcome:''}`,'small'));}
+    append(data.events);if(data.events.length===50){const more=el('button','Older workflow events');let before=data.before;more.onclick=async()=>{more.disabled=true;try{const page=await api(`/api/workbench/sessions/${session.id}/history?before=${before}`);append(page.events);before=page.before;if(page.events.length<50)more.remove();}catch(error){message(error.message);}finally{more.disabled=false;}};panel.append(more);}
+    panel.append(el('h3','Session audit'));append(data.audit);
+    if(data.audit.length===50){const more=el('button','Older session events');let before=data.audit_before;more.onclick=async()=>{more.disabled=true;try{const page=await api(`/api/workbench/sessions/${session.id}/history?audit_before=${before}`);append(page.audit);before=page.audit_before;if(page.audit.length<50)more.remove();}catch(error){message(error.message);}finally{more.disabled=false;}};panel.append(more);}
+    panel.hidden=false;
+  }catch(error){message(error.message);}finally{button.disabled=false;}
+};
 let previewSequence = 0;
 async function previewSkills() {
   const sequence = ++previewSequence, target = $('#create-skills');
@@ -218,7 +221,7 @@ form.elements.profile.onchange = configureRole; form.elements.tool.onchange = co
 $('#open-terminal').onclick = openTerminal;
 $('#close-terminal').onclick = () => { $('#terminal-panel').hidden = true; $('#terminal-panel').classList.remove('expanded'); $('#expand-terminal').textContent = 'Full screen'; };
 $('#expand-terminal').onclick = () => { const expanded = $('#terminal-panel').classList.toggle('expanded'); $('#expand-terminal').textContent = expanded ? 'Restore' : 'Full screen'; };
-$('#refresh').onclick = refresh; $('#search').oninput = renderWork; $('#state-filter').onchange = renderWork;
+$('#refresh').onclick = refresh;
 window.addEventListener('hashchange', route); window.addEventListener('focus', refresh);
 initTheme($('#theme'));
 try {

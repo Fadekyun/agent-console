@@ -1,3 +1,10 @@
+## 0.15.0 — 2026-10-02 (staging, #90)
+
+- Impact: Work groups actual connected ownership and logical steps, folds native retries into attempt history, and preserves old attempt navigation. Attention, running, waiting and recent groups expose distinct terminal/attention/result states, child progress, structured results, failed-result actions and readiness warnings. Secondary filters persist locally. Session history exposes bounded workflow and audit events. Keyboard/tree focus and terminal instances survive refresh. Add session supports unlaunched logical parents; editing unrelated proposal fields preserves action/target/project scope.
+- Configuration/migration: authenticated read-only workbench summary/readiness/history APIs over existing session/workflow tables; no schema migration. Browser-local filters are stored under `workbench-filters`. Readiness checks are cached for 30 seconds and never launch another agent.
+- Verification: ownership/attempt/result/attention tests; API authorization and history attribution; desktop/360px/390px journeys covering empty/active/attention/completed/failed states, warnings, filters, tree keyboard focus and terminal preservation. Existing native dispatch regressions remain passing. Live staging proof is recorded with the task handoff.
+- Rollback: select staging 0.14.2 and restart preview only; existing graph, attempt, result and audit records remain intact. Clear the optional local filter preference if desired. Preserve current Console and staging databases.
+
 ## 0.14.2 — 2026-10-02 (staging, #90)
 
 - Impact: compact Next steps cards keep long tasks readable through expandable Task & configuration details. Stopped workflows omit irrelevant expansion guidance. Result handoff forms open only when requested, reducing phone page length.
