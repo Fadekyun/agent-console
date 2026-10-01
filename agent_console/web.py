@@ -12,7 +12,7 @@ import struct
 import subprocess
 import termios
 from collections import defaultdict
-from contextlib import ExitStack, asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -62,7 +62,18 @@ async def lifespan(app: FastAPI):
     with ExitStack() as stack:
         if s.database_path.is_file():
             stack.enter_context(Database(s.database_path).keepalive())
-        yield
+        from .workflow_engine import WorkflowEngine
+        engine=WorkflowEngine(app.state.session_manager)
+        async def dispatch_loop():
+            while True:
+                try:await asyncio.to_thread(engine.tick)
+                except Exception:log.exception('Workflow dispatch sweep failed; receipts retained for reconciliation')
+                await asyncio.sleep(2)
+        worker=asyncio.create_task(dispatch_loop())
+        try:yield
+        finally:
+            worker.cancel()
+            with suppress(asyncio.CancelledError):await worker
 
 
 configure_logging()
@@ -211,6 +222,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     session_manager = manager or SessionManager()
     pty_clients: dict[str, int] = defaultdict(int)
     app = FastAPI(title="Agent Console", docs_url=None, redoc_url=None, lifespan=lifespan)
+    app.state.session_manager=session_manager
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
     app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 
@@ -740,6 +752,8 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     async def restart(name: str, _: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         return session_manager.restart(validate_session_name(name))
 
+    from .workflow_dispatch_api import dispatch_routes
+    app.include_router(dispatch_routes(session_manager, require_identity))
     from .workflow_api import workflow_routes, agent_workflow_routes
     app.include_router(agent_workflow_routes(session_manager))
     app.include_router(workflow_routes(session_manager, require_identity))

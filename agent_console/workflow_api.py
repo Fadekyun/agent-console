@@ -104,7 +104,7 @@ def workflow_routes(manager, require_identity):
 
 
 class AgentRequest(BaseModel):
-    command: Literal['publish','results','result','send','inbox','ack','connections']
+    command: Literal['publish','results','result','send','inbox','ack','connections','propose']
     payload: dict = Field(default_factory=dict)
 
 
@@ -120,6 +120,10 @@ def agent_workflow_routes(manager):
     @router.post('/api/agent-workflow')
     def report(body: AgentRequest, identity=Depends(agent_identity)):
         svc=WorkflowService(manager);payload=body.payload;actor='session:'+identity['id']
+        if body.command=='propose':
+            from .workflow_dispatch_api import ProposalRequest
+            from .workflow_engine import WorkflowEngine
+            return WorkflowEngine(manager).propose(identity['id'],**ProposalRequest.model_validate(payload).model_dump(),actor=actor)
         if body.command=='publish':
             validated=ResultRequest.model_validate(payload)
             return svc.publish(identity['id'],validated.model_dump(),actor)

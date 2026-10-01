@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,17 @@ TOOL_BINARIES = {
     "hermes": _resolve_binary("AGCONSOLE_HERMES_BIN", "hermes"),
     "shell": Path(os.getenv("AGCONSOLE_SHELL_BIN", "/usr/bin/zsh")),
 }
+
+
+@lru_cache(maxsize=32)
+def _workflow_probe(binary,mtime,size):
+    try:
+        help_result=subprocess.run([binary,'exec','--help'],capture_output=True,text=True,timeout=5,check=False)
+        version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=5,check=False)
+        if help_result.returncode or not all(flag in help_result.stdout for flag in ['--output-schema','--output-last-message','--sandbox']):
+            return {'supported':False,'reason':'installed CLI lacks the required native task flags'}
+        return {'supported':True,'version':version.stdout.strip()[:100] if not version.returncode else 'unknown','binary':binary}
+    except (OSError,subprocess.TimeoutExpired):return {'supported':False,'reason':'native task capability probe failed or timed out'}
 
 
 @dataclass(frozen=True)
@@ -63,6 +75,10 @@ class ProviderAdapter:
     def can_isolate_skills(self) -> bool:
         capability = SKILL_TOOL_CAPABILITIES.get(self.tool)
         return bool(capability and capability.can_isolate_skills)
+
+    @property
+    def can_run_workflow_task(self) -> bool:
+        return False
 
     @property
     def can_run_planning_task(self) -> bool:
@@ -150,6 +166,26 @@ def _codex_pin_args(
 
 class CodexAdapter(ProviderAdapter):
     tool = "codex"
+
+    @property
+    def can_run_workflow_task(self) -> bool:
+        return True
+
+    def workflow_info(self):
+        try:stat=self.binary.stat()
+        except OSError:return {'supported':False,'reason':'tool launcher is missing'}
+        return _workflow_probe(str(self.binary),stat.st_mtime_ns,stat.st_size)
+
+    def workflow_argv(self, interactive_argv, *, schema, output, read_only):
+        argv=list(interactive_argv)
+        # Unattended steps never approve new permissions. Read-only roles stay
+        # read-only even when interactive Plan sessions opt into network access.
+        argv[argv.index('--ask-for-approval')+1]='never'
+        argv[argv.index('--sandbox')+1]='read-only' if read_only else 'workspace-write'
+        for index in range(len(argv)-2,-1,-1):
+            if argv[index:index+2]==['-c','sandbox_workspace_write.network_access=true']:
+                del argv[index:index+2]
+        return argv+['exec','--skip-git-repo-check','--output-schema',str(schema),'--output-last-message',str(output),'-']
 
     @property
     def can_run_planning_task(self) -> bool:

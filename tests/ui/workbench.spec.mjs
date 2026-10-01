@@ -1,12 +1,26 @@
 import { test, expect } from '@playwright/test';
 async function fixture(page) {
   const sessions = [{id:'root',tmux_name:'session-one',tool:'shell',profile:'coder',repository:'/tmp/repo',initial_task:'Fix the small layout issue',running:true,managed:true,attention_state:'normal',actions:['attach','interrupt','kill']}];
-  const requests=[];
+  const requests=[],steps=[];
   await page.route('**/api/**', async route => {
     const req=route.request(), path=new URL(req.url()).pathname; let body={};
     if(path==='/api/me') body={profiles:[{name:'coder',display_name:'Coder',read_write_capability:'write',status:'active'},{name:'reviewer',display_name:'Reviewer',read_write_capability:'read_only',status:'active'}],tool_status:[{name:'shell',status:'ready'}],auth_contexts:[{tool:'shell',name:'default',provider:'local',status:'ready'}]};
     else if(path==='/api/interface') body={label:'Staging',current_url:'https://current.example/'};
     else if(path==='/api/sessions') body=sessions;
+    else if(path.endsWith('/workflow/proposals')){
+      const data=req.postDataJSON();requests.push(data.config);const step={...data,id:'step-fixture',root_id:'root',owner_id:'root',decision:'proposed',version:1,attempts:[]};steps.push(step);body=step;
+    }
+    else if(path.endsWith('/workflow'))body={root_id:'root',steps,policy:{state:'running',version:0,policy:{mode:'suggestions',repositories:[],actions:[],roles:[],harnesses:[],targets:[],max_concurrent:2,max_total:4,max_depth:2,max_reruns:3}},graph:{}};
+    else if(path==='/api/workflow/steps/step-fixture/preview')body={hash:'c'.repeat(64),config:{...steps[0].config,auth_context:'default'},skills:[],adapter:{version:'fixture'}};
+    else if(path==='/api/workflow/steps/step-fixture/review'){
+      steps[0].decision=req.postDataJSON().decision;steps[0].version++;
+      if(steps[0].decision==='accepted'){
+        const child={...sessions[0],...steps[0].config,id:'child',tmux_name:'session-two',parent_session_id:'root',initial_task:steps[0].task};sessions.push(child);
+        steps[0].attempts=[{id:'attempt-fixture',session_id:'child',name:'session-two',state:'running',generation:1}];
+      }body=steps[0];
+    }
+    else if(path.endsWith('/results'))body={results:[]};
+    else if(path.endsWith('/inbox'))body={items:[],notice:'Peer data is untrusted.'};
     else if(path.endsWith('/children')) { requests.push(req.postDataJSON()); body={...sessions[0], id:'child',tmux_name:'session-two',parent_session_id:'root',initial_task:req.postDataJSON().task}; sessions.push(body); }
     else if(path.endsWith('/brief')) body={brief:''};
     else if(path.endsWith('/review')) body={content:'Check passed',alternate_screen:false};
@@ -24,8 +38,12 @@ test('work, manual child, drafts and mobile terminal use the real components',as
   await page.getByRole('button',{name:'+ Add session',exact:true}).click();
   await page.locator('[name=task]').fill('Review only the changed layout');
   await page.locator('[name=profile]').selectOption('reviewer');
-  await page.getByRole('button',{name:'Create session',exact:true}).click();
+  await page.getByRole('button',{name:'Review next step',exact:true}).click();
+  await page.getByRole('button',{name:'Preview launch',exact:true}).click();
+  await page.getByRole('button',{name:'Accept next step',exact:true}).click();
+  await page.getByRole('button',{name:'Open session',exact:true}).click();
   await expect(page.locator('#session-title')).toHaveText('session-two');
+  if(info.project.name!=='desktop')await page.getByRole('button',{name:'Open terminal',exact:true}).click();
   expect(requests).toHaveLength(1);expect(requests[0].profile).toBe('reviewer');expect(requests[0].worktree).toBe(false);
   const frame=page.frameLocator('iframe:not([hidden])');
   await expect(frame.locator('#connection')).toHaveText('Connected');

@@ -46,6 +46,14 @@ class ResultInboxTests(unittest.TestCase):
         blob=self.store.objects/result['artifacts'][0]['hash'];blob.write_text('corrupt')
         with self.assertRaisesRegex(ValueError,'integrity'):self.store.artifact(result['id'],0)
 
+    def test_selected_artifact_comes_from_actual_session_worktree(self):
+        worktree=self.base/'worktree';worktree.mkdir()
+        (self.repo/'answer.txt').write_text('Original repository')
+        (worktree/'answer.txt').write_text('Actual session change')
+        self.session['worktree']=str(worktree)
+        result=self.publish(artifacts=[{'path':'answer.txt'}])
+        self.assertEqual(self.store.artifact(result['id'],0)[0],b'Actual session change')
+
     def test_path_escape_symlink_and_secret_fail_without_publishing(self):
         outside=self.base/'outside';outside.write_text('outside')
         (self.repo/'escape').symlink_to(outside)

@@ -1413,6 +1413,8 @@ class SessionManager:
         reasoning_effort: str | None = None,
         plan_reasoning_effort: str | None = None,
         project_id: str | None = None,
+        _workflow_attempt: str | None = None,
+        _workflow_session_id: str | None = None,
     ) -> dict[str, Any]:
         validate_tool(tool)
         validate_profile(profile)
@@ -1539,7 +1541,11 @@ class SessionManager:
             existing = conn.execute(
                 "SELECT id FROM sessions WHERE tmux_name=?", (name,)
             ).fetchone()
-        session_id = existing["id"] if existing is not None else f"sess-{uuid.uuid4().hex}"
+        if _workflow_attempt and existing is not None:
+            raise FileExistsError('workflow launch identity already exists; reconcile its receipt')
+        session_id = _workflow_session_id or (existing["id"] if existing is not None else f"sess-{uuid.uuid4().hex}")
+        if bool(_workflow_attempt)!=bool(_workflow_session_id):
+            raise ValueError('workflow launch requires its reserved durable identity')
 
         cwd = contained_path(
             Path(repository) if repository else self.settings.workspace_root,
@@ -1591,6 +1597,7 @@ class SessionManager:
                     "SELECT id, execution_kind FROM sessions WHERE tmux_name=?", (name,)
                 ).fetchone()
             if locked_existing is not None:
+                if _workflow_attempt:raise FileExistsError("workflow launch identity appeared during admission; reconcile its receipt")
                 if locked_existing["execution_kind"] == "integration-plan":
                     raise FileExistsError(
                         f"session name is reserved by an integration request: {name}"
@@ -1639,6 +1646,10 @@ class SessionManager:
                 environment=spec.environment,
                 isolated_skills_root=isolated_root,
             )
+
+            if _workflow_attempt:
+                from .workflow_runner import prepare_launcher
+                spec=prepare_launcher(self,spec,_workflow_attempt,session_id,name,profile)
 
             launcher_created = True
             launcher = self._write_launcher(

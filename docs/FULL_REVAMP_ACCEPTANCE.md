@@ -63,3 +63,9 @@ Versions 0.12–0.13 implement explicit versioned results and selected immutable
 Connected inputs add durable-ID attachment of existing sessions, separately versioned ownership/input DAGs, after-ready/after-final/pinned alongside conditions, joins, cycle rejection and content-based transitive stale state. Joins enter the inbox atomically with retry deduplication. Output binding requires publication after the joined inputs were acknowledged consumed. Existing processes and skill snapshots remain intact. UI, API, store and native reporting share these records.
 
 This does not complete #140: launch-parent and connected ownership views still need unification; Add session with delayed dispatch, suggestions and reviewed auto envelopes, launch reconciliation/coalescing, pause/stop and release gates remain open. Full #90/#6 scope above is still required. Do not close the goal on this checkpoint.
+
+## Reviewed-dispatch checkpoint — 2026-10-02
+
+Version 0.14 adds proposed logical steps, accept/edit/reject, explicit reviewed automatic envelopes, probed native Codex/Pro task input, durable launch receipts and immutable configuration/skill checks. Required inputs gate launch; replacements coalesce behind the current attempt. Budgets include the initial/attached sessions and every launched attempt. Pause holds new dispatch, Stop interrupts owned connected sessions, and uncertain launches need explicit reconciliation. Native structured finals publish selected worktree artifacts and consumed-input claims; optional justified follow-ups pass the same proposal gate.
+
+Unit/native-fixture, API and browser evidence covers dispatch, crash recovery, coalescing, scopes, budgets and control behavior. See `WORKFLOW_DISPATCH.md` for supported adapters and rollback. Exact external release gates, unified tree navigation, remaining workbench features, all seven guides and the full skill-provider/device matrix remain open. This checkpoint does not complete the goal.

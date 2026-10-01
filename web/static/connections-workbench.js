@@ -7,12 +7,13 @@ export function setupConnections({api,el,message,sessions}) {
       const graph=await api(`/api/sessions/${session.id}/connections`),all=sessions(),names=new Map(all.map(s=>[s.id,s.tmux_name]));
       root.replaceChildren(el('p','Connect existing sessions without restarting them. Ownership and required inputs are separate. Queue inputs when ready; each recipient acknowledges and uses them in its own session.','small muted'));
       const members=graph.nodes.length?graph.nodes:[{session_id:session.id,owner_id:null}];
+      for(const node of members)if(names.has(node.native_session_id))names.set(node.session_id,names.get(node.native_session_id));
       for(const node of members){
         const card=el('article',null,'panel'),state=graph.readiness[node.session_id];
-        const link=el('a',names.get(node.session_id)||node.session_id);link.href=`#session/${encodeURIComponent(names.get(node.session_id)||node.session_id)}`;
+        const nativeKnown=names.has(node.session_id);const link=el(nativeKnown?'a':'span',names.get(node.session_id)||'Planned session');if(nativeKnown)link.href=`#session/${encodeURIComponent(names.get(node.session_id))}`;
         card.append(link,el('p',node.owner_id?`Owned by ${names.get(node.owner_id)||node.owner_id}`:'Initial session','small muted'));
         if(node.purpose)card.append(el('p',node.purpose));
-        if(state){
+        if(state&&nativeKnown){
           card.append(el('p',state.blocked?'Waiting for required inputs':state.stale?'Inputs changed · result needs recomputation':state.delivered?'Inputs queued':'Ready to receive inputs','badge'));
           for(const reason of state.reasons)card.append(el('p',reason,'small muted'));
           if(state.delivered||graph.edges.some(e=>e.target_id===node.session_id)){
@@ -29,7 +30,7 @@ export function setupConnections({api,el,message,sessions}) {
         }
         root.append(card);
       }
-      const candidates=all.filter(s=>s.managed&&s.execution_kind!=='integration-plan'&&!members.some(n=>n.session_id===s.id));
+      const candidates=all.filter(s=>s.managed&&s.execution_kind!=='integration-plan'&&!members.some(n=>n.session_id===s.id||n.native_session_id===s.id));
       if(candidates.length){
         const form=el('form'),targetLabel=el('label','Existing session'),target=el('select');
         for(const s of candidates){const option=el('option',`${s.tmux_name} · ${s.profile}`);option.value=s.id;target.append(option);}targetLabel.append(target);

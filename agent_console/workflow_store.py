@@ -199,7 +199,7 @@ class WorkflowStore:
         if not isinstance(artifacts, list) or len(artifacts) > MAX_ARTIFACTS:
             raise ValueError('select at most 16 artifacts')
         snapshots = [self.snapshot(a, workspace=workspace,
-                     repository=session.get('worktree_path') or session.get('repository')) for a in artifacts]
+                     repository=session.get('worktree_path') or (session.get('worktree') if isinstance(session.get('worktree'),str) else None) or session.get('repository')) for a in artifacts]
         content = {'kind':kind,'outcome':outcome,'summary':summary,'checks':checks,'artifacts':snapshots}
         encoded = canonical(content).encode()
         if len(encoded) > 256 * 1024: raise ValueError('result metadata exceeds the 256 KiB limit')
@@ -222,7 +222,11 @@ class WorkflowStore:
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='graph_result_inputs'").fetchone():
                 if db.execute('SELECT version FROM graph_schema').fetchone()[0]!=1:
                     raise ValueError('unsupported workflow graph schema')
-                delivery=db.execute('SELECT d.* FROM work_deliveries d JOIN work_active_deliveries a ON a.delivery_id=d.id WHERE a.target_id=?',(session['id'],)).fetchone()
+                logical=session['id']
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='work_node_bindings'").fetchone():
+                    binding=db.execute('SELECT node_id FROM work_node_bindings WHERE session_id=?',(logical,)).fetchone()
+                    if binding:logical=binding[0]
+                delivery=db.execute('SELECT d.* FROM work_deliveries d JOIN work_active_deliveries a ON a.delivery_id=d.id WHERE a.target_id=?',(logical,)).fetchone()
                 if delivery:
                     acknowledgments=db.execute('SELECT state FROM inbox WHERE target_session_id=? AND request_key LIKE ?',
                                                (session['id'],delivery['id']+':%')).fetchall()

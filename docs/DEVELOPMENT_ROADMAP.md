@@ -1,9 +1,15 @@
 # Development Roadmap
 
+### 2026-10-02 — #140 reviewed native dispatch
+
+- Added bounded proposals and Add session review, suggestion-only defaults, explicit auto scopes/budgets, immutable preview hashes and capability-probed native Codex/Pro adapters.
+- Durable attempts reconcile restart without duplicate task input; upstream changes coalesce behind the active attempt, limits include reruns, and pause/stop preserve history. Unknown launches require operator evidence before retry.
+- API/CLI/UI use the existing graph, result and inbox contracts. Exact-candidate external release gates, unified ownership navigation and the full canonical guide/provider matrix remain in progress; see `FULL_REVAMP_ACCEPTANCE.md`.
+
 ### 2026-10-02 — #140 connected existing sessions
 
 - Delivered versioned ownership/input edges, durable-ID attachment, explicit readiness, join delivery, cycle checks and content-based transitive staleness. Existing sessions retain their process and skill snapshot. UI controls live under Results & handoffs → Connected inputs; native agents inspect with `agentctl workflow connections --current`.
-- Automatic dispatch, proposals/auto envelopes, coalesced attempts and release reconciliation remain open. The existing session tree is the launch-parent view; connected ownership is currently shown in Connected inputs. Unifying those views is still part of #90/#140 acceptance.
+- Dispatch, proposals, auto envelopes and coalesced attempts are delivered in the next checkpoint below; exact-candidate release reconciliation remains open. The existing session tree is the launch-parent view; connected ownership is currently shown in Connected inputs. Unifying those views is still part of #90/#140 acceptance.
 
 
 ### 2026-10-02 — #90 focused results view

@@ -1,4 +1,9 @@
-## 0.12.0 (unreleased staging)
+## 0.14.0 — 2026-10-02 (staging, #140)
+
+- Impact: Add session now proposes a bounded next step with purpose, output, role and required inputs. Preview and accept/edit/reject control dispatch; suggestions are the default. Reviewed auto envelopes bound repositories/actions/roles/harnesses/targets, concurrency, total attempts, depth and reruns. Native Codex/Pro tasks use durable receipts, immutable selected inputs, structured results and optional justified follow-ups. Input changes coalesce after the current attempt. Pause holds dispatch; Stop interrupts connected work while preserving history. Uncertain launches require explicit reconciliation. Selected files now resolve from the actual isolated worktree.
+- Configuration/migration: additive independently gated dispatch schema 1 and logical/native binding table in `connected-work.sqlite3`; owner-only launch manifests/output under `workflow-attempts/`. The web service runs a serialized dispatcher. No automatic expansion is enabled by default. Supported native adapters are capability-probed before acceptance; other harnesses remain available for manual interactive sessions. See [WORKFLOW_DISPATCH.md](WORKFLOW_DISPATCH.md).
+- Verification: isolated real-tmux native-adapter tests cover waiting, pause/stop, exact inputs, coalescing, reviewed scope, budgets, lost receipts and concurrent restart recovery; authenticated operator/agent API, existing session regressions and desktop/phone Add session review journeys. Live staging native launch and recovery evidence is retained in the task handoff.
+- Rollback: pause workflow dispatch and settle or explicitly stop active attempts before selecting v0.13.0. Preserve both databases, result objects, attempt directories and source release paths. A running runner is pinned to its launch release and can outlive a web restart; changing the web release alone does not stop it. Older versions retain result/inbox records but cannot dispatch/reconcile these steps. Restore v0.14.0 to recover controls. Current console remains separate.
 
 ## 0.13.0 — 2026-10-02 (staging, #140)
 
@@ -15,6 +20,8 @@
 - Verification: desktop, 360px and 390px Playwright handoff journeys; version consistency; live staging inbox and skill delivery check.
 - Rollback: select the prior staging release and restart only the preview service; current Console and stored results are unaffected.
 
+
+## 0.12.0 (unreleased staging)
 
 - Date: 2026-10-02. Issue: #140.
 - Impact: one-session ready/final results, immutable selected file/commit artifacts, source/version-attributed durable inbox, separate delivery/consumption acknowledgments, capability-bound native reporting, and integrated desktop/phone result/handoff controls.

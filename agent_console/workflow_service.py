@@ -61,7 +61,7 @@ class WorkflowService:
             raise ValueError('attach by durable session ID, not a mutable session name')
         if child['profile'] not in PROFILE_SCHEMA.get(parent['profile'],{}).get('allowed_collaboration_profiles',set()):
             raise ValueError('these roles cannot collaborate')
-        capability=validate_profile_capability(child['profile'],child['tool'],child.get('agent_mode'),worktree=bool(child.get('worktree_path')))
+        capability=validate_profile_capability(child['profile'],child['tool'],child.get('agent_mode'),worktree=bool(child.get('worktree_path') or child.get('worktree')))
         if not capability['allowed']:raise ValueError(capability['reason'])
         # Existing sessions keep their selected skill snapshot and native process.
         # This operator action connects inputs; it grants no new tools or role.

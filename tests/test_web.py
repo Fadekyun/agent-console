@@ -188,6 +188,42 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.client.post(route+'/dependencies',json=cycle,headers=self.headers).status_code,400)
         self.assertEqual(self.client.get(route,headers=self.headers).json()['version'],1)
 
+    def test_workflow_suggestion_review_and_policy_require_operator_identity(self) -> None:
+        from agent_console.workflow_engine import DEFAULT_POLICY
+        source=self.manager.create(tool="shell",profile="general",name="workflow-api-source")
+        base=f"/api/sessions/{source['id']}/workflow"
+        payload={'task':'Check a bounded candidate','reason':'Independent evidence is useful','expected_output':'One useful result',
+                 'config':{'tool':'shell','profile':'general','worktree':False},'dependencies':[],'request_key':'proposal-1'}
+        self.assertEqual(self.client.post(base+'/proposals',json=payload).status_code,403)
+        proposed=self.client.post(base+'/proposals',json=payload,headers=self.headers)
+        self.assertEqual(proposed.status_code,200,proposed.text);step=proposed.json()
+        self.assertEqual(step['decision'],'proposed');self.assertEqual(step['attempts'],[])
+        self.assertEqual(self.client.post(base+'/proposals',json=payload,headers=self.headers).json()['id'],step['id'])
+        preview=self.client.post(f"/api/workflow/steps/{step['id']}/preview",json={},headers=self.headers)
+        self.assertEqual(preview.status_code,400);self.assertIn('native workflow',preview.text)
+        rejected=self.client.post(f"/api/workflow/steps/{step['id']}/review",json={'decision':'rejected','expected_version':1},headers=self.headers)
+        self.assertEqual(rejected.status_code,200,rejected.text)
+        self.assertEqual(rejected.json()['decision'],'rejected')
+        policy={'policy':DEFAULT_POLICY,'expected_version':0}
+        self.assertEqual(self.client.post(base+'/policy',json=policy).status_code,403)
+        self.assertEqual(self.client.post(base+'/policy',json=policy,headers=self.headers).status_code,200)
+        paused=self.client.post(base+'/control',json={'state':'paused'},headers=self.headers)
+        self.assertEqual(paused.json()['policy']['state'],'paused')
+
+    def test_native_reporting_can_suggest_but_cannot_accept_or_expand_envelope(self) -> None:
+        import hashlib
+        source=self.manager.create(tool="shell",profile="general",name="workflow-agent-source")
+        token='fixture-workflow-capability'
+        with self.manager.database.connect() as db:db.execute('UPDATE sessions SET evidence_capability_hash=? WHERE id=?',(hashlib.sha256(token.encode()).hexdigest(),source['id']))
+        headers={'Authorization':'Bearer '+token,'X-Agent-Console-Session':source['id']}
+        payload={'task':'Check one thing','reason':'A distinct useful task','expected_output':'A result',
+                 'config':{'tool':'codex','profile':'planner'},'dependencies':[{'source_id':source['id'],'readiness':'after-final'}],'request_key':'agent-proposal'}
+        response=self.client.post('/api/agent-workflow',json={'command':'propose','payload':payload},headers=headers)
+        self.assertEqual(response.status_code,200,response.text);step=response.json()
+        self.assertEqual(step['decision'],'proposed');self.assertEqual(step['actor'],'session:'+source['id'])
+        self.assertEqual(self.client.post(f"/api/workflow/steps/{step['id']}/review",json={'decision':'accepted','expected_version':1,'preview_hash':'x'},headers=headers).status_code,403)
+        self.assertEqual(self.client.post('/api/agent-workflow',json={'command':'configure','payload':{}},headers=headers).status_code,422)
+
     def test_workflow_agent_capability_cannot_impersonate_peer(self) -> None:
         from agent_console.workflow_service import WorkflowService
         source=self.manager.create(tool="shell",profile="general",name="cap-source")

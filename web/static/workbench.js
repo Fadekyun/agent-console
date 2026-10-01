@@ -15,8 +15,8 @@ async function api(path, payload, method = 'POST') {
 }
 const skillsView = setupSkills({ api, el, message, profiles: () => state.me?.profiles || [] });
 let skillsLoaded = false;
-const resultsView = setupResults({api,el,message,sessions:()=>state.sessions});
-let resultsSession = null;
+const resultsView = setupResults({api,el,message,sessions:()=>state.sessions,editStep:step=>openCreate(state.sessions.find(s=>s.id===step.root_id)||state.selected,step),openSession:async name=>{await refresh();location.hash=`#session/${encodeURIComponent(name)}`;}});
+let resultsSession = null, resultsReady = Promise.resolve();
 $('#show-results').onclick = () => { location.hash = `#results/${encodeURIComponent(state.selected.tmux_name)}`; };
 function status(s) { return s.attention_state !== 'normal' && s.attention_state ? names[s.attention_state] || s.attention_state : s.running ? 'Working' : 'Stopped'; }
 function rootOf(s) { const visited = new Set(); while (s.parent_session_id && !visited.has(s.id)) { visited.add(s.id); const p = state.sessions.find(x => x.id === s.parent_session_id); if (!p) break; s = p; } return s; }
@@ -81,7 +81,7 @@ function route() {
     $('#results-session').textContent = state.selected.tmux_name;
     if (resultsSession !== state.selected.id) {
       resultsSession = state.selected.id;
-      resultsView.load(state.selected).catch(error => message(error.message));
+      resultsReady = resultsView.load(state.selected).catch(error => message(error.message));
       $('#results-view h1').focus({preventScroll:true});
       window.scrollTo(0, 0);
     }
@@ -131,9 +131,15 @@ function configureTool() {
   options(form.elements.auth_context, state.me.auth_contexts.filter(x => x.tool === tool && !['disabled','error','setup-required'].includes(x.status)).map(x => [x.name, `${x.name} · ${x.provider}`]));
   form.elements.reasoning_effort.disabled = !['codex','codex-pro'].includes(tool);
 }
-function openCreate(parent = null) {
+function openCreate(parent = null, step = null) {
   if (!state.me) { message('Tool information is still loading. Try again shortly.'); return; }
   form.reset(); form.elements.parent.value = parent?.tmux_name || '';
+  form.dataset.step = step ? JSON.stringify(step) : '';
+  $('#next-step-options').hidden=!parent;form.elements.name.disabled=!!parent;form.elements.name.closest('label').hidden=!!parent;
+  form.elements.reason.value=step?.reason||'A separate session for this specific task.';form.elements.expected_output.value=step?.expected_output||'Complete the stated task and report the result, checks and selected artifacts.';
+  form.elements.reason.required=!!parent;form.elements.expected_output.required=!!parent;
+  $('button[type=submit]',form).textContent=parent?'Review next step':'Create session';
+  $('#create-start-help').textContent=parent?'Review the proposed task and effective configuration before accepting. It will start automatically when its required inputs and capacity are ready.':'The task opens as a draft in the terminal. Review it and press Send + Enter to begin.';
   $('#create-title').textContent = parent ? 'Add session' : 'New session';
   $('#create-help').textContent = parent ? `Under ${parent.tmux_name}. Choose a role and a bounded task. This leaves the parent’s permissions unchanged.` : 'One session can investigate, implement and check a simple task.';
   const available = state.me.tool_status.filter(x => !['disabled','error','setup-required'].includes(x.status));
@@ -141,7 +147,9 @@ function openCreate(parent = null) {
   options(form.elements.profile, state.me.profiles.filter(x => x.status !== 'deprecated').map(x => [x.name, x.display_name || x.name]), 'coder');
   form.elements.repository.value = parent?.repository || state.workspace || '';
   $('#create-error').textContent = available.length ? '' : 'No tool is ready. Check Tools & accounts in Settings.';
-  configureTool(); configureRole(); $('#create-dialog').showModal(); previewSkills();
+  configureTool(); configureRole();
+  if(step){for(const [key,value] of Object.entries(step.config))if(form.elements[key]&&key!=='worktree')form.elements[key].value=value;configureTool();configureRole();if(step.config.auth_context)form.elements.auth_context.value=step.config.auth_context;form.elements.task.value=step.task;form.elements.worktree.checked=step.config.worktree;form.elements.readiness.value=step.dependencies.find(d=>d.source_id===step.owner_id)?.readiness||'alongside';}
+  $('#create-dialog').showModal(); previewSkills();
 }
 form.onsubmit = async event => {
   event.preventDefault(); const submit = $('button[type=submit]', form); if (submit.disabled) return; submit.disabled = true; $('#create-error').textContent = '';
@@ -151,8 +159,19 @@ form.onsubmit = async event => {
   const profile = state.me.profiles.find(x => x.name === data.profile);
   if (data.tool === 'opencode') data.agent_mode = profile?.read_write_capability === 'read_only' ? 'plan' : 'build';
   try {
-    const session = await api(parent ? `/api/sessions/${encodeURIComponent(parent)}/children` : '/api/sessions', data);
-    $('#create-dialog').close(); if (state.loading) await state.loading; await refresh(); location.hash = sessionLink(session); route(); openTerminal();
+    if(parent){
+      const existing=form.dataset.step?JSON.parse(form.dataset.step):null;
+      const owner=existing?.owner_id||state.sessions.find(s=>s.tmux_name===parent)?.id;
+      const config={...data};delete config.task;delete config.name;
+      const dependencies=(existing?.dependencies||[]).filter(d=>d.source_id!==owner);dependencies.push({source_id:owner,readiness:fields.readiness.value});
+      const proposal={task:data.task,reason:fields.reason.value,expected_output:fields.expected_output.value,config,dependencies};
+      if(existing)await api(`/api/workflow/steps/${existing.id}/edit`,{...proposal,expected_version:existing.version});
+      else await api(`/api/sessions/${encodeURIComponent(parent)}/workflow/proposals`,{...proposal,request_key:Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('')});
+      $('#create-dialog').close();resultsSession=null;location.hash=`#results/${encodeURIComponent(parent)}`;route();await resultsReady;if($('#workflow-next-steps'))$('#workflow-next-steps').open=true;
+      message('Next step proposed. Preview its launch and accept it when the scope is right.');
+    }else{
+      const session=await api('/api/sessions',data);$('#create-dialog').close();if(state.loading)await state.loading;await refresh();location.hash=sessionLink(session);route();openTerminal();
+    }
   } catch (error) { $('#create-error').textContent = error.message; }
   finally { submit.disabled = false; }
 };

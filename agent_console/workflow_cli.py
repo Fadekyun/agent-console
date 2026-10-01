@@ -10,6 +10,10 @@ from .workflow_service import WorkflowService
 def add_commands(commands):
     root=commands.add_parser('workflow')
     sub=root.add_subparsers(dest='workflow_command',required=True)
+    proposal=sub.add_parser('propose');proposal.add_argument('--current',action='store_true',required=True)
+    for key in ['task','reason','expected-output','tool','profile','request-key']:proposal.add_argument('--'+key,required=True)
+    proposal.add_argument('--repository');proposal.add_argument('--action',choices=['read','write','test'])
+    proposal.add_argument('--input',action='append',default=[]);proposal.add_argument('--readiness',choices=['after-final','after-ready','alongside'],default='after-final')
     publish=sub.add_parser('publish')
     publish.add_argument('--current',action='store_true',required=True)
     publish.add_argument('--kind',choices=['ready','final'],required=True)
@@ -40,6 +44,9 @@ def run(args,manager=None):
     if command=='results':return {'results':svc.store.results(svc.session(args.session)['id'],before=args.before)}
     if command=='result':return svc.store.result(args.result_id)
     session=svc.current();actor='session:'+session['id']
+    if command=='propose':
+        from .workflow_engine import WorkflowEngine
+        return WorkflowEngine(manager).propose(session['id'],**proposal_payload(args,session['id']),actor=actor)
     if command=='connections':return svc.graph().inspect(session['id'])
     if command=='inbox':return svc.store.inbox(session['id'],after=args.after)
     if command=='ack':return svc.store.acknowledge(args.item_id,session['id'],state=args.state,actor=actor)
@@ -54,7 +61,8 @@ def run(args,manager=None):
 
 def remote_run(args):
     command=args.workflow_command
-    if command=='publish':
+    if command=='propose':payload=proposal_payload(args,os.getenv('AGENT_CONSOLE_SESSION_ID'))
+    elif command=='publish':
         summary=args.summary
         if args.summary_file:
             with Path(args.summary_file).open(encoding='utf-8') as stream:summary=stream.read(32001)
@@ -85,3 +93,16 @@ def remote_run(args):
         raise ValueError(str(detail)) from None
     except urllib.error.URLError:
         raise RuntimeError('Console reporting endpoint unavailable; retry with the same request key after connectivity is restored') from None
+
+
+def proposal_payload(args,session_id):
+    config={'tool':args.tool,'profile':args.profile}
+    if args.repository:config['repository']=args.repository
+    if args.action:config['action']=args.action
+    dependencies=[]
+    for value in args.input:
+        source,separator,readiness=value.rpartition(':')
+        if not separator or readiness not in {'after-final','after-ready','alongside'}:raise ValueError('input must be DURABLE_ID:after-final, :after-ready or :alongside')
+        dependencies.append({'source_id':source,'readiness':readiness})
+    return {'task':args.task,'reason':args.reason,'expected_output':args.expected_output,'config':config,
+            'dependencies':dependencies or [{'source_id':session_id,'readiness':args.readiness}], 'request_key':args.request_key}
