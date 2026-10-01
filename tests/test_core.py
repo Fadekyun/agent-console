@@ -207,7 +207,7 @@ class SessionIntegrationTests(unittest.TestCase):
         launcher.chmod(0o700)
         self.manager.legacy_tmux.create("legacy-review", self.workspace, launcher)
         self.manager.reconcile()
-        for _ in range(20):
+        for _ in range(100):
             review = self.manager.review_session("legacy-review", lines=50)
             if "LEGACY_REVIEW_OK" in review["content"]:
                 break
@@ -917,7 +917,7 @@ class SessionIntegrationTests(unittest.TestCase):
                 self.manager.settings.state_dir / "skills-isolated" / "overlay-test"
             )
             self.assertEqual(overlay_skills.resolve(), isolated_root.resolve())
-            unassigned_entries = [p for p in overlay_skills.iterdir()]
+            unassigned_entries = [p for p in overlay_skills.iterdir() if p.is_dir()]
             self.assertEqual(len(unassigned_entries), 1)
             self.assertEqual(unassigned_entries[0].name, skill_name)
             self.manager.kill("overlay-test")
@@ -1148,6 +1148,14 @@ class SessionIntegrationTests(unittest.TestCase):
                 reasoning_effort="high",
             )
 
+    def test_stopped_restart_does_not_recreate_skill_snapshots(self) -> None:
+        self.manager.create(tool="shell", profile="general", name="stopped-snapshot")
+        self.manager.kill("stopped-snapshot")
+        isolated = self.manager.settings.state_dir / "skills-isolated" / "stopped-snapshot"
+        with self.assertRaisesRegex(ValueError, "requires a live terminal"):
+            self.manager.restart("stopped-snapshot")
+        self.assertFalse(isolated.exists())
+
     def test_empty_assignments_creates_empty_overlay(self) -> None:
         with patch.object(
             self.manager,
@@ -1168,7 +1176,7 @@ class SessionIntegrationTests(unittest.TestCase):
         overlay_path = overlay_line.split("=", 1)[1].strip().strip("'\"")
         overlay_skills = Path(overlay_path) / "skills"
         self.assertTrue(overlay_skills.is_symlink())
-        self.assertEqual(len(list(overlay_skills.iterdir())), 0,
+        self.assertEqual(len([p for p in overlay_skills.iterdir() if p.is_dir()]), 0,
                          "empty-assignment overlay must be empty to prevent global skill leak")
         self.manager.kill("empty-overlay-test")
 

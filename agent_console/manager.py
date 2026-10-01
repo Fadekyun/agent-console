@@ -30,6 +30,7 @@ EVIDENCE_TYPE_TO_PROFILE: dict[str, str] = {
 from .logging_config import configure_logging
 from .models import ModelCatalogue, estimate_models, lowest_cost_model, preferred_model
 from .profiles import PROFILE_SCHEMA, profile_text, validate_profile_capability, validate_profile_schema
+from .skill_registry import record_delivery
 from .skills import (
     _resolve_canonical_root,
     cleanup_isolated_skills,
@@ -1417,6 +1418,7 @@ class SessionManager:
             profile,
             tool,
             shared_allowlist=self.settings.shared_skills,
+            repository=repository or str(self.settings.workspace_root),
         )
         skill_validation = session_skills["validation"]
         if not skill_validation["valid"]:
@@ -1706,6 +1708,8 @@ class SessionManager:
                         evidence_cap_hash,
                     ),
                 )
+            record_delivery(self.settings.state_dir, session_id, isolated_root, tool=tool, profile=profile,
+                            isolated=provider_adapter(tool, self.auth).can_isolate_skills)
             self.database.audit(
                 "session.created", name, "success", surface=creator_surface,
                 details={
@@ -1781,6 +1785,8 @@ class SessionManager:
             raise PermissionError("integration planning sessions cannot be restarted")
         if not session["managed"] or not session["launcher_path"]:
             raise ValueError("restart-agent is available only for managed sessions")
+        if not session.get("running"):
+            raise ValueError("restart-agent requires a live terminal; create a new session to resume stopped work")
         project_id = session.get("project_id")
         if project_id is not None:
             with self.database.connect() as conn:
@@ -1809,6 +1815,7 @@ class SessionManager:
             profile,
             tool,
             shared_allowlist=self.settings.shared_skills,
+            repository=session.get("repository"),
         )
         skill_validation = session_skills["validation"]
         if not skill_validation["valid"]:
@@ -1869,6 +1876,8 @@ class SessionManager:
                         f"managed-session limit reached ({self.settings.max_managed_sessions})"
                     )
             self.tmux_for_name(name).restart(name, launcher_path)
+        record_delivery(self.settings.state_dir, session["id"], isolated_root, tool=tool, profile=profile,
+                        isolated=provider_adapter(tool, self.auth).can_isolate_skills)
         self.database.audit(
             "session.restarted", name, "success",
             details={

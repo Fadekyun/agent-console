@@ -200,9 +200,9 @@ class SharedSkillMergeTests(unittest.TestCase):
         )
         isolated = Path(self.temp.name) / "isolated"
         isolate_skills(isolated, self.root, result["materialized"])
-        self.assertTrue((isolated / "assigned-one").is_symlink())
-        self.assertTrue((isolated / "shared-two").is_symlink())
-        self.assertEqual(sorted(p.name for p in isolated.iterdir()), ["assigned-one", "shared-two"])
+        self.assertTrue((isolated / "assigned-one").is_dir())
+        self.assertTrue((isolated / "shared-two").is_dir())
+        self.assertEqual(sorted(p.name for p in isolated.iterdir() if p.is_dir()), ["assigned-one", "shared-two"])
 
     def test_no_allowlist_keeps_assignment_only_behaviour(self) -> None:
         result = resolve_session_skills(
@@ -299,7 +299,7 @@ class SharedSkillSessionTests(unittest.TestCase):
             tool="codex", profile="general", name="codex-shared", repository=str(self.workspace)
         )
         isolated = self.isolated_root("codex-shared")
-        self.assertTrue((isolated / "typesafe-ai").is_symlink())
+        self.assertTrue((isolated / "typesafe-ai").is_dir())
         self.assertFalse((isolated / "unrelated-skill").exists())
         overlay_skills = self.settings.state_dir / "tool-overlays" / "codex-shared" / "codex-home" / "skills"
         self.assertTrue((overlay_skills / "typesafe-ai" / "SKILL.md").is_file())
@@ -309,9 +309,9 @@ class SharedSkillSessionTests(unittest.TestCase):
             tool="codex", profile="general", name="codex-restart", repository=str(self.workspace)
         )
         isolated = self.isolated_root("codex-restart")
-        (isolated / "typesafe-ai").unlink()
+        shutil.rmtree(isolated / "typesafe-ai")
         self.manager.restart("codex-restart")
-        self.assertTrue((isolated / "typesafe-ai").is_symlink())
+        self.assertTrue((isolated / "typesafe-ai").is_dir())
 
     def test_hermes_session_writes_shared_external_dirs(self) -> None:
         self.configure_commandcode()
@@ -324,7 +324,7 @@ class SharedSkillSessionTests(unittest.TestCase):
             config["skills"]["external_dirs"], [str(self.isolated_root("hermes-shared"))]
         )
         isolated = self.isolated_root("hermes-shared")
-        self.assertTrue((isolated / "typesafe-ai").is_symlink())
+        self.assertTrue((isolated / "typesafe-ai").is_dir())
         self.assertFalse((isolated / "unrelated-skill").exists())
 
     def test_hermes_restart_adds_external_dirs_without_losing_config(self) -> None:
@@ -427,7 +427,7 @@ class SharedSkillSessionTests(unittest.TestCase):
             tool="codex", profile="general", name="codex-no-shared", repository=str(self.workspace)
         )
         isolated = settings.state_dir / "skills-isolated" / "codex-no-shared"
-        self.assertEqual(list(isolated.iterdir()), [])
+        self.assertEqual([p for p in isolated.iterdir() if p.is_dir()], [])
 
     def test_opencode_session_configures_isolated_skill_root(self) -> None:
         models = [{
@@ -452,7 +452,7 @@ class SharedSkillSessionTests(unittest.TestCase):
                     exports[key] = value
         content = json.loads(exports["OPENCODE_CONFIG_CONTENT"])
         self.assertEqual(content["skills"], [str(self.isolated_root("opencode-shared"))])
-        self.assertTrue((self.isolated_root("opencode-shared") / "typesafe-ai").is_symlink())
+        self.assertTrue((self.isolated_root("opencode-shared") / "typesafe-ai").is_dir())
         self.assertFalse((self.isolated_root("opencode-shared") / "unrelated-skill").exists())
 
     def test_assigned_skill_still_blocks_non_isolating_harness(self) -> None:

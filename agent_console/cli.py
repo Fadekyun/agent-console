@@ -223,6 +223,8 @@ def parser() -> argparse.ArgumentParser:
 
     skills = commands.add_parser("skills")
     skills_commands = skills.add_subparsers(dest="skills_command", required=True)
+    from .skill_cli import add_commands
+    add_commands(skills_commands)
     skills_commands.add_parser("sync")
     skills_doctor = skills_commands.add_parser("doctor")
     skills_doctor.add_argument("--quiet", action="store_true")
@@ -318,6 +320,10 @@ def main(argv: list[str] | None = None) -> int:
                 emit(result)
             return 0
         if args.command == "skills":
+            from .skill_cli import COMMANDS, run as run_skill_command
+            if args.skills_command in COMMANDS:
+                emit(run_skill_command(args))
+                return 0
             if args.skills_command == "effective":
                 manager = SessionManager()
                 emit(get_effective_skills(manager.database, args.profile))

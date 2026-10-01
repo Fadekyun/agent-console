@@ -24,9 +24,9 @@ class SkillAndSecretTests(unittest.TestCase):
                     encoding="utf-8",
                 )
             with patch("agent_console.skills.SKILL_CATALOG", []):
-                result = sync_skills(canonical_root=canonical, home=home)
+                result = sync_skills(canonical_root=canonical, home=home, version_probe=lambda tool, binary: "1.18.30")
                 self.assertTrue(result["ok"])
-                self.assertTrue(doctor_skills(canonical_root=canonical, home=home)["ok"])
+                self.assertTrue(doctor_skills(canonical_root=canonical, home=home, version_probe=lambda tool, binary: "1.18.30")["ok"])
             for relative in (
                 Path(".codex/skills"),
                 Path(".claude/skills"),

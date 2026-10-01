@@ -1,3 +1,4 @@
+import { setupSkills } from '/static/skill-workbench.js';
 import { initTheme } from '/static/theme.js?v=8';
 const $ = (s, root = document) => root.querySelector(s);
 const form = $('#create-form');
@@ -11,6 +12,8 @@ async function api(path, payload, method = 'POST') {
   if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data));
   return data;
 }
+const skillsView = setupSkills({ api, el, message, profiles: () => state.me?.profiles || [] });
+let skillsLoaded = false;
 function status(s) { return s.attention_state !== 'normal' && s.attention_state ? names[s.attention_state] || s.attention_state : s.running ? 'Working' : 'Stopped'; }
 function rootOf(s) { const visited = new Set(); while (s.parent_session_id && !visited.has(s.id)) { visited.add(s.id); const p = state.sessions.find(x => x.id === s.parent_session_id); if (!p) break; s = p; } return s; }
 function family(s) { const root = rootOf(s); return state.sessions.filter(x => rootOf(x).id === root.id); }
@@ -63,7 +66,9 @@ function route() {
   try { sessionName = hash.startsWith('#session/') ? decodeURIComponent(hash.slice(9)) : null; } catch { message('Invalid session link. Return to Work.'); }
   const previous = state.selected?.tmux_name;
   state.selected = state.sessions.find(s => s.tmux_name === sessionName) || null;
-  $('#work-view').hidden = Boolean(sessionName) || hash === '#settings';
+  $('#work-view').hidden = Boolean(sessionName) || ['#settings', '#skills'].includes(hash);
+  $('#skills-view').hidden = hash !== '#skills';
+  if (hash === '#skills' && !skillsLoaded && state.me) { skillsLoaded = true; skillsView.load().catch(error => { skillsLoaded = false; message(error.message); }); }
   $('#settings-view').hidden = hash !== '#settings';
   $('#session-view').hidden = !state.selected;
   document.querySelectorAll('.mobile-nav a').forEach(a => a.setAttribute('aria-current', a.hash === (hash === '#settings' ? '#settings' : '#work') ? 'page' : 'false'));
@@ -120,7 +125,7 @@ function openCreate(parent = null) {
   options(form.elements.profile, state.me.profiles.filter(x => x.status !== 'deprecated').map(x => [x.name, x.display_name || x.name]), 'coder');
   form.elements.repository.value = parent?.repository || state.workspace || '';
   $('#create-error').textContent = available.length ? '' : 'No tool is ready. Check Tools & accounts in Settings.';
-  configureTool(); configureRole(); $('#create-dialog').showModal();
+  configureTool(); configureRole(); $('#create-dialog').showModal(); previewSkills();
 }
 form.onsubmit = async event => {
   event.preventDefault(); const submit = $('button[type=submit]', form); if (submit.disabled) return; submit.disabled = true; $('#create-error').textContent = '';
@@ -140,7 +145,39 @@ $('#interrupt-session').onclick = () => { if (confirm(`Interrupt ${state.selecte
 $('#stop-session').onclick = () => { if (confirm(`Stop ${state.selected.tmux_name}? Its files and transcript will be kept.`)) sessionAction('kill', { confirmed: true }); };
 $('#attention-form').onsubmit = async event => { event.preventDefault(); const f = event.target; try { await api(`/api/sessions/${encodeURIComponent(state.selected.tmux_name)}/attention`, { state: f.elements.state.value, note: f.elements.note.value }, 'PATCH'); await refresh(); message('Session status updated.'); } catch (e) { message(e.message); } };
 $('#show-output').onclick = async () => { const s = state.selected; try { const output = await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/review?lines=500`); if (s.id !== state.selected?.id) return; $('#output-text').textContent = output.content || 'No captured output.'; $('#session-output').hidden = false; } catch (e) { message(e.message); } };
-$('#show-skills').onclick = async () => { const s = state.selected; try { const skills = await api('/api/skills/effective', { profile: s.profile }); if (s.id !== state.selected?.id) return; const panel = $('#session-skills'); panel.replaceChildren(el('h3', 'Current role skill assignments'), el('p', 'These apply to newly created sessions. Existing sessions retain their launch-time skill snapshot.', 'small muted'), ...skills.effective.map(x => el('p', `${x.name} — ${x.description}`)), ...skills.issues.map(x => el('p', x, 'danger'))); if (!skills.effective.length) panel.append(el('p','No role-specific assignments. Shared and tool-provided skills may also be available.')); panel.hidden = false; } catch (e) { message(e.message); } };
+$('#show-skills').onclick = async () => {
+  const s = state.selected;
+  try {
+    const data = await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/skills`);
+    if (s.id !== state.selected?.id) return;
+    const panel = $('#session-skills');
+    panel.replaceChildren(el('h3', 'Delivered skills'), el('p', data.notice, 'small muted'));
+    if (data.latest) {
+      panel.append(el('p', `${data.latest.at} · ${data.latest.tool} · ${data.latest.profile}`));
+      for (const skill of data.latest.skills) panel.append(el('p', `${skill.name} · ${skill.revision} · ${skill.selection}`));
+      panel.append(el('p', data.latest.coverage, 'small muted'));
+    }
+    panel.hidden = false;
+  } catch (error) { message(error.message); }
+};
+let previewSequence = 0;
+async function previewSkills() {
+  const sequence = ++previewSequence, target = $('#create-skills');
+  target.replaceChildren(el('p', 'Checking effective skills…'));
+  try {
+    const data = await api('/api/skill-registry/preview', { profile: form.elements.profile.value, tool: form.elements.tool.value, repository: form.elements.repository.value || null });
+    if (sequence !== previewSequence) return;
+    target.replaceChildren(el('p', data.validation.valid ? 'Skill configuration is ready.' : 'Resolve the skill issues below before launch.'));
+    for (const skill of data.policies) target.append(el('p', `${skill.name} · ${skill.effective_policy} · ${skill.revision || 'Unknown revision'}${skill.reasons.length ? ' — ' + skill.reasons.join('; ') : ''}`));
+    for (const issue of data.validation.issues) target.append(el('p', issue, 'danger'));
+    if (!data.policies.length) target.append(el('p', 'No Console-selected skills.'));
+    target.append(el('p', data.notice, 'small muted'));
+  } catch (error) { if (sequence === previewSequence) target.replaceChildren(el('p', error.message, 'danger')); }
+}
+$('#preview-skills').onclick = previewSkills;
+form.elements.repository.addEventListener('change', previewSkills);
+form.elements.profile.addEventListener('change', previewSkills);
+form.elements.tool.addEventListener('change', previewSkills);
 $('#new-session').onclick = () => openCreate(); $('#cancel-create').onclick = () => $('#create-dialog').close();
 form.elements.profile.onchange = configureRole; form.elements.tool.onchange = configureTool;
 $('#open-terminal').onclick = openTerminal;

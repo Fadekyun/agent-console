@@ -79,6 +79,59 @@ class WebTests(unittest.TestCase):
             os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
         self.temp.cleanup()
 
+    def test_registry_import_requires_identity_and_exact_revision(self) -> None:
+        source = self.workspace / "import-me"
+        source.mkdir()
+        (source / "SKILL.md").write_text("---\nname: import-me\ndescription: Fixture guide\nmetadata:\n  agent-console/version: '1'\n---\nRead the scope.\n")
+        route = "/api/skill-registry/imports"
+        self.assertEqual(self.client.post(route, json={"source": str(source)}).status_code, 403)
+        staged = self.client.post(route, json={"source": str(source)}, headers=self.headers)
+        self.assertEqual(staged.status_code, 200, staged.text)
+        data = staged.json()
+        target = Path(os.environ["AGCONSOLE_SKILLS_ROOT"]) / "import-me"
+        self.assertFalse(target.exists())
+        activation = route + "/" + data["id"] + "/activate"
+        stale = self.client.post(activation, json={"expected_hash": "a" * 64}, headers=self.headers)
+        self.assertEqual(stale.status_code, 400)
+        self.assertFalse(target.exists())
+        active = self.client.post(activation, json={"expected_hash": data["hash"]}, headers=self.headers)
+        self.assertEqual(active.status_code, 200, active.text)
+        self.assertEqual(active.json()["trust"], "reviewed")
+        self.assertTrue((target / "SKILL.md").is_file())
+        outside = self.client.post(route, json={"source": str(self.workspace.parent)}, headers=self.headers)
+        self.assertEqual(outside.status_code, 400)
+
+    def test_registry_preview_tracks_hash_approval_and_drift(self) -> None:
+        source = Path(os.environ["AGCONSOLE_SKILLS_ROOT"]) / "test-skill-for-web"
+        (source / "agent-console.json").write_text(json.dumps({"version": 1, "approval": "ask"}))
+        assigned = self.client.post("/api/skills/assign", json={"profile":"general", "skill_name":"test-skill-for-web"}, headers=self.headers)
+        self.assertEqual(assigned.status_code, 200, assigned.text)
+        payload = {"profile":"general", "tool":"codex", "repository":str(self.workspace)}
+        preview = self.client.post("/api/skill-registry/preview", json=payload, headers=self.headers)
+        self.assertEqual(preview.status_code, 200, preview.text)
+        data = preview.json()
+        self.assertFalse(data["validation"]["valid"])
+        self.assertEqual(data["policies"][0]["effective_policy"], "ask")
+        revision = data["policies"][0]["hash"]
+        approved = self.client.post("/api/skill-registry/test-skill-for-web/approve", json={"profile":"general", "expected_hash":revision}, headers=self.headers)
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertTrue(self.client.post("/api/skill-registry/preview", json=payload, headers=self.headers).json()["validation"]["valid"])
+        with (source / "SKILL.md").open("a") as stream:
+            stream.write("Changed instructions.\n")
+        self.assertFalse(self.client.post("/api/skill-registry/preview", json=payload, headers=self.headers).json()["validation"]["valid"])
+        stale = self.client.post("/api/skill-registry/test-skill-for-web/approve", json={"profile":"general", "expected_hash":revision}, headers=self.headers)
+        self.assertEqual(stale.status_code, 400)
+
+    def test_session_delivery_receipt_survives_kill(self) -> None:
+        session = self.manager.create(tool="shell", profile="general", name="receipt-fixture")
+        route = "/api/sessions/receipt-fixture/skills"
+        before = self.client.get(route, headers=self.headers)
+        self.assertEqual(before.status_code, 200, before.text)
+        self.assertEqual(before.json()["session_id"], session["id"])
+        self.assertEqual(before.json()["latest"]["skills"], [])
+        self.manager.kill("receipt-fixture")
+        self.assertEqual(self.client.get(route, headers=self.headers).json(), before.json())
+
     def test_terminal_history_controls_do_not_send_program_input(self) -> None:
         import time
         self.manager.create(tool="shell", profile="general", name="scroll-history")

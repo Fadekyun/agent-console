@@ -1,3 +1,11 @@
+## 0.11.0 (unreleased staging)
+
+- Date: 2026-10-02. Issue: #6.
+- Impact: portable YAML skill registry, staged import/review, content-bound approvals, project/role/harness/dependency policy, immutable session copies and persistent delivery receipts. Workbench Skills and launch preview connect the registry to actual session delivery; CLI exposes the same operations.
+- Configuration/migration: pinned PyYAML 6.0.3; owner-only versioned `skill-policy.json` alongside the database, no SQLite schema change. Existing unbound approvals require approval of their current content. Canonical skill content remains the editing source. See [SKILL_REGISTRY.md](SKILL_REGISTRY.md).
+- Verification: registry/skills tests, real tmux delivery/restart tests, authenticated API import/approval/drift/receipt tests, desktop and phone workbench acceptance scenarios. Live staging verification is recorded in the completion audit; the wider epic is still in progress.
+- Rollback: select the previous staging release, preserve policy/import/delivery files and canonical library backup. Older releases do not enforce the registry; reconcile imported/restricted skills before launching through an older staging release. The separate current console remains available.
+
 ## 0.10.0 (unreleased staging)
 
 - Date: 2026-10-01. Issue: #90.

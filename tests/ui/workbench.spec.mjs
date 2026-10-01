@@ -11,6 +11,7 @@ async function fixture(page) {
     else if(path.endsWith('/brief')) body={brief:''};
     else if(path.endsWith('/review')) body={content:'Check passed',alternate_screen:false};
     else if(path==='/api/skills/effective') body={effective:[],issues:[]};
+    else if(path==='/api/skill-registry/preview') body={validation:{valid:true,issues:[]},policies:[],notice:'Selected skills only.'};
     await route.fulfill({json:body});
   });
   await page.routeWebSocket('**/ws/sessions/**', ws => { ws.send('Connected to staging\r\n'); });
@@ -90,4 +91,24 @@ test('nested terminal owns wheel and touch scrolling without moving the work pag
   }
   await expect.poll(()=>frame.evaluate(()=>window.__terminal.buffer.active.viewportY)).toBeLessThan(start);
   expect(await page.evaluate(()=>scrollY)).toBe(pageY);
+});
+
+test('skills inspection and exact revision approval work on desktop and phone', async({page}) => {
+  const errors=[];page.on('pageerror', e=>errors.push(e.message));
+  await fixture(page);
+  const item={name:'bounded-coding',description:'Apply a small fix',hash:'a'.repeat(64),revision:'rev-1',source:'/workspace/skills/bounded-coding',scope:'global',risk:'low',approval:'ask',compatible_profiles:[],compatible_harnesses:['codex'],files:['SKILL.md'],required_services:[],issues:[],warnings:[],trust:'local-trusted',validation:'valid'};
+  let approved=null;
+  await page.route('**/api/skill-registry', route=>route.fulfill({json:{entries:[item],imports:[]}}));
+  await page.route('**/api/skill-registry/bounded-coding/approve',route=>{approved=route.request().postDataJSON();return route.fulfill({json:{hash:item.hash}});});
+  await page.goto('/work#skills');
+  await expect(page.getByRole('heading',{name:'Skills',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Inspect',exact:true}).click();
+  await expect(page.getByText(item.hash,{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Approve revision for role'}).click();
+  await expect.poll(()=>approved).toEqual({profile:'coder',expected_hash:item.hash});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.goto('/work');await page.getByRole('button',{name:'New session',exact:true}).click();
+  await page.locator('#create-skills-panel summary').click();
+  await expect(page.getByText('No Console-selected skills.',{exact:true})).toBeVisible();
+  expect(errors).toEqual([]);
 });

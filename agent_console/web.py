@@ -740,6 +740,9 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     async def restart(name: str, _: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         return session_manager.restart(validate_session_name(name))
 
+    from .skill_api import skill_routes
+    app.include_router(skill_routes(session_manager, require_identity))
+
     @app.get("/api/skills")
     async def skills_api(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         catalog = skill_catalog()

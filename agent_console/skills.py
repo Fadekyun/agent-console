@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from .database import Database, utc_now
+from .skill_registry import SkillRegistry, frontmatter as load_frontmatter, inspect_package, snapshot_skill
 from .skill_capabilities import SKILL_TOOL_CAPABILITIES, SUPPORTED_TOOLS, SkillToolCapability
 from .validation import PROFILES
 
@@ -47,54 +48,28 @@ SKILL_CATALOG: list[dict[str, Any]] = [
 ]
 
 
-def _parse_frontmatter(path: Path) -> dict[str, str]:
-    result: dict[str, str] = {}
+def _parse_frontmatter(path: Path) -> dict[str, Any]:
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        if text.startswith("---"):
-            parts = text.split("---", 2)
-            if len(parts) >= 3:
-                for line in parts[1].strip().splitlines():
-                    if ":" in line:
-                        key, _, value = line.partition(":")
-                        result[key.strip()] = value.strip()
-    except OSError:
-        pass
-    return result
+        return load_frontmatter(path)
+    except (OSError, ValueError, UnicodeError):
+        return {}
 
 
-def _build_catalog_entry(
-    name: str,
-    source: Path,
-    root: Path,
-) -> dict[str, Any]:
-    source_diagnostic = _source_diagnostic(root, name)
-    frontmatter = _parse_frontmatter(source) if source_diagnostic["state"] == "present" else {}
-    kind = frontmatter.get("kind", "standard")
-    if kind not in SKILL_KINDS:
-        kind = "standard"
-    description = frontmatter.get("description", "")
-    tools_raw = frontmatter.get("tools", "")
-    declared_tools = [t.strip() for t in tools_raw.split(",") if t.strip()]
-    tools = (
-        [tool for tool in declared_tools if tool in SUPPORTED_TOOLS]
-        if tools_raw
-        else sorted(SUPPORTED_TOOLS)
-    )
-    allowed_raw = frontmatter.get("allowed_profiles", "")
-    allowed = [a.strip() for a in allowed_raw.split(",") if a.strip() in PROFILES] if allowed_raw else None
-    requires_approval = frontmatter.get("requires_approval", "").lower() in ("true", "yes", "1")
+def _build_catalog_entry(name: str, source: Path, root: Path) -> dict[str, Any]:
+    diagnostic = _source_diagnostic(root, name)
+    package = inspect_package(root / name, name=name)
+    declared = package["compatible_harnesses"]
+    allowed = package["compatible_profiles"]
     return {
-        "name": name,
-        "native_id": frontmatter.get("name") or name,
-        "description": description,
-        "tools": tools,
-        "kind": kind,
+        "name": name, "native_id": package["native_id"],
+        "description": package["description"],
+        "tools": [tool for tool in declared if tool in SUPPORTED_TOOLS] if declared else sorted(SUPPORTED_TOOLS),
+        "kind": "superpower" if package["risk"] == "elevated" else "standard",
         "source_path": str(root / name),
         "allowed_profiles": frozenset(allowed) if allowed else None,
-        "requires_approval": requires_approval,
-        "unsupported_tools": [tool for tool in declared_tools if tool not in SUPPORTED_TOOLS],
-        "source_diagnostic": source_diagnostic,
+        "requires_approval": package["approval"] == "ask",
+        "unsupported_tools": [tool for tool in declared if tool not in SUPPORTED_TOOLS],
+        "source_diagnostic": diagnostic, "package": package,
     }
 
 
@@ -179,6 +154,7 @@ def validate_catalog(
     for entry in entries:
         name = entry["name"]
         kind = entry["kind"]
+        errors.extend(f"skill {name!r}: {issue}" for issue in entry["package"]["issues"])
         if kind not in SKILL_KINDS:
             errors.append(f"skill {name!r}: unknown kind {kind!r}")
             continue
@@ -506,7 +482,8 @@ def _collect_catalog_state(
     tools = {tool for entry in entries for tool in entry["tools"]}
     revoked_links = _managed_revoked_links(entries, home)
     tools.update(link["tool"] for link in revoked_links)
-    versions = version_info or _version_diagnostics(tools, version_probe)
+    versions = dict(version_info or {})
+    versions.update(_version_diagnostics(tools - versions.keys(), version_probe))
     actual_home = Path.home() if home is None else Path(home)
     providers: list[dict[str, Any]] = []
     discovery_by_tool: dict[str, dict[str, Any]] = {}
@@ -674,6 +651,7 @@ def skill_catalog(
             "source_present": entry["source_diagnostic"]["state"] == "present",
             "source": entry["source_diagnostic"],
             "synced": by_skill.get(entry["name"], []),
+            "package": entry["package"],
         })
     return {
         "entries": result,
@@ -712,6 +690,24 @@ def sync_skills(
     ]
     if unsupported:
         raise ValueError(f"canonical skills declare unsupported tools: {'; '.join(unsupported)}")
+    invalid_packages = [f"{entry['name']}: {issue}" for entry in entries for issue in entry["package"]["issues"]]
+    if invalid_packages:
+        raise ValueError("invalid skill packages: " + "; ".join(invalid_packages))
+    from .config import Settings
+    policy_state = (home / ".local/share/agent-console") if home else Settings.from_env().database_path.parent
+    registry = SkillRegistry(root, policy_state)
+    restricted = []
+    publishable = []
+    for entry in entries:
+        package = registry.inspect(entry["name"])
+        global_ok = (package["trust"] in {"local-trusted", "reviewed"}
+                     and package["approval"] == "allow" and package["scope"] == "global"
+                     and package["risk"] == "low" and not package["compatible_profiles"]
+                     and not package["required_services"])
+        if not global_ok:
+            restricted.append(entry["name"])
+        publishable.append({**entry, "tools": entry["tools"] if global_ok else []})
+    entries = publishable
     revoked_links = _managed_revoked_links(entries, home)
     tool_set = {tool for e in entries for tool in e["tools"]}
     tool_set.update(link["tool"] for link in revoked_links)
@@ -819,6 +815,7 @@ def sync_skills(
         "roots": {name: str(p) for name, p in roots.items()},
         "changed": changed,
         "skipped": skipped,
+        "session_only": restricted,
         "problems": problems,
         "providers": final_state["providers"],
         "diagnostics": final_state["diagnostics"],
@@ -843,6 +840,7 @@ def doctor_skills(
         name = entry["name"]
         source = root / name / "SKILL.md"
         source_state = entry["source_diagnostic"]["state"]
+        problems.extend(f"{name}: {issue}" for issue in entry["package"]["issues"])
         if source_state != "present":
             problems.append(f"canonical skill {name} is {source_state}: {source}")
             continue
@@ -1059,12 +1057,15 @@ def approve_superpower(
             f"profile {profile!r} is not allowed to use superpower "
             f"{skill_name!r} (allowed: {sorted(allowed)})"
         )
+    registry = SkillRegistry(root, db.path.parent)
+    package = registry.inspect(skill_name)
+    prior = registry.read()["approvals"].get(f"{profile}/{skill_name}")
     with db.connect() as conn:
         existing = conn.execute(
             "SELECT revoked_at FROM superpower_approvals WHERE profile=? AND skill_name=?",
             (profile, skill_name),
         ).fetchone()
-        if existing is not None and existing["revoked_at"] is None:
+        if existing is not None and existing["revoked_at"] is None and prior and prior["hash"] == package["hash"]:
             raise ValueError(
                 f"superpower {skill_name!r} is already approved for profile {profile!r}"
             )
@@ -1076,6 +1077,7 @@ def approve_superpower(
             "approved_at=excluded.approved_at, revoked_at=NULL",
             (profile, skill_name, actor, surface, utc_now()),
         )
+    registry.approve(skill_name, profile, expected_hash=package["hash"], actor=actor)
     db.audit(
         "superpower.approved",
         f"{profile}/{skill_name}",
@@ -1110,6 +1112,7 @@ def revoke_superpower(
             "UPDATE superpower_approvals SET revoked_at=? WHERE profile=? AND skill_name=?",
             (utc_now(), profile, skill_name),
         )
+    SkillRegistry(_resolve_canonical_root(), db.path.parent).revoke(skill_name, profile)
     db.audit(
         "superpower.revoked",
         f"{profile}/{skill_name}",
@@ -1140,20 +1143,15 @@ def isolate_skills(
     if cleanup_first and isolated_root.exists():
         shutil.rmtree(isolated_root)
     isolated_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    receipts = []
     for skill in effective_skills:
         name = skill["name"]
-        target = canonical_root / name
-        link = isolated_root / name
-        if link.exists():
-            if link.is_symlink():
-                link.unlink()
-            else:
-                log.warning("isolated path exists and is not a symlink, skipping: %s", link)
-                continue
-        try:
-            link.symlink_to(target, target_is_directory=True)
-        except OSError:
-            log.warning("failed to create isolated symlink for %s", name)
+        receipt = snapshot_skill(canonical_root / name, isolated_root / name, skill.get("hash"))
+        receipt["selection"] = skill.get("selection", "shared" if skill.get("shared") else "profile")
+        receipts.append(receipt)
+    # Outside the discovery folders: survives as the exact launch explanation.
+    import json
+    (isolated_root / "delivery.json").write_text(json.dumps({"version": 1, "skills": receipts}, indent=2))
     return isolated_root
 
 
@@ -1241,6 +1239,7 @@ def resolve_session_skills(
     *,
     shared_allowlist: Sequence[str] = (),
     canonical_root: Path | None = None,
+    repository: str | None = None,
 ) -> dict[str, Any]:
     """Combine persisted profile assignments with the shared-skill allowlist.
 
@@ -1250,10 +1249,17 @@ def resolve_session_skills(
     collision so its audit metadata is preserved.
     """
     root = canonical_root or _resolve_canonical_root()
-    validation = validate_profile_skills(db, profile, canonical_root=root)
+    validation = validate_profile_skills(db, profile, canonical_root=root, tool=tool, repository=repository)
     shared = get_shared_skills(
         profile, tool, allowlist=shared_allowlist, canonical_root=root
     )
+    registry = SkillRegistry(root, db.path.parent)
+    for skill in shared:
+        policy = registry.explain(skill["name"], profile, tool, repository)
+        if policy["effective_policy"] != "allow":
+            validation["issues"].append(f"shared skill {skill['name']!r}: " + "; ".join(policy["reasons"]))
+            validation["valid"] = False
+        skill.update(hash=policy["hash"], revision=policy["revision"], trust=policy["trust"], selection="shared")
     materialized: list[dict[str, Any]] = list(validation["effective"])
     names = {skill["name"] for skill in materialized}
     for skill in shared:
@@ -1261,6 +1267,14 @@ def resolve_session_skills(
             continue
         names.add(skill["name"])
         materialized.append(skill)
+    native_names: dict[str, str] = {}
+    for skill in materialized:
+        package = registry.inspect(skill["name"])
+        native_id = package["native_id"]
+        if native_id in native_names and native_names[native_id] != skill["name"]:
+            validation["valid"] = False
+            validation["issues"].append(f"duplicate native skill id {native_id!r}: {native_names[native_id]} and {skill['name']}")
+        native_names[native_id] = skill["name"]
     return {
         "validation": validation,
         "shared": shared,
@@ -1273,6 +1287,8 @@ def get_effective_skills(
     profile: str,
     *,
     canonical_root: Path | None = None,
+    tool: str | None = None,
+    repository: str | None = None,
 ) -> dict[str, Any]:
     if profile not in PROFILES:
         raise ValueError(f"unknown profile: {profile!r}")
@@ -1311,16 +1327,10 @@ def get_effective_skills(
                 f"{skill_name!r} (allowed: {sorted(allowed)})"
             )
             continue
-        if entry["kind"] == "superpower":
-            already_approved = is_superpower_approved(db, profile, skill_name)
-            ap_result = check_superpower_approval(
-                profile, skill_name, approved=already_approved, canonical_root=root
-            )
-            if not ap_result["allowed"]:
-                if ap_result["enforcement"] == "enforced":
-                    issues.append(ap_result["reason"])
-                    continue
-                issues.append(ap_result["reason"])
+        policy = SkillRegistry(root, db.path.parent).explain(skill_name, profile, tool, repository)
+        if policy["effective_policy"] != "allow":
+            issues.append(f"skill {skill_name!r}: " + "; ".join(policy["reasons"]))
+            continue
         effective.append({
             "name": skill_name,
             "kind": entry["kind"],
@@ -1330,6 +1340,8 @@ def get_effective_skills(
             "requires_approval": entry.get("requires_approval", False),
             "assigned_at": a["assigned_at"],
             "assigned_by": a["assigned_by"],
+            "hash": policy["hash"], "revision": policy["revision"],
+            "trust": policy["trust"], "effective_policy": policy["effective_policy"], "selection": "profile",
         })
     return {
         "profile": profile,
@@ -1344,8 +1356,10 @@ def validate_profile_skills(
     profile: str,
     *,
     canonical_root: Path | None = None,
+    tool: str | None = None,
+    repository: str | None = None,
 ) -> dict[str, Any]:
-    result = get_effective_skills(db, profile, canonical_root=canonical_root)
+    result = get_effective_skills(db, profile, canonical_root=canonical_root, tool=tool, repository=repository)
     return {
         "valid": len(result["issues"]) == 0,
         "effective": result["effective"],

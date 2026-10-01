@@ -541,7 +541,7 @@ class SkillIsolationTests(unittest.TestCase):
         isolated = Path(self.temp.name) / "isolated"
         effective = [{"name": self.assigned_skill, "kind": "standard"}]
         isolate_skills(isolated, self.canonical, effective)
-        self.assertTrue((isolated / self.assigned_skill).is_symlink())
+        self.assertTrue((isolated / self.assigned_skill).is_dir())
         self.assertTrue((isolated / self.assigned_skill / "SKILL.md").is_file())
         self.assertFalse((isolated / self.unassigned_skill).exists())
 
@@ -559,7 +559,7 @@ class SkillIsolationTests(unittest.TestCase):
         isolated = Path(self.temp.name) / "check-absent"
         effective = [{"name": self.assigned_skill, "kind": "standard"}]
         isolate_skills(isolated, self.canonical, effective)
-        dir_entries = list(isolated.iterdir())
+        dir_entries = [p for p in isolated.iterdir() if p.is_dir()]
         names = [e.name for e in dir_entries]
         self.assertIn(self.assigned_skill, names)
         self.assertNotIn(self.unassigned_skill, names)
@@ -568,7 +568,7 @@ class SkillIsolationTests(unittest.TestCase):
         isolated = Path(self.temp.name) / "empty-isolated"
         isolate_skills(isolated, self.canonical, [])
         self.assertTrue(isolated.is_dir())
-        self.assertEqual(len(list(isolated.iterdir())), 0)
+        self.assertEqual(len([p for p in isolated.iterdir() if p.is_dir()]), 0)
 
     def test_empty_isolated_root_prevents_global_leak(self) -> None:
         isolated = Path(self.temp.name) / "empty-leak-guard"
