@@ -319,8 +319,19 @@ class CommandCodeAdapter(ProviderAdapter):
         environment: dict[str, str],
         isolated_skills_root: Path,
     ) -> None:
-        # Only Hermes needs an explicit directory list; pi discovers its skills
-        # through its own per-session agent directory.
+        # Both paths point to the immutable Console-selected snapshot. Other
+        # native project/plugin sources remain the harness's responsibility.
+        if self.tool == "pi":
+            agent_dir = environment.get("PI_CODING_AGENT_DIR")
+            if not agent_dir:
+                raise ValueError("Pi skill delivery requires its per-session agent directory")
+            target = Path(agent_dir) / "skills"
+            if target.is_symlink() and target.resolve() == isolated_skills_root.resolve():
+                return
+            if target.exists() or target.is_symlink():
+                raise ValueError("Pi skills directory already exists; preserve it and review delivery")
+            target.symlink_to(isolated_skills_root, target_is_directory=True)
+            return
         if self.tool != "hermes":
             return
         hermes_home = environment.get("HERMES_HOME")

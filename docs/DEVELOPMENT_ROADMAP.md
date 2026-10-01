@@ -1,3 +1,8 @@
+## Pi skill delivery — 2026-10-02 (#6)
+
+- v0.18 connects Pi's private agent directory to immutable selected skills and adds a verified 0.99.2 capability. Pi/OpenCode exact-version gates apply to selected-skill launch/restart as well as sync.
+- Installed native Pi/Hermes readers discover the new guide bundles; tmux integration checks distinguish copied delivery and explicit refresh from model use. Full provider configuration/version audit and Git import remain open in `FULL_REVAMP_ACCEPTANCE.md`.
+
 ## Operating guides completed — 2026-10-02 (#140 / #6)
 
 - v0.17.3 documents all seven canonical guide bundles and their staging role assignments. New coding, coordination, verification and skills guides preserve one-session completion, bounded optional expansion, exact input/check binding and existing authorization.

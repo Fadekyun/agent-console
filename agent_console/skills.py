@@ -1275,7 +1275,18 @@ def resolve_session_skills(
             validation["valid"] = False
             validation["issues"].append(f"duplicate native skill id {native_id!r}: {native_names[native_id]} and {skill['name']}")
         native_names[native_id] = skill["name"]
+    capability = SKILL_TOOL_CAPABILITIES.get(tool)
+    delivery_version = None
+    if materialized and capability and capability.verification == "exact-version":
+        delivery_version = _version_diagnostics({tool}, None)[tool]
+        if not delivery_version["mutation_allowed"]:
+            validation["valid"] = False
+            validation["issues"].append(
+                f"{tool} skill delivery requires a verified harness version: "
+                f"{delivery_version['version_state']}"
+            )
     return {
+        "delivery_version": delivery_version,
         "validation": validation,
         "shared": shared,
         "materialized": materialized,

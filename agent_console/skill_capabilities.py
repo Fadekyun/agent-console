@@ -143,6 +143,27 @@ SKILL_TOOL_CAPABILITIES: dict[str, SkillToolCapability] = {
         ),
         configured_sources_inspected=True,
     ),
+    "pi": SkillToolCapability(
+        tool="pi",
+        supported=True,
+        native_root=".pi/agent/skills",
+        supports_on_demand=True,
+        supports_permissions=False,
+        materialization_method="symlink",
+        can_isolate_skills=True,
+        verification="exact-version",
+        discovery_sources=(
+            SkillDiscoverySource("native-global", "home", ".pi/agent/skills", True, None, False),
+            SkillDiscoverySource("global-agents", "home", ".agents/skills", True, None, False),
+            SkillDiscoverySource("native-project", "project", ".pi/skills", True, None, False),
+            SkillDiscoverySource("project-agents", "project", ".agents/skills", True, None, False),
+        ),
+        # Package/settings/ancestor sources are also possible. Do not claim the
+        # static inventory is exhaustive or that it suppresses native sources.
+        configured_sources_inspected=False,
+        verified_versions=frozenset({"0.99.2"}),
+        unverified_version_policy="skip",
+    ),
     "opencode": SkillToolCapability(
         tool="opencode",
         supported=True,

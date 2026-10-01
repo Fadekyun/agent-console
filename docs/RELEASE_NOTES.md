@@ -1,3 +1,10 @@
+## 0.18.0 — 2026-10-02 (staging, #6)
+
+- Impact: Pi receives assigned/shared skill snapshots through its private agent directory, participates in capability-driven discovery/sync, and preserves conflicting operator paths. Exact-version skill adapters now verify selected delivery before session create/restart, including OpenCode.
+- Configuration/migration: no schema change. Verified Pi 0.99.2 and OpenCode 1.18.30 required for selected-skill delivery; unknown versions explain the block. Existing sessions retain their copies. No credentials or staging harness setup are silently installed.
+- Verification: installed Pi resource loader and Hermes native skill listing discover four new guide packages; unit/version/collision tests and real-tmux snapshot/restart tests with inert launchers pass. See `PI_SKILL_DELIVERY.md` for evidence and limits.
+- Rollback: select 0.17.3, preserving skill/session state; remove Pi-dependent assignments before using an older release without its delivery adapter. Current console remains unchanged.
+
 ## 0.17.3 — 2026-10-02 (staging, #140 / #6)
 
 - Impact: completes the seven canonical operating guides with bounded coding, coordination, review/verification and skills maintenance. Documents exact commands, optional session expansion and separate release authority.

@@ -50,6 +50,8 @@ agentctl skills delivery SESSION
 
 Global sync only publishes unrestricted, low-risk, globally scoped, allowed skills. Restricted packages are session-only; sync removes only Console-owned links for them and preserves unrelated native content. Harness/version gates still apply. Per-profile assignments remain rejected by launch for tools that cannot isolate them; shared skills use each adapter's supported delivery path. Import, review and assignment do not execute skill scripts.
 
+Since staging 0.18, Pi 0.99.2 has verified native delivery through its private agent directory and participates in the capability catalog. Exact-version adapters (Pi and OpenCode) also enforce their version gate before selected-skill session creation/restart. See [Pi delivery and native discovery evidence](PI_SKILL_DELIVERY.md), including the limits of per-session placement and the remaining provider matrix.
+
 ## Exact delivery and lifecycle
 
 Create and explicit live-terminal restart copy selected packages into the session's isolated directory. Files are checked again while copying without following symlinks. Editing the library does not alter an existing session copy. A delivery receipt records content hashes, revision, selection reason, tool and role; it persists under `state/skill-deliveries/SESSION_ID/` after the transient directory is cleaned up. The session Skills view shows this receipt. Sessions created before this release report unknown delivery instead of inferring it from current assignments. A receipt shows delivery, not proof that the model used a skill.

@@ -261,21 +261,28 @@ class SharedSkillSessionTests(unittest.TestCase):
                 "codex-pro": self.fake_agent,
                 "hermes": self.fake_agent,
                 "opencode": self.fake_agent,
+                "pi": self.fake_agent,
             },
         )
         self.binary_patch.start()
+        # These tests use an inert launcher; native version/discovery is
+        # verified separately. Keep admission realistic for versioned adapters.
+        self.version_patch = mock.patch('agent_console.skills._default_version_probe',
+            side_effect=lambda tool, binary: '0.99.2' if tool == 'pi' else '1.18.30')
+        self.version_patch.start()
 
     def tearDown(self) -> None:
+        self.version_patch.stop()
         self.binary_patch.stop()
         self.env_patch.stop()
         subprocess.run(["tmux", "-L", self.socket, "kill-server"], capture_output=True)
         self.temp.cleanup()
 
-    def configure_commandcode(self) -> None:
+    def configure_commandcode(self, tool='hermes') -> None:
         from agent_console.commandcode import BASE_URL, DEFAULT_MODEL
 
         data = self.manager.auth._read()
-        data["contexts"]["hermes"]["commandcode-main"] = {
+        data["contexts"][tool]["commandcode-main"] = {
             "provider": "commandcode",
             "kind": "api-key",
             "secret_ref": "commandcode-main",
@@ -285,7 +292,7 @@ class SharedSkillSessionTests(unittest.TestCase):
             "enabled": True,
             "verified": True,
         }
-        data["defaults"]["hermes"] = "commandcode-main"
+        data["defaults"][tool] = "commandcode-main"
         self.manager.auth._write(data)
         secret = self.manager.auth.secret_path("commandcode-main")
         secret.write_text("export CMD_API_KEY=fixture-key\n", encoding="utf-8")
@@ -326,6 +333,30 @@ class SharedSkillSessionTests(unittest.TestCase):
         isolated = self.isolated_root("hermes-shared")
         self.assertTrue((isolated / "typesafe-ai").is_dir())
         self.assertFalse((isolated / "unrelated-skill").exists())
+
+    def test_pi_assigned_and_shared_skills_remain_frozen_until_explicit_restart(self) -> None:
+        self.configure_commandcode('pi')
+        assign_skill(self.manager.database, 'general', 'unrelated-skill', canonical_root=self.skills_root)
+        session = self.manager.create(tool='pi', profile='general', name='pi-skills', repository=str(self.workspace))
+        native = self.settings.state_dir / 'contexts/pi-skills-pi/skills'
+        self.assertEqual(native.resolve(), self.isolated_root('pi-skills'))
+        original = (native / 'typesafe-ai/SKILL.md').read_bytes()
+        source = self.skills_root / 'typesafe-ai/SKILL.md'
+        source.write_bytes(original + b'\nChanged library content.\n')
+        self.assertEqual((native / 'typesafe-ai/SKILL.md').read_bytes(), original)
+        self.assertTrue((native / 'unrelated-skill/SKILL.md').is_file())
+        self.manager.restart('pi-skills')
+        self.assertEqual((native / 'typesafe-ai/SKILL.md').read_bytes(), source.read_bytes())
+        from agent_console.skill_registry import read_deliveries
+        self.assertEqual(read_deliveries(self.settings.state_dir, session['id'])['latest']['tool'], 'pi')
+
+    def test_unverified_pi_blocks_create_before_context_or_terminal(self) -> None:
+        self.configure_commandcode('pi')
+        with mock.patch('agent_console.skills._default_version_probe', return_value='0.99.1'):
+            with self.assertRaisesRegex(ValueError, 'verified harness version'):
+                self.manager.create(tool='pi', profile='general', name='pi-denied', repository=str(self.workspace))
+        self.assertFalse((self.settings.state_dir / 'contexts/pi-denied-pi').exists())
+        self.assertFalse(self.isolated_root('pi-denied').exists())
 
     def test_hermes_restart_adds_external_dirs_without_losing_config(self) -> None:
         self.configure_commandcode()
