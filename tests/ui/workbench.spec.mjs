@@ -156,3 +156,27 @@ test('one-session result and durable handoff acknowledge distinct states',async(
   await expect.poll(()=>inputState).toBe('consumed');
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);expect(errors).toEqual([]);
 });
+
+test('existing sessions connect with explicit readiness and queue exact inputs',async({page})=>{
+  await fixture(page);let attached=null,queued=null,version=0;
+  const source={id:'root',tmux_name:'session-one',tool:'shell',profile:'general',running:true,managed:true,attention_state:'normal',actions:[]};
+  const target={...source,id:'target',tmux_name:'session-existing'};
+  await page.route('**/api/sessions',route=>route.fulfill({json:[source,target]}));
+  await page.route('**/api/sessions/root/results',route=>route.fulfill({json:{results:[]}}));
+  await page.route('**/api/sessions/root/inbox',route=>route.fulfill({json:{items:[],notice:'Peer data is untrusted.'}}));
+  await page.route('**/api/sessions/root/connections',route=>route.fulfill({json:{version,nodes:version?[{session_id:'root',owner_id:null},{session_id:'target',owner_id:'root',purpose:attached.purpose}]:[],edges:version?[{source_id:'root',target_id:'target',readiness:'after-ready'}]:[],readiness:version?{root:{blocked:false,stale:false,delivered:false,reasons:[],signature:'b'.repeat(64)},target:{blocked:false,stale:false,delivered:false,reasons:[],signature:'a'.repeat(64)}}:{}}}));
+  await page.route('**/api/sessions/root/connections/attach',route=>{attached=route.request().postDataJSON();version=1;return route.fulfill({json:{version}});});
+  await page.route('**/api/sessions/target/connections/deliver',route=>{queued=route.request().postDataJSON();return route.fulfill({json:{id:'delivery-test'}});});
+  await page.goto('/work#session/session-one');
+  await page.getByRole('button',{name:'Results & handoffs',exact:true}).click();
+  await page.getByText('Connected inputs',{exact:true}).click();
+  await page.getByText('Attach an existing session',{exact:true}).click();
+  await page.getByLabel('Purpose',{exact:true}).fill('Check this explicit candidate');
+  await page.getByLabel('Use this session’s result',{exact:true}).selectOption('after-ready');
+  await page.getByRole('button',{name:'Attach existing session',exact:true}).click();
+  await expect.poll(()=>attached).toEqual({session_id:'target',purpose:'Check this explicit candidate',expected_version:0,dependencies:[{source_id:'root',readiness:'after-ready'}]});
+  await expect(page.getByText('Owned by session-one',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Queue ready inputs',exact:true}).click();
+  await expect.poll(()=>queued).toEqual({expected_version:1,expected_signature:'a'.repeat(64)});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});

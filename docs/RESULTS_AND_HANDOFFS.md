@@ -31,4 +31,14 @@ Rollback selects the previous staging source and preserves the companion databas
 
 Unit tests cover concurrent monotonic versions, retry deduplication, snapshots surviving source edits/deletion, safe paths/secret checks, recipient-bound acknowledgments, persisted history and future-schema rejection. API tests cover operator authentication, native capability attribution, two-session delivery, immutable downloads and rename/stop persistence. Browser tests cover the actual result/inbox components at desktop and two phone widths.
 
-This is the result/inbox contract used by #140. Suggestions, dependency joins, reviewed automatic envelopes, scheduler launch receipts, stale propagation, recomputation and exact-release reconciliation remain required in [FULL_REVAMP_ACCEPTANCE.md](FULL_REVAMP_ACCEPTANCE.md); a queued handoff alone does not implement them.
+This is the result/inbox contract used by #140. Suggestions, reviewed automatic envelopes, scheduler launch receipts, automatic recomputation and exact-release reconciliation remain required in [FULL_REVAMP_ACCEPTANCE.md](FULL_REVAMP_ACCEPTANCE.md); a queued handoff alone does not implement them.
+
+## Connected existing sessions (0.13.0)
+
+Open Results & handoffs → Connected inputs. Attach a managed existing session with its purpose and readiness; the selected option submits its durable ID. Inspect its existing skill snapshot before connecting when needed. Attachment preserves the process, launch role and skill content. It does not submit terminal text or authorize additional actions.
+
+Ownership is independent of required inputs. Edit Required inputs to select multiple sources (a join). `after-ready` accepts a ready or final passing version; `after-final` requires the latest version to be final and passing. A newer ready version supersedes an older final for readiness. `alongside` pins the current snapshot, including an empty snapshot if no result exists. Saving unchanged alongside rules preserves their pin. Cycles and concurrent stale edits are rejected without partial changes.
+
+Queue ready inputs publishes a whole join into the same durable inbox, atomically and idempotently. It does not start work in an already-running terminal. Each recipient reads `agentctl workflow connections --current`, receives and explicitly acknowledges its inbox. A result published after all joined inputs are consumed records that input signature. Unconsumed input delivery does not make an old result fresh. Changed content invalidates the dependent result and descendants, while independent branches remain available. Identical ready-to-final promotion preserves content identity. These states are visible in Connected inputs; no automatic rerun is implied.
+
+Graph revisions, input deliveries and output bindings survive restart. Existing v0.12 result/inbox APIs ignore additive graph tables during rollback. The independent graph schema gate rejects unknown graph versions. Back up the companion DB with the artifact objects. Suggestions, reviewed automatic envelopes, durable launch attempts, coalesced recomputation and exact release gates remain required follow-up work.

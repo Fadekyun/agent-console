@@ -1,5 +1,13 @@
 ## 0.12.0 (unreleased staging)
 
+## 0.13.0 — 2026-10-02 (staging, #140)
+
+- Impact: connect existing sessions by durable ID without restart; versioned ownership and input DAGs; after-ready, after-final and pinned alongside inputs; cycle rejection; complete joins queued atomically into the durable inbox. Content changes stale dependent results, including transitive dependents. Publishing after explicit consumption records the input revision used.
+- Configuration/migration: additive graph tables and independent graph schema gate in `connected-work.sqlite3`. Existing results and session schemas remain compatible. Graph changes are operator actions; native agents can inspect their connections. This increment does not automatically launch or interrupt agents.
+- Verification: graph tests for joins, duplicate delivery, stale edits, cycles, failure isolation, snapshots, consumption and transitive staleness; authenticated API; desktop/phone connection journey; live staging attachment and input delivery.
+- Rollback: select v0.12.1 and restart the preview service; preserve the companion DB. Existing results and inbox remain readable; graph controls return when v0.13.0 is selected again.
+
+
 ## 0.12.1 — 2026-10-02 (staging, #90)
 
 - Impact: Results and handoffs open in a dedicated view on phones and desktop. Publishing is collapsed until requested, with inbox content visible immediately and a return to the session. Session refresh preserves the result form and existing terminal frame. Phone navigation has Work and Settings; Skills remains accessible from Settings. Failed result loads offer retry.

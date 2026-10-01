@@ -1,5 +1,7 @@
+import { setupConnections } from '/static/connections-workbench.js';
 function requestKey(){return Array.from(crypto.getRandomValues(new Uint8Array(16)),value=>value.toString(16).padStart(2,'0')).join('');}
 export function setupResults({api,el,message,sessions}) {
+  const connections=setupConnections({api,el,message,sessions});
   const root=document.querySelector('#session-results');let selected=null;
   function action(label,fn){const button=el('button',label);button.type='button';button.onclick=async()=>{button.disabled=true;try{await fn();}catch(error){message(error.message);}finally{button.disabled=false;}};return button;}
   function field(label,tag='input'){const wrapper=el('label',label),input=el(tag);wrapper.append(input);return {wrapper,input};}
@@ -42,6 +44,9 @@ export function setupResults({api,el,message,sessions}) {
       await api(`/api/sessions/${session.id}/results`,{kind:kind.input.value,outcome:outcome.input.value,summary:summary.input.value,checks:lines(checks.input),artifacts,request_key:key});key=requestKey();message('Result published. Its selected artifact snapshots are preserved.');await load(session);
     }catch(error){message(error.message);}finally{submit.disabled=false;}};
     const publish = el('details',null,'panel');publish.append(el('summary','Publish a result'),form);
+    const connected=el('details',null,'panel'),connectionRoot=el('div');connected.append(el('summary','Connected inputs'),connectionRoot);
+    let loaded=false;connected.ontoggle=()=>{if(connected.open&&!loaded){loaded=true;connections.load(connectionRoot,session,()=>load(session));}};
+    root.append(connected);
     root.append(publish,el('h2','Inbox'),el('p',inbox.notice,'small muted'));
     if(!inbox.items.length)root.append(el('p','No handoffs yet.'));
     function inputCard(item){

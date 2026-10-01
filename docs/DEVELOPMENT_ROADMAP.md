@@ -1,5 +1,11 @@
 # Development Roadmap
 
+### 2026-10-02 — #140 connected existing sessions
+
+- Delivered versioned ownership/input edges, durable-ID attachment, explicit readiness, join delivery, cycle checks and content-based transitive staleness. Existing sessions retain their process and skill snapshot. UI controls live under Results & handoffs → Connected inputs; native agents inspect with `agentctl workflow connections --current`.
+- Automatic dispatch, proposals/auto envelopes, coalesced attempts and release reconciliation remain open. The existing session tree is the launch-parent view; connected ownership is currently shown in Connected inputs. Unifying those views is still part of #90/#140 acceptance.
+
+
 ### 2026-10-02 — #90 focused results view
 
 - Results and handoffs have a shared navigated view with collapsed publishing, immediate inbox access and return navigation. Desktop and phone journeys verify publishing and acknowledgment without nested session controls.

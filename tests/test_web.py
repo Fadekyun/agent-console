@@ -159,6 +159,35 @@ class WebTests(unittest.TestCase):
         self.manager.kill('result-source');self.manager.kill('result-renamed')
         self.assertEqual(self.client.get(route,headers=self.headers).json()['results'][0]['id'],result['id'])
 
+    def test_existing_session_connections_require_identity_and_preserve_process(self) -> None:
+        source=self.manager.create(tool="shell",profile="general",name="graph-source")
+        target=self.manager.create(tool="shell",profile="general",name="graph-target")
+        route=f"/api/sessions/{source['id']}/connections"
+        payload={'session_id':target['id'],'purpose':'Use this exact checkpoint','expected_version':0,
+                 'dependencies':[{'source_id':source['id'],'readiness':'after-ready'}]}
+        self.assertEqual(self.client.post(route+'/attach',json=payload).status_code,403)
+        invalid=self.client.post(route+'/attach',json={**payload,'session_id':'graph-target'},headers=self.headers)
+        self.assertEqual(invalid.status_code,400)
+        response=self.client.post(route+'/attach',json=payload,headers=self.headers)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['version'],1)
+        self.assertEqual(self.manager.inspect('graph-target')['id'],target['id'])
+        self.assertTrue(self.manager.inspect('graph-target')['running'])
+        published=self.client.post(f"/api/sessions/{source['id']}/results",json={'kind':'ready','outcome':'pass','summary':'Ready input','request_key':'graph-publish'},headers=self.headers)
+        self.assertEqual(published.status_code,200,published.text)
+        graph=self.client.get(route,headers=self.headers).json()
+        delivery={'expected_version':1,'expected_signature':graph['readiness'][target['id']]['signature']}
+        deliver_route=f"/api/sessions/{target['id']}/connections/deliver"
+        first=self.client.post(deliver_route,json=delivery,headers=self.headers)
+        self.assertEqual(first.status_code,200,first.text)
+        self.assertEqual(self.client.post(deliver_route,json=delivery,headers=self.headers).json()['id'],first.json()['id'])
+        inbox=self.client.get(f"/api/sessions/{target['id']}/inbox",headers=self.headers).json()
+        self.assertEqual(len(inbox['items']),1)
+        self.assertEqual(inbox['items'][0]['result']['summary'],'Ready input')
+        cycle={'expected_version':1,'dependencies':[{'source_id':target['id'],'readiness':'after-final'}]}
+        self.assertEqual(self.client.post(route+'/dependencies',json=cycle,headers=self.headers).status_code,400)
+        self.assertEqual(self.client.get(route,headers=self.headers).json()['version'],1)
+
     def test_workflow_agent_capability_cannot_impersonate_peer(self) -> None:
         from agent_console.workflow_service import WorkflowService
         source=self.manager.create(tool="shell",profile="general",name="cap-source")

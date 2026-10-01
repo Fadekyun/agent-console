@@ -217,6 +217,17 @@ class WorkflowStore:
             db.execute('INSERT INTO results VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
                        (result_id,session['id'],version,kind,outcome,summary,canonical(checks),canonical(snapshots),
                         content_hash,actor,utc_now(),request_key))
+            # Bind outputs to the exact connected inputs active when published.
+            # The graph tables are optional so older result-only deployments work.
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='graph_result_inputs'").fetchone():
+                if db.execute('SELECT version FROM graph_schema').fetchone()[0]!=1:
+                    raise ValueError('unsupported workflow graph schema')
+                delivery=db.execute('SELECT d.* FROM work_deliveries d JOIN work_active_deliveries a ON a.delivery_id=d.id WHERE a.target_id=?',(session['id'],)).fetchone()
+                if delivery:
+                    acknowledgments=db.execute('SELECT state FROM inbox WHERE target_session_id=? AND request_key LIKE ?',
+                                               (session['id'],delivery['id']+':%')).fetchall()
+                    if len(acknowledgments)==len(json.loads(delivery['inputs_json'])) and all(a['state']=='consumed' for a in acknowledgments):
+                        db.execute('INSERT INTO graph_result_inputs VALUES(?,?)',(result_id,delivery['signature']))
             self.event(db,'result.published',result_id,{'session_id':session['id'],'version':version,'content_hash':content_hash},actor)
             return self.result_row(db.execute('SELECT * FROM results WHERE id=?',(result_id,)).fetchone())
 

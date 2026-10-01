@@ -21,6 +21,7 @@ def add_commands(commands):
     publish.add_argument('--commit',action='append',default=[])
     publish.add_argument('--request-key',required=True)
     results=sub.add_parser('results');results.add_argument('session');results.add_argument('--before',type=int,default=2147483647)
+    connections=sub.add_parser('connections');connections.add_argument('--current',action='store_true',required=True)
     result=sub.add_parser('result');result.add_argument('result_id')
     send=sub.add_parser('send');send.add_argument('result_id');send.add_argument('--to',required=True)
     send.add_argument('--note',default='');send.add_argument('--request-key',required=True)
@@ -39,6 +40,7 @@ def run(args,manager=None):
     if command=='results':return {'results':svc.store.results(svc.session(args.session)['id'],before=args.before)}
     if command=='result':return svc.store.result(args.result_id)
     session=svc.current();actor='session:'+session['id']
+    if command=='connections':return svc.graph().inspect(session['id'])
     if command=='inbox':return svc.store.inbox(session['id'],after=args.after)
     if command=='ack':return svc.store.acknowledge(args.item_id,session['id'],state=args.state,actor=actor)
     if command=='send':return svc.send(args.result_id,args.to,request_key=args.request_key,note=args.note,actor=actor,source=session['id'])

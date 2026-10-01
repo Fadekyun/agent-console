@@ -23,6 +23,26 @@ class AckRequest(BaseModel):
     state: Literal['delivered','consumed']
 
 
+class DependencyRequest(BaseModel):
+    source_id: str = Field(min_length=1,max_length=100)
+    readiness: Literal['after-ready','after-final','alongside']
+
+
+class DependenciesRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+    dependencies: list[DependencyRequest] = Field(default_factory=list,max_length=32)
+
+
+class AttachRequest(DependenciesRequest):
+    session_id: str = Field(min_length=1,max_length=100)
+    purpose: str = Field(min_length=1,max_length=4000)
+
+
+class DeliverRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+    expected_signature: str = Field(pattern=r'^[a-f0-9]{64}$')
+
+
 def workflow_routes(manager, require_identity):
     router = APIRouter(dependencies=[Depends(require_identity)])
 
@@ -57,11 +77,34 @@ def workflow_routes(manager, require_identity):
         svc=service()
         return svc.store.acknowledge(item_id,svc.session(identity)['id'],state=payload.state,actor=auth.actor)
 
+
+    @router.get('/api/sessions/{identity}/connections')
+    def connections(identity: str):
+        svc=service()
+        return svc.graph().inspect(svc.session(identity)['id'])
+
+    @router.post('/api/sessions/{identity}/connections/attach')
+    def attach(identity: str,payload: AttachRequest,auth=Depends(require_identity)):
+        return service().attach(identity,payload.session_id,purpose=payload.purpose,
+              dependencies=[d.model_dump() for d in payload.dependencies],expected_version=payload.expected_version,actor=auth.actor)
+
+    @router.post('/api/sessions/{identity}/connections/dependencies')
+    def dependencies(identity: str,payload: DependenciesRequest,auth=Depends(require_identity)):
+        svc=service()
+        return svc.graph().dependencies(svc.session(identity)['id'],dependencies=[d.model_dump() for d in payload.dependencies],
+                                       expected_version=payload.expected_version,actor=auth.actor)
+
+    @router.post('/api/sessions/{identity}/connections/deliver')
+    def deliver(identity: str,payload: DeliverRequest,auth=Depends(require_identity)):
+        svc=service()
+        return svc.graph().deliver(svc.session(identity)['id'],expected_version=payload.expected_version,
+                                  expected_signature=payload.expected_signature,actor=auth.actor)
+
     return router
 
 
 class AgentRequest(BaseModel):
-    command: Literal['publish','results','result','send','inbox','ack']
+    command: Literal['publish','results','result','send','inbox','ack','connections']
     payload: dict = Field(default_factory=dict)
 
 
@@ -80,6 +123,7 @@ def agent_workflow_routes(manager):
         if body.command=='publish':
             validated=ResultRequest.model_validate(payload)
             return svc.publish(identity['id'],validated.model_dump(),actor)
+        if body.command=='connections':return svc.graph().inspect(identity['id'])
         if body.command=='inbox':return svc.store.inbox(identity['id'],after=payload.get('after',0))
         if body.command=='results':return {'results':svc.store.results(identity['id'],before=payload.get('before',2147483647))}
         if body.command=='send':

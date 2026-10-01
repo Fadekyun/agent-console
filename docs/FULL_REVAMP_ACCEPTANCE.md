@@ -55,3 +55,11 @@ Implemented source for the portable policy registry, staged local import/activat
 Verification: 95 skill tests (10 retained-catalog fixture tests skipped with the explicit empty retained allowlist), 23 real-tmux shared delivery tests, 64 authenticated API tests, 117 core session tests and 12 desktop/phone Playwright scenarios passed. Browser tests use the installed cached Chromium. The legacy terminal-output test now waits up to five seconds for its exact output marker; snapshot tests count skill directories separately from the receipt file. Failed stopped-session restart is tested to leave skill snapshots absent.
 
 Remaining skills work includes the full provider/version discovery matrix (especially Pi), canonical operating guide migration, repository import provenance and the final live harness evidence. #140 scheduling/results/inbox and the remaining #90 workbench contract are still open above. Keep this goal active after publication of this checkpoint.
+
+## Results / connected-input checkpoint — 2026-10-02
+
+Versions 0.12–0.13 implement explicit versioned results and selected immutable artifacts, native capability-bound reporting, source-attributed durable inbox, and delivery/consumption acknowledgments. Real two-session CLI delivery and rollback/recovery were exercised on staging. Results now have their own shared phone/desktop view; phone navigation has Work and Settings.
+
+Connected inputs add durable-ID attachment of existing sessions, separately versioned ownership/input DAGs, after-ready/after-final/pinned alongside conditions, joins, cycle rejection and content-based transitive stale state. Joins enter the inbox atomically with retry deduplication. Output binding requires publication after the joined inputs were acknowledged consumed. Existing processes and skill snapshots remain intact. UI, API, store and native reporting share these records.
+
+This does not complete #140: launch-parent and connected ownership views still need unification; Add session with delayed dispatch, suggestions and reviewed auto envelopes, launch reconciliation/coalescing, pause/stop and release gates remain open. Full #90/#6 scope above is still required. Do not close the goal on this checkpoint.

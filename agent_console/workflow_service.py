@@ -50,6 +50,24 @@ class WorkflowService:
         recipient = self.session(target)
         return self.store.send(result_id, recipient['id'], note=note, request_key=request_key, actor=actor)
 
+    def graph(self):
+        from .workflow_graph import WorkflowGraph
+        return WorkflowGraph(self.store)
+
+    def attach(self, owner, target, *, purpose, dependencies, expected_version, actor):
+        from .profiles import PROFILE_SCHEMA, validate_profile_capability
+        parent=self.session(owner);child=self.session(target)
+        if child['id']!=target:
+            raise ValueError('attach by durable session ID, not a mutable session name')
+        if child['profile'] not in PROFILE_SCHEMA.get(parent['profile'],{}).get('allowed_collaboration_profiles',set()):
+            raise ValueError('these roles cannot collaborate')
+        capability=validate_profile_capability(child['profile'],child['tool'],child.get('agent_mode'),worktree=bool(child.get('worktree_path')))
+        if not capability['allowed']:raise ValueError(capability['reason'])
+        # Existing sessions keep their selected skill snapshot and native process.
+        # This operator action connects inputs; it grants no new tools or role.
+        return self.graph().attach(parent['id'],child['id'],purpose=purpose,dependencies=dependencies,
+                                   expected_version=expected_version,actor=actor)
+
 
 def authenticate_session(manager, session_id, capability):
     if not session_id or not capability or len(capability) > 256:
