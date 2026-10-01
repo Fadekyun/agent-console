@@ -1,5 +1,9 @@
 # Development Roadmap
 
+### 2026-10-02 — #90 terminal clipboard correction
+
+- Real staging tests found Copy selection losing its selection on pointer focus. Preserve it and expose manual copy fallback for denied clipboard access; verify real PTY scrolling, alternate-screen paging/capture, phone viewport changes and independent terminal drafts. Full workbench scope remains tracked in `FULL_REVAMP_ACCEPTANCE.md`.
+
 ### 2026-10-02 — #90 shared work and ownership overview
 
 - Unified main navigation with connected ownership/logical steps and current native bindings, retaining historical attempts. Added distinct status fields, priority groups, results/child progress, warnings, locally persisted filters, keyboard focus preservation and bounded history.

@@ -94,14 +94,16 @@ async function mockApi(page) {
   return { requests };
 }
 
-async function installFakeWebSocket(page) {
-  await page.addInitScript(() => {
+async function installFakeWebSocket(page, { nativeClipboard = false } = {}) {
+  await page.addInitScript(nativeClipboard => {
     window.__wsSent = [];
     window.__wsBytes = [];
     window.__fakeWs = null;
-    Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true });
-    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
-    document.execCommand = () => true;
+    if (!nativeClipboard) {
+      Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true });
+      Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+      document.execCommand = () => true;
+    }
     class FakeWebSocket {
       static OPEN = 1;
       constructor() {
@@ -124,7 +126,7 @@ async function installFakeWebSocket(page) {
       close() { this.readyState = 3; this.onclose?.({ code: 1000, reason: '' }); }
     }
     window.WebSocket = FakeWebSocket;
-  });
+  }, nativeClipboard);
 }
 
 test('responsive shell, theme persistence, and no horizontal overflow', async ({ page }, testInfo) => {
@@ -208,6 +210,67 @@ test('terminal detach and reconnect remain explicit', async ({ page }) => {
   await page.goto('/terminal?session=codex-root');
   await page.locator('#detach').click();
   await expect.poll(async () => page.evaluate(() => window.__wsSent.some((value) => value.includes('detach')))).toBeTruthy();
+});
+
+test('terminal Copy selection preserves selected text and offers a denied-clipboard fallback', async ({ page }, testInfo) => {
+  await installFakeWebSocket(page); await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await page.locator('#text-view').click();
+  await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
+  await page.evaluate(() => {
+    document.execCommand = () => false;
+    const range = document.createRange(), selection = getSelection();
+    range.selectNodeContents(document.querySelector('#text-content'));
+    selection.removeAllRanges(); selection.addRange(range);
+  });
+  if (testInfo.project.name === 'desktop') await page.locator('#copy-dom-selection').click();
+  else await page.locator('#copy-dom-selection').tap();
+  await expect(page.locator('#copy-sheet')).toBeVisible();
+  await expect(page.locator('#copy-sheet-text')).toHaveValue(/PEER_OUTPUT/);
+  await page.locator('[data-close="copy-sheet"]').click();
+  await page.evaluate(() => { document.execCommand = () => { throw new Error('Clipboard blocked'); }; });
+  await page.locator('#copy-visible').click();
+  await expect(page.locator('#copy-sheet')).toBeVisible();
+  await expect(page.locator('#copy-sheet-text')).toHaveValue(/PEER_OUTPUT/);
+});
+
+test('closing terminal Text View during a pending refresh does not reopen it', async ({ page }) => {
+  await installFakeWebSocket(page); await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await page.locator('#text-view').click();
+  await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/sessions/codex-root/review?lines=1000', async route => {
+    await pending;
+    await route.fulfill({json:{content:'NEW_CAPTURE',alternate_screen:false,capture_scope:'history',line_count:1}});
+  });
+  const response = page.waitForResponse('**/api/sessions/codex-root/review?lines=1000');
+  await page.locator('#text-refresh').click();
+  await expect(page.locator('#text-refresh')).toBeDisabled();
+  await page.locator('[data-close="text-dialog"]').click();
+  release(); await response;
+  await expect(page.locator('#text-refresh')).toBeEnabled();
+  await expect(page.locator('#text-dialog')).toBeHidden();
+  await page.locator('#text-view').click();
+  await expect(page.locator('#text-content')).toHaveText('NEW_CAPTURE');
+});
+
+test('terminal native clipboard permission copies text and pastes only into the draft', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await installFakeWebSocket(page, { nativeClipboard: true }); await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await page.locator('#text-view').click();
+  await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
+  await page.locator('#copy-visible').click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('PEER_OUTPUT');
+  await page.locator('[data-close="text-dialog"]').click();
+  await page.locator('#composer').fill('');
+  await page.evaluate(() => navigator.clipboard.writeText('review this pasted text'));
+  const sent = await page.evaluate(() => window.__wsSent.filter(x => x === 'terminal-bytes').length);
+  await page.locator('#paste-device').click();
+  await expect(page.locator('#composer')).toHaveValue('review this pasted text');
+  expect(await page.evaluate(() => window.__wsSent.filter(x => x === 'terminal-bytes').length)).toBe(sent);
 });
 
 test('brief preload, alternate-screen paging, and Text View never auto-send the brief', async ({ page }, testInfo) => {

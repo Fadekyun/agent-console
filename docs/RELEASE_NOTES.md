@@ -1,3 +1,10 @@
+## 0.15.1 — 2026-10-02 (staging, #90)
+
+- Impact: Copy selection retains text when its button is clicked or tapped. Denied clipboard access opens a selectable manual copy sheet for both selection and full text; legacy clipboard exceptions also fall back safely. Paste guidance covers denied permissions and insecure origins. Pending Text View captures show loading state and cannot reopen a dismissed dialog.
+- Configuration/migration: none.
+- Verification: desktop/360px/390px regression reproduces selection loss before the fix and checks both denied-copy fallbacks; real staging terminal matrix covers native scrollback, output while reading, alternate-screen capture/paging, drafts, resize and reconnect. Evidence and limitations are in `WORKBENCH_VERIFICATION.md`.
+- Rollback: select staging 0.15.0 and restart preview only; no data migration. Current console remains unchanged.
+
 ## 0.15.0 — 2026-10-02 (staging, #90)
 
 - Impact: Work groups actual connected ownership and logical steps, folds native retries into attempt history, and preserves old attempt navigation. Attention, running, waiting and recent groups expose distinct terminal/attention/result states, child progress, structured results, failed-result actions and readiness warnings. Secondary filters persist locally. Session history exposes bounded workflow and audit events. Keyboard/tree focus and terminal instances survive refresh. Add session supports unlaunched logical parents; editing unrelated proposal fields preserves action/target/project scope.

@@ -192,18 +192,22 @@ async function copyText(value) {
   }
   const fallback = $('#terminal-clipboard-fallback');
   fallback.value = value; fallback.classList.remove('visually-hidden'); fallback.select();
-  const copied = document.execCommand?.('copy') || false;
-  fallback.classList.add('visually-hidden'); fallback.value = '';
-  return copied;
+  try { return document.execCommand?.('copy') || false; }
+  catch { return false; }
+  finally { fallback.classList.add('visually-hidden'); fallback.value = ''; }
+}
+
+function showCopySheet(value) {
+  $('#copy-sheet-text').value = value;
+  $('#copy-sheet').showModal();
+  $('#copy-sheet-text').focus(); $('#copy-sheet-text').select();
 }
 
 async function copySelection() {
   const selected = terminal.getSelection();
   if (!selected) { setStatus('Select terminal text first'); return; }
   if (await copyText(selected)) { setStatus('Selection copied'); return; }
-  $('#copy-sheet-text').value = selected;
-  $('#copy-sheet').showModal();
-  $('#copy-sheet-text').focus(); $('#copy-sheet-text').select();
+  showCopySheet(selected);
 }
 
 async function loadBrief(silent = false) {
@@ -220,27 +224,38 @@ async function loadBrief(silent = false) {
   } catch (error) { if (!silent) setStatus(error.message); }
 }
 
+let textViewRequest = 0;
 async function refreshTextView(direction = null) {
+  const request = ++textViewRequest, dialog = $('#text-dialog');
+  if (!dialog.open) dialog.showModal();
+  $('#text-content').textContent = '';
+  $('#text-scope').textContent = 'Loading terminal text…';
+  const controls = ['#text-refresh', '#text-page-up', '#text-page-down', '#copy-visible', '#copy-dom-selection'];
+  controls.forEach(selector => { $(selector).disabled = true; });
   try {
     if (direction) send(direction === 'up' ? '\x1b[5~' : '\x1b[6~');
     if (direction) await new Promise((resolve) => setTimeout(resolve, 180));
     const response = await fetch(`/api/sessions/${encodeURIComponent(name)}/review?lines=1000`, { cache: 'no-store' });
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || response.statusText);
+    if (request !== textViewRequest || !dialog.open) return;
     alternateScreen = body.alternate_screen;
     $('#text-content').textContent = body.content || '(no captured output)';
     $('#text-scope').textContent = body.capture_scope === 'visible-screen'
       ? 'Current alternate-screen TUI view only. Page, then refresh to inspect more.'
       : `${body.line_count} captured lines · ${body.capture_scope}${body.truncated ? ' · truncated' : ''}`;
-    if (!$('#text-dialog').open) $('#text-dialog').showModal();
-  } catch (error) { setStatus(error.message); }
+  } catch (error) {
+    if (request === textViewRequest && dialog.open) $('#text-scope').textContent = error.message;
+  } finally {
+    if (request === textViewRequest) controls.forEach(selector => { $(selector).disabled = false; });
+  }
 }
 
 async function copyDomSelection() {
   const selected = window.getSelection()?.toString() || '';
   if (!selected) { setStatus('Select text in Text View first'); return; }
   if (await copyText(selected)) setStatus('Selection copied');
-  else { $('#copy-sheet-text').value = selected; $('#copy-sheet').showModal(); }
+  else showCopySheet(selected);
 }
 
 async function pasteFromDevice() {
@@ -368,7 +383,14 @@ $('#load-brief').onclick = () => loadBrief(false);
 $('#text-refresh').onclick = () => refreshTextView();
 $('#text-page-up').onclick = () => refreshTextView('up');
 $('#text-page-down').onclick = () => refreshTextView('down');
-$('#copy-visible').onclick = async () => setStatus(await copyText($('#text-content').textContent) ? 'Visible text copied' : 'Use native selection and system Copy');
+$('#copy-visible').onclick = async () => {
+  const text = $('#text-content').textContent;
+  if (await copyText(text)) setStatus('Visible text copied');
+  else showCopySheet(text);
+};
+// Moving pointer focus to this button otherwise collapses the text selection
+// before click runs. Keyboard activation retains the browser selection.
+$('#copy-dom-selection').onpointerdown = event => event.preventDefault();
 $('#copy-dom-selection').onclick = copyDomSelection;
 $('#paste-device').onclick = pasteFromDevice;
 $('#peers').onclick = openPeers;

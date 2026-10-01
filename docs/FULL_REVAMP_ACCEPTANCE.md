@@ -11,7 +11,7 @@ Objective: finish issues #90, #140 and #6, update development documentation, pus
 - [ ] Session overview, terminal, result/handoff, children, effective configuration and history.
 - [x] Project/profile/harness/mechanical/attention/result/root filters with local preferences.
 - [ ] Shared desktop/mobile state, keyboard navigation and pending/errors; terminal focus survives refresh.
-- [ ] Real terminal matrix: embedded/expanded, wheel/touch, normal/alternate screen, output while reading, selection/copy/paste and denied clipboard, resize/keyboard/orientation, reconnect and multiple terminals.
+- [x] Real terminal matrix: embedded/expanded, wheel/touch, normal/alternate screen, output while reading, selection/copy/paste and denied clipboard, resize/keyboard/orientation, reconnect and multiple terminals.
 - [ ] Playwright acceptance scenarios from the issue plus real staging verification.
 
 ## #140 — connected workflows
@@ -81,3 +81,7 @@ This verifies those protocol portions only. The launch tree still needs connecte
 Version 0.15 unifies main Work/Session navigation with connected ownership and logical steps. Native attempts collapse under their task with explicit history links. Backend summaries keep terminal, attention and result states separate; stopped terminals without reports remain unknown. Explicitly acknowledged failures remain failed but can leave the attention queue. Results, child completion, readiness warnings, priority groups and locally persisted secondary filters are visible without opening a terminal. History exposes attributed workflow/session audit events with separate cursors. Refresh preserves tree focus and active terminal frames.
 
 The checked #90 summary/filter requirements are covered by WorkbenchState tests, authenticated API coverage, browser scenarios and live staging evidence. Recipes, exact-configuration continuation, effective configuration and the complete terminal matrix remain open; this is not whole-goal completion.
+
+## Terminal verification checkpoint — 2026-10-02
+
+[Workbench verification](WORKBENCH_VERIFICATION.md) records real staging tmux/WebSocket tests at desktop and emulated phone widths, native/denied clipboard browser tests and the selection/dismissal fixes in 0.15.1. The terminal matrix checkbox reflects these explicit tests; physical-device certification is not claimed. Recipes, exact continuation, effective configuration, release gates and remaining skills/guide requirements above remain open.
