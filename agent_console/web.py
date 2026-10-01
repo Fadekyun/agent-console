@@ -288,7 +288,8 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     def interface_links() -> dict[str, str]:
         from urllib.parse import urlsplit
         links = {"label": os.getenv("AGENT_CONSOLE_INSTANCE_LABEL", "Agent Console"),
-                 "workspace": str(session_manager.settings.workspace_root)}
+                 "workspace": str(session_manager.settings.workspace_root),
+                 "terminal_scroll": "tmux"}
         for key in ("current", "staging"):
             value = os.getenv(f"AGENT_CONSOLE_{key.upper()}_URL", "")
             try:
@@ -975,6 +976,10 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                             struct.pack("HHHH", rows, cols, 0, 0),
                         )
                         os.killpg(process.pid, signal.SIGWINCH)
+                    elif control.get("type") == "scroll":
+                        lines = control.get("lines")
+                        if type(lines) is int and -50 <= lines <= 50:
+                            await asyncio.to_thread(tmux.scroll_history, name, lines)
                     elif control.get("type") == "detach":
                         await websocket.close(code=4000, reason="detached by user")
                         break

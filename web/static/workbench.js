@@ -52,6 +52,7 @@ function renderSession() {
   // Refresh session state without replacing a status note the user is editing.
   const attention = $('#attention-form');
   if (attention.dataset.session !== s.id) {
+    $('#session-detail').open = !matchMedia('(max-width:760px)').matches;
     attention.dataset.session = s.id; attention.elements.state.value = s.attention_state || 'normal'; attention.elements.note.value = s.attention_note || '';
     $('#session-output').hidden = true; $('#session-skills').hidden = true;
   }
@@ -60,6 +61,7 @@ function route() {
   const hash = location.hash || '#work';
   let sessionName = null;
   try { sessionName = hash.startsWith('#session/') ? decodeURIComponent(hash.slice(9)) : null; } catch { message('Invalid session link. Return to Work.'); }
+  const previous = state.selected?.tmux_name;
   state.selected = state.sessions.find(s => s.tmux_name === sessionName) || null;
   $('#work-view').hidden = Boolean(sessionName) || hash === '#settings';
   $('#settings-view').hidden = hash !== '#settings';
@@ -69,6 +71,7 @@ function route() {
   renderWork(); renderSession();
   for (const [name, frame] of state.frames) frame.hidden = name !== state.selected?.tmux_name;
   if (!state.selected || !state.frames.has(state.selected.tmux_name)) $('#terminal-panel').hidden = true;
+  if (state.selected?.running && previous !== state.selected.tmux_name && !matchMedia('(max-width:760px)').matches) openTerminal();
 }
 async function refresh() {
   if (state.loading) return state.loading;
@@ -85,10 +88,11 @@ function openTerminal() {
   if (!frame) {
     // Bound browser PTYs; drafts survive eviction in the terminal's sessionStorage.
     if (state.frames.size >= 3) { const [name, old] = state.frames.entries().next().value; old.remove(); state.frames.delete(name); }
-    frame = el('iframe'); frame.title = `Terminal: ${s.tmux_name}`; frame.src = `/terminal?session=${encodeURIComponent(s.tmux_name)}&embed=1`;
+    frame = el('iframe'); frame.title = `Terminal: ${s.tmux_name}`; frame.src = `/terminal?session=${encodeURIComponent(s.tmux_name)}&embed=1&mode=scroll`;
     state.frames.set(s.tmux_name, frame); $('#terminal-frames').append(frame);
   }
   state.frames.forEach(f => { f.hidden = f !== frame; }); $('#terminal-panel').hidden = false;
+  $('#terminal-status').textContent = frame.dataset.status || 'Connecting…';
 }
 function options(select, entries, preferred) {
   select.replaceChildren(...entries.map(([value, label]) => { const option = el('option', label); option.value = value; return option; }));
@@ -152,3 +156,11 @@ try {
   $('#tools').replaceChildren(...me.tool_status.map(x => el('p', `${x.name} · ${x.status}${x.reason ? ` — ${x.reason}` : ''}`, 'tool')));
 } catch (e) { message(`Could not load settings: ${e.message}`); }
 await refresh(); setInterval(() => { if (!document.hidden) refresh(); }, 10000);
+
+window.addEventListener('message', event => {
+  if (event.origin !== location.origin || event.data?.type !== 'agent-console:terminal-status' || typeof event.data.status !== 'string') return;
+  for (const [name, frame] of state.frames) if (event.source === frame.contentWindow) {
+    frame.dataset.status = event.data.status;
+    if (name === state.selected?.tmux_name) $('#terminal-status').textContent = event.data.status;
+  }
+});

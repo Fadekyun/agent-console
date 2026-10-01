@@ -77,6 +77,25 @@ class Tmux:
             raise RuntimeError(f"tmux {operation} failed: {detail}")
         return result
 
+    def scroll_history(self, name: str, lines: int) -> None:
+        """Scroll tmux's saved pane output without sending keys to the program.
+
+        tmux renders into an alternate screen, so xterm's browser scrollback
+        does not contain the complete pane history. Zero returns to live output.
+        Like native tmux copy mode this view is shared by attached clients.
+        """
+        validate_session_name(name)
+        if type(lines) is not int or not -50 <= lines <= 50:
+            raise ValueError("scroll lines must be an integer between -50 and 50")
+        if lines == 0:
+            mode = self.run("display-message", "-p", "-t", name, "#{pane_in_mode}").stdout.strip()
+            if mode == "1":
+                self.run("send-keys", "-t", name, "-X", "cancel")
+            return
+        self.run("copy-mode", "-e", "-t", name)
+        self.run("send-keys", "-t", name, "-X", "-N", str(abs(lines)),
+                 "scroll-up" if lines < 0 else "scroll-down")
+
     def _remove_owned_stale_socket(self) -> bool:
         if not self.socket_path or not self.socket_path.exists():
             return False

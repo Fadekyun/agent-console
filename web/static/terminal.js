@@ -25,11 +25,13 @@ const reconnect = $('#reconnect');
 const composer = $('#composer');
 const newOutput = $('#new-output');
 let socket;
-let mode = coarsePointer ? 'scroll' : 'type';
+let mode = coarsePointer || new URLSearchParams(location.search).get('mode') === 'scroll' ? 'scroll' : 'type';
 let resizeFrame;
 let alternateScreen = false;
 let touchStartY = null;
 let following = true;
+let serverHistory = false;
+let historyMode = false;
 let hasUnread = false;
 let briefLoaded = false;
 let reconnectTimer = null;
@@ -43,7 +45,10 @@ try { const draft = sessionStorage.getItem(draftKey); if (draft !== null) { comp
 function saveDraft() { try { sessionStorage.setItem(draftKey, composer.value); } catch { /* continue without persistence */ } }
 window.addEventListener('pagehide', saveDraft);
 
-function setStatus(message) { connection.textContent = message; }
+function setStatus(message) {
+  connection.textContent = message;
+  if (isEmbedded) window.parent.postMessage({ type: 'agent-console:terminal-status', status: message }, location.origin);
+}
 
 window.addEventListener('message', (event) => {
   if (!isEmbedded) return;
@@ -53,8 +58,19 @@ window.addEventListener('message', (event) => {
   if (mode === 'type') terminal.focus();
 });
 
+function leaveHistory() {
+  if (historyMode && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'scroll', lines: 0 }));
+  historyMode = false; following = true; newOutput.hidden = true;
+}
+function scrollHistory(lines) {
+  if (!lines || socket?.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: 'scroll', lines: Math.max(-50, Math.min(50, lines)) }));
+  historyMode = true; following = false; newOutput.hidden = false;
+  newOutput.textContent = 'Latest output';
+}
 function send(value) {
   if (socket?.readyState !== WebSocket.OPEN) throw new Error('Terminal is disconnected');
+  if (historyMode) leaveHistory();
   socket.send(encoder.encode(value));
 }
 
@@ -112,7 +128,9 @@ function connect() {
   socket.onmessage = (event) => {
     const output = typeof event.data === 'string' ? event.data : decoder.decode(event.data, { stream: true });
     terminal.write(output, () => {
-      if (following) {
+      if (historyMode) {
+        newOutput.hidden = false; newOutput.textContent = 'Latest output';
+      } else if (following) {
         terminal.scrollToBottom();
       } else {
         hasUnread = true;
@@ -143,7 +161,7 @@ function setMode(selected) {
   document.body.dataset.terminalMode = mode;
   terminal.options.disableStdin = mode !== 'type';
   $$('[data-mode]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.mode === mode)));
-  if (mode === 'type') terminal.focus();
+  if (mode === 'type') { if (historyMode) leaveHistory(); terminal.focus(); }
   else terminal.blur();
 }
 
@@ -274,6 +292,7 @@ async function openPeers() {
 terminal.onData((value) => { if (mode === 'type') { try { send(value); } catch { /* status is visible */ } } });
 terminal.onSelectionChange(() => { /* xterm selection is secondary to selectable Text View */ });
 terminal.onScroll(() => {
+  if (historyMode) return;
   const atBottomNow = atBottom();
   newOutput.hidden = atBottomNow;
   if (atBottomNow) {
@@ -290,27 +309,38 @@ window.__terminal = terminal;
 // scrollbar, so native overflow scrolling is not enough in a nested iframe.
 let touchViewport = 0;
 let touchAlternate = false;
+let touchLines = 0;
+$('#terminal').addEventListener('wheel', (event) => {
+  if (mode !== 'scroll' || !serverHistory || event.ctrlKey) return;
+  event.preventDefault(); event.stopPropagation();
+  const lines = Math.sign(event.deltaY) * Math.max(1, Math.round(Math.abs(event.deltaY) / (event.deltaMode === 0 ? 20 : 1)));
+  if (lines < 0 || historyMode) scrollHistory(lines);
+}, { passive: false, capture: true });
 $('#terminal').addEventListener('touchstart', (event) => {
   if (mode !== 'scroll' || event.touches.length !== 1) { touchStartY = null; return; }
   touchStartY = event.touches[0].clientY;
-  touchViewport = terminal.buffer.active.viewportY;
+  touchViewport = terminal.buffer.active.viewportY; touchLines = 0;
   touchAlternate = terminal.buffer.active.type === 'alternate' || alternateScreen;
   event.stopPropagation();
 }, { passive: true, capture: true });
 $('#terminal').addEventListener('touchmove', (event) => {
   if (touchStartY === null || event.touches.length !== 1) return;
   event.preventDefault(); event.stopPropagation();
-  if (!touchAlternate) {
+  if (serverHistory || !touchAlternate) {
     const height = $('.xterm-screen')?.getBoundingClientRect().height || terminal.rows * 16;
     const lines = Math.round((event.touches[0].clientY - touchStartY) / (height / terminal.rows));
-    terminal.scrollToLine(Math.max(0, touchViewport - lines));
+    if (serverHistory) {
+      const step = touchLines - lines;
+      if (step < 0 || historyMode) scrollHistory(step);
+      touchLines = lines;
+    } else terminal.scrollToLine(Math.max(0, touchViewport - lines));
   }
 }, { passive: false, capture: true });
 $('#terminal').addEventListener('touchend', (event) => {
   if (mode !== 'scroll' || touchStartY === null) return;
   const delta = (event.changedTouches[0]?.clientY ?? touchStartY) - touchStartY;
   touchStartY = null; event.stopPropagation();
-  if (touchAlternate && Math.abs(delta) >= 48) {
+  if (!serverHistory && touchAlternate && Math.abs(delta) >= 48) {
     try { send(delta > 0 ? '\x1b[5~' : '\x1b[6~'); } catch (error) { setStatus(error.message); }
   }
 }, { passive: true, capture: true });
@@ -344,7 +374,7 @@ $('#paste-device').onclick = pasteFromDevice;
 $('#peers').onclick = openPeers;
 $('#send').onclick = () => submit(false);
 $('#send-enter').onclick = () => submit(true);
-newOutput.onclick = () => { terminal.scrollToBottom(); following = true; hasUnread = false; newOutput.hidden = true; newOutput.classList.remove('has-unread'); };
+newOutput.onclick = () => { leaveHistory(); terminal.scrollToBottom(); following = true; hasUnread = false; newOutput.hidden = true; newOutput.classList.remove('has-unread'); };
 $('#use-manual-paste').onclick = () => { insertComposer($('#paste-sheet-text').value); $('#paste-sheet').close(); setStatus('Pasted into composer; review before sending'); };
 composer.addEventListener('input', () => { saveDraft(); autoSizeComposer(); });
 composer.addEventListener('keydown', (event) => {
@@ -356,4 +386,9 @@ setMode(mode); syncVisualViewport(); autoSizeComposer(); autoReconnectEnabled = 
 fetch(`/api/sessions/${encodeURIComponent(name)}/review?lines=1`, { cache: 'no-store' })
   .then((response) => response.ok ? response.json() : null)
   .then((body) => { alternateScreen = Boolean(body?.alternate_screen); })
+  .catch(() => {});
+
+fetch('/api/interface', { cache: 'no-store' })
+  .then(response => response.ok ? response.json() : null)
+  .then(info => { serverHistory = info?.terminal_scroll === 'tmux'; })
   .catch(() => {});

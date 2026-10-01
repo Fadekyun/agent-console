@@ -79,6 +79,51 @@ class WebTests(unittest.TestCase):
             os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
         self.temp.cleanup()
 
+    def test_terminal_history_controls_do_not_send_program_input(self) -> None:
+        import time
+        self.manager.create(tool="shell", profile="general", name="scroll-history")
+        with patch.object(self.manager.tmux, "scroll_history") as scroll:
+            with self.client.websocket_connect("/ws/sessions/scroll-history", headers=self.headers) as ws:
+                ws.send_text(json.dumps({"type": "scroll", "lines": -12}))
+                for _ in range(40):
+                    if scroll.called:
+                        break
+                    time.sleep(0.025)
+                scroll.assert_called_with("scroll-history", -12)
+                ws.send_text(json.dumps({"type": "scroll", "lines": 0}))
+                for _ in range(40):
+                    if scroll.call_count == 2:
+                        break
+                    time.sleep(0.025)
+                scroll.assert_called_with("scroll-history", 0)
+                ws.send_text(json.dumps({"type": "scroll", "lines": -5000}))
+                ws.send_text(json.dumps({"type": "detach"}))
+                try:
+                    while True:
+                        ws.receive_bytes()
+                except WebSocketDisconnect:
+                    pass
+                self.assertEqual(scroll.call_count, 2)
+        self.assertTrue(self.manager.tmux.exists("scroll-history"))
+
+    def test_tmux_history_returns_to_live_view(self) -> None:
+        import time
+        self.manager.create(tool="shell", profile="general", name="history-buffer")
+        self.manager.tmux.run("send-keys", "-t", "history-buffer", "for i in $(seq 1 200); do echo HISTORY_$i; done", "Enter")
+        for _ in range(40):
+            if "HISTORY_200" in self.manager.tmux.run("capture-pane", "-p", "-t", "history-buffer").stdout:
+                break
+            time.sleep(0.025)
+        self.manager.tmux.scroll_history("history-buffer", -20)
+        mode = self.manager.tmux.run("display-message", "-p", "-t", "history-buffer", "#{pane_in_mode}").stdout.strip()
+        self.assertEqual(mode, "1")
+        position = self.manager.tmux.run("display-message", "-p", "-t", "history-buffer", "#{scroll_position}").stdout.strip()
+        self.assertGreater(int(position), 0)
+        self.manager.tmux.scroll_history("history-buffer", 0)
+        self.assertEqual(self.manager.tmux.run("display-message", "-p", "-t", "history-buffer", "#{pane_in_mode}").stdout.strip(), "0")
+        with self.assertRaises(ValueError):
+            self.manager.tmux.scroll_history("history-buffer", -5000)
+
     def test_workbench_selection_and_current_link_validation(self) -> None:
         with patch.dict(os.environ, {"AGENT_CONSOLE_UI": "workbench", "AGENT_CONSOLE_CURRENT_URL": "https://console.example/"}):
             self.assertIn('workbench.js', self.client.get("/", headers=self.headers).text)

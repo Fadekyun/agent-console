@@ -29,7 +29,7 @@ test('work, manual child, drafts and mobile terminal use the real components',as
   const frame=page.frameLocator('iframe:not([hidden])');
   await expect(frame.locator('#connection')).toHaveText('Connected');
   await frame.locator('#composer').fill('unsent draft');
-  const iframe=page.frames().find(f=>f.url().includes('/terminal?'));
+  const iframe=page.frames().find(f=>f.url().includes('/terminal?session=session-two'));
   await iframe.evaluate(()=>{for(let i=0;i<400;i++)window.__terminal.writeln(`SCROLL LINE ${i}`);});
   await expect.poll(()=>iframe.evaluate(()=>window.__terminal.buffer.active.baseY)).toBeGreaterThan(200);
   await iframe.evaluate(()=>window.__terminal.scrollLines(-100));
@@ -49,6 +49,7 @@ test('work, manual child, drafts and mobile terminal use the real components',as
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   expect(await iframe.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.getByRole('button',{name:'Close',exact:true}).click();
+  if (info.project.name !== 'desktop') await page.locator('#session-detail > summary').click();
   await page.locator('#attention-form [name=note]').fill('draft status note');
   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await expect(page.locator('#attention-form [name=note]')).toHaveValue('draft status note');

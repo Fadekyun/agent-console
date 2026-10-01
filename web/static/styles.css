@@ -355,4 +355,5 @@ dialog::backdrop { background: rgb(0 0 0 / .58); } .dialog-form, dialog form { d
 .terminal-embedded .key-strip > button:first-child,
 .terminal-embedded .key-strip > button:nth-child(3),
 .terminal-embedded .key-strip > #text-view,
-.terminal-embedded .key-strip > #load-brief { display: block; }
+.terminal-embedded .key-strip > #load-brief,
+.terminal-embedded .key-strip > #reconnect { display: block; }
