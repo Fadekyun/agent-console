@@ -1,3 +1,10 @@
+## 0.17.1 — 2026-10-02 (staging, #140)
+
+- Impact: release status refreshes update only history, preserve the candidate form, and poll active workers until their outcome is known. Late loads cannot append obsolete status after a newer refresh. Live staging exposed a queued-card race while the backend correctly retained an unknown outcome.
+- Configuration/migration: none.
+- Verification: desktop/phone release scenarios and live unknown-outcome reconciliation across a web restart.
+- Rollback: select 0.17.0; release records remain compatible, but status may require a page reload. Preserve active worker sources and outcome reconciliation.
+
 ## 0.17.0 — 2026-10-02 (staging, #140)
 
 - Impact: connected results can preview and authorize an exact commit/check/action/target release, then run a configured trusted adapter with a separate external outcome probe. Lost acknowledgments deduplicate; unknown outcomes require observation before explicit retry. Unknown releases appear in Work attention. Workflow Pause/Stop also govern release dispatch/interruption.

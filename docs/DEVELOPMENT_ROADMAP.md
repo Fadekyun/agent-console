@@ -1,3 +1,7 @@
+## Release status follow-up — 2026-10-02 (#140)
+
+- v0.17.1 keeps release history current while preserving the candidate form, and discards obsolete concurrent loads. Live target verification continues to use one durable attempt through lost acknowledgment/restart.
+
 ## Connected release actions — 2026-10-02 (#140)
 
 - v0.17 connects immutable candidate results and check evidence to exact operator action/target grants and durable adapter attempts. Explicit observation resolves uncertain external outcomes; retries remain separate and bounded by fresh evidence. Small tasks can use their own checks.

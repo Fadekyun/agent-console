@@ -10,6 +10,14 @@ export function setupReleases({api,el,message}) {
       const [targets,grants]=await Promise.all([api('/api/workflow/release-targets'),api(`/api/sessions/${session.id}/releases`)]);
       if(!root.isConnected||Number(root.dataset.releaseRequest)!==loadVersion)return;
       root.replaceChildren(el('p','Release only the selected commit to the action and target you authorize. Check results stay tied to that candidate. A small task may use its own recorded checks.','small muted'));
+      const historyRoot=el('div');let statusVersion=0,pollTimer=null;
+      async function refreshHistory(){
+        const ticket=++statusVersion;clearTimeout(pollTimer);
+        try{const current=await api(`/api/sessions/${session.id}/releases`);
+          if(ticket!==statusVersion||!root.isConnected||Number(root.dataset.releaseRequest)!==loadVersion)return;
+          renderHistory(current);
+        }catch(error){message(error.message);}
+      }
       const candidates=results.filter(r=>r.kind==='final'&&r.outcome==='pass'&&r.artifacts.filter(a=>a.kind==='commit').length===1);
       if(!targets.length)root.append(el('p','No release targets configured. An operator must install an action adapter and a read-only outcome check before releases can run.'));
       else if(!candidates.length)root.append(el('p','Publish a passing final result with the exact commit and actual checks to prepare a release.'));
@@ -46,19 +54,22 @@ export function setupReleases({api,el,message}) {
               try{
                 const grant=await api('/api/workflow/releases/authorize',submission);
                 await api(`/api/workflow/releases/${grant.id}/attempts`,{mode:'apply',request_key:runKey});
-                await load(root,session,results);
+                review=null;submission=null;preview.replaceChildren();await refreshHistory();
               }catch(error){status.textContent=error.message+' Check this request or refresh release status before starting another.';run.textContent='Check release request';}
             });preview.append(run,status);
           }catch(error){if(ticket===generation)preview.replaceChildren(el('p',error.message,'danger'));}
           finally{inspect.disabled=false;}
         };
       }
-      root.append(action('Refresh release status',()=>load(root,session,results)));
-      for(const grant of grants){
+      if(!root.isConnected||Number(root.dataset.releaseRequest)!==loadVersion)return;
+      root.append(action('Refresh release status',refreshHistory),historyRoot);renderHistory(grants);
+      function renderHistory(current){
+      historyRoot.replaceChildren();
+      for(const grant of current){
         const attempt=grant.attempts.at(-1),view=grant.preview,card=el('article',null,'panel');
         card.append(el('h3',`${view.action} → ${view.target_label}`),el('p',view.candidate_sha,'overview-meta'),el('p',attempt?`${attempt.state}${attempt.active?' · adapter active':''}`:'Authorized · not started','badge'));
         if(attempt?.summary)card.append(el('p',attempt.summary));if(attempt?.external_reference)card.append(el('p',attempt.external_reference,'overview-meta'));
-        const send=mode=>{const requestKey=key();return async()=>{await api(`/api/workflow/releases/${grant.id}/attempts`,{mode,request_key:requestKey});await load(root,session,results);};};
+        const send=mode=>{const requestKey=key();return async()=>{await api(`/api/workflow/releases/${grant.id}/attempts`,{mode,request_key:requestKey});await refreshHistory();};};
         if(!attempt)card.append(action('Run authorized release',send('apply')));
         else if(!attempt.active){
           if(attempt.state==='not-applied')card.append(action('Retry authorized release',send('apply')));
@@ -66,7 +77,10 @@ export function setupReleases({api,el,message}) {
         }
         const history=el('details');history.append(el('summary','Release history'));
         for(const old of grant.attempts)history.append(el('p',`${old.created_at} · ${old.mode} · ${old.state} · ${old.summary}`,'small'));
-        card.append(history);root.append(card);
+        card.append(history);historyRoot.append(card);
+      }
+      clearTimeout(pollTimer);
+      if(current.some(g=>{const a=g.attempts.at(-1);return a&&(a.active||['queued','running'].includes(a.state));}))pollTimer=setTimeout(()=>{if(root.isConnected&&Number(root.dataset.releaseRequest)===loadVersion)refreshHistory();},1500);
       }
     }catch(error){root.replaceChildren(el('p',error.message,'danger'),action('Retry release status',()=>load(root,session,results)));}
   }
