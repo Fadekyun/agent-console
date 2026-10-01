@@ -1,3 +1,8 @@
+## Operating guides completed — 2026-10-02 (#140 / #6)
+
+- v0.17.3 documents all seven canonical guide bundles and their staging role assignments. New coding, coordination, verification and skills guides preserve one-session completion, bounded optional expansion, exact input/check binding and existing authorization.
+- Validated packages, eight effective previews and three actual copied-session deliveries support guide completion alongside the recorded real two-session handoff. Remaining provider/version discovery, Git import and final Workbench acceptance stay tracked in `FULL_REVAMP_ACCEPTANCE.md`.
+
 ## Release acceptance checkpoint — 2026-10-02 (#140)
 
 - Verified one real isolated target apply, an unknown external outcome, web restart and read-only reconciliation to the exact candidate without a duplicate. Unknown release attention clears only after observation.

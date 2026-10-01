@@ -1,3 +1,10 @@
+## 0.17.3 — 2026-10-02 (staging, #140 / #6)
+
+- Impact: completes the seven canonical operating guides with bounded coding, coordination, review/verification and skills maintenance. Documents exact commands, optional session expansion and separate release authority.
+- Configuration/migration: four new canonical packages mirrored and assigned only in staging to compatible roles; no database migration. Current-console mirror and assignments are unchanged.
+- Verification: all new package validators, eight effective profile previews, exact copied bytes in three actual staging sessions, 95 skill tests (10 retained-catalog fixtures skipped), and the previously verified real two-session consumed-snapshot handoff. See `CONSOLE_GUIDES.md`.
+- Rollback: select 0.17.2 for source; separately unassign new staging guides for future launches. Preserve immutable session copies/receipts and do not remove edited canonical packages. No current-console cutover.
+
 ## 0.17.2 — 2026-10-02 (staging, #140)
 
 - Impact: release evidence checkboxes align with their labels at phone widths. Records the completed live candidate/action/outcome verification and canonical release-guide delivery.

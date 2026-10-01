@@ -1,0 +1,44 @@
+# Console operating guides
+
+The seven guides are maintained in the canonical skills workspace on n100, `/home/fadekyun/codex/skills`, and mirrored into staging's `/home/agentpreview/codex/skills`. Edit the canonical packages, not generated session copies. These packages use portable YAML with namespaced Console metadata; they are not a new plugin system.
+
+| Package | Revision | Staging selection |
+| --- | --- | --- |
+| agent-console-workbench | 2026-10-02.5 | Shared session basics, navigation, configuration and continuation |
+| agent-console-results | 2026-10-02.3 | Shared ready/final results, selected artifacts, delivery and consumption |
+| agent-console-coding | 2026-10-02.1 | coder, bugfix |
+| agent-console-coordination | 2026-10-02.1 | orchestrator, planner |
+| agent-console-verification | 2026-10-02.1 | reviewer, verifier |
+| agent-console-release | 2026-10-02.1 | release |
+| agent-console-skills | 2026-10-02.1 | general, orchestrator |
+
+Role compatibility is checked before launch. A guide does not expand the profile's permissions. For example, coordination guidance lets a planner propose useful steps without authorizing implementation. Existing unrelated infrastructure `agent-console-ops` guidance is preserved.
+
+## Connected behavior
+
+The guides describe the implemented controls and commands. Small tasks can finish in one session. Optional next steps carry a reason, output and dependency; suggestion-only is the default. Automatic expansion is bounded by a reviewed operator envelope. Selected immutable inputs and explicit consumption bind check evidence to the actual candidate. Release authorization is a separate exact candidate/action/target operation with observed outcome reconciliation.
+
+Interactive sessions publish through `agentctl workflow`; supervised native attempts return the runner's structured final and do not duplicate publication. Continuation preserves the workspace and an attributed result, starts a new conversation, and discloses unknown native defaults. Skills guidance describes local staged import and does not claim Git fetching is implemented.
+
+## Verification — 2026-10-02
+
+All four new packages pass the skill-creator validator and registry validation. Eight role assignments pass effective Codex Pro previews. Three temporary actual staging sessions (coder, orchestrator, reviewer) received exact copied bytes of all four new packages, with durable delivery receipts; only those fixtures were stopped. Workbench, Results and Release had already been verified in actual session copies. Delivery is proof of availability, not model use.
+
+The actual two-session consumed-snapshot handoff is recorded in [native dispatch verification](WORKFLOW_DISPATCH_VERIFICATION.md): the source file was removed after publication, the receiving Codex Pro attempt read the preserved selected artifact and published one passing final across a web restart. This protocol evidence and guide-copy evidence are distinct; no claim is made that all seven guides were invoked by a model in that fixture.
+
+The four new file SHA-256 values, checked on canonical installation and on actual staging delivery:
+
+| Package suffix | SKILL.md SHA-256 |
+| --- | --- |
+| coding | c75134e562e2d85da375f9132fde71a7ef0f7641fd3cbc5f07c917fbcc29c32f |
+| coordination | 8bb699b36c30d5366a212888bf44477b0755b2b3cb76c1fecc47aa208a48247b |
+| verification | e1dd99cd019ce3d8b1d9341841ec1b525bd8c1b0c2eec5cf266be8c1b1db35e1 |
+| skills | 1a22e3f2561d2d290c2a965431423520d8c38cda06039241951a5dccad71ed13 |
+
+The package hash also includes supporting files and permissions and differs from the entrypoint file hash. Installation preserves an existing package unless it exactly matches the supplied entrypoint. Local evidence is under `handoffs/console-guides-20261002` in the implementing workspace.
+
+## Rollback and remaining work
+
+Unassign a new staging guide to remove it from future role sessions; existing session snapshots and delivery histories remain intact. Remove a newly installed canonical/mirror package only after checking that it is still the exact owned version and is no longer assigned. Current-console mirror and assignments were not changed. Selecting an older staging source does not undo canonical package or assignment changes.
+
+The complete cross-harness discovery/version matrix, Git import provenance and remaining Workbench acceptance checks are tracked in [the full audit](FULL_REVAMP_ACCEPTANCE.md). Guide completion does not close those requirements.

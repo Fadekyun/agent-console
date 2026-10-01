@@ -26,18 +26,18 @@ Objective: finish issues #90, #140 and #6, update development documentation, pus
 - [x] Coalesced replacement after current attempt; rerun limits; history retained.
 - [x] Pause blocks new dispatch; stop cancels/interrupts with durable history.
 - [x] Exact-candidate release evidence and authorized action/target; uncertain external outcomes require reconciliation before retry.
-- [ ] Rewrite all seven Console guide bundles against implemented commands and verify a real two-session handoff.
+- [x] Rewrite all seven Console guide bundles against implemented commands and verify a real two-session handoff.
 
 ## #6 — skills control plane
 
-- [ ] Portable YAML and namespaced metadata/validated sidecar; legacy migration diagnostics.
+- [x] Portable YAML and namespaced metadata/validated sidecar; legacy migration diagnostics.
 - [ ] Provenance/source/revision/content hash, global/project scope, harness/profile compatibility and dependency diagnostics.
-- [ ] Local-trusted/imported-unreviewed/reviewed/blocked states; staged import and review before activation.
-- [ ] Content drift invalidates approvals; safe paths, duplicate/collision, secret and executable validation.
-- [ ] Effective allow/ask/deny before launch, selection reasons and actual session snapshot/delivery.
+- [x] Local-trusted/imported-unreviewed/reviewed/blocked states; staged import and review before activation.
+- [x] Content drift invalidates approvals; safe paths, duplicate/collision, secret and executable validation.
+- [x] Effective allow/ask/deny before launch, selection reasons and actual session snapshot/delivery.
 - [ ] Capability/version-aware Codex/Pro, Claude, OpenCode, Hermes and Pi delivery; honest isolation limitations.
 - [ ] Inspect/validate/sync/assign/remove through UI and CLI; source/content secrets never returned.
-- [ ] Immutable running-session skill content; explicit refresh/restart semantics and migration/rollback.
+- [x] Immutable running-session skill content; explicit refresh/restart semantics and migration/rollback.
 - [ ] Canonical operating guides updated on n100, not only generated session roots; real harness discovery evidence.
 
 ## Publication / deployment gates
@@ -95,3 +95,9 @@ Version 0.16 adds [recipes and configuration receipts](WORKBENCH_LAUNCHES.md), s
 Versions 0.17–0.17.2 add explicit operator release grants for selected immutable commits and matching current check results, configured action/target adapters, durable worker receipts and observed external outcomes. [Release verification](WORKFLOW_RELEASE_VERIFICATION.md) records real isolated target execution, unknown-outcome handling across web restart, no duplicate apply and responsive UI evidence. Native regression tests verify failed-prerequisite isolation and stale candidate/check rejection. These support the two checked #140 requirements above.
 
 The canonical release guide is the third implemented guide bundle after Workbench/session basics and Results/handoffs. Coding, coordination, review/verification and skills maintenance remain required, along with the remaining #90/#6 and final publication/audit requirements. This checkpoint does not complete the full goal.
+
+## Operating guide checkpoint — 2026-10-02
+
+All seven canonical bundles are now implemented against the current controls and command parsers. [Console guides](CONSOLE_GUIDES.md) records revisions, role assignments, exact entrypoint hashes and delivery evidence. Eight new profile previews and three actual temporary staging sessions verified the four remaining bundles. The real two-session consumed-snapshot handoff is recorded separately in `WORKFLOW_DISPATCH_VERIFICATION.md`. This supports the final guide checkbox for #140 without claiming that delivery proves model use.
+
+The checked registry criteria are supported by the current 95-test skills run (10 retained-catalog fixtures skipped with the explicit empty retained allowlist), the earlier real-tmux/API coverage and actual immutable delivery receipts. Tests cover schema/legacy diagnostics, staged activation, interrupted activation denying trust, content-bound approval/revocation, safe copy and drift, collision/secret/executable/dependency checks, policy selection and receipt survival. The remaining combined provenance criterion stays open for Git import, and capability/discovery, UI/CLI final acceptance and full #90 acceptance remain open. This is progress, not whole-goal completion.
