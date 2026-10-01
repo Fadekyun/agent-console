@@ -58,6 +58,20 @@ MCP_SERVERS: tuple[dict[str, Any], ...] = (
         "token_env": "DIRECTUS_MCP_TOKEN",
         "request_timeout_ms": 120000,
     },
+    {
+        "name": "openrouter",
+        "url": "https://mcp.openrouter.ai/mcp",
+        "url_env": "OPENROUTER_MCP_URL",
+        "token_env": "OPENROUTER_API_KEY",
+        "request_timeout_ms": 120000,
+    },
+    {
+        "name": "bushi",
+        "url": "http://192.168.1.67:8791/mcp",
+        "url_env": "BUSHI_MCP_URL",
+        "token_env": "BUSHI_MCP_TOKEN",
+        "request_timeout_ms": 1200000,
+    },
 )
 
 # CommandCode's OpenAI-compatible endpoint only honours the *top-level*
@@ -241,27 +255,25 @@ def session_mcp_servers(environ: dict[str, str] | None = None) -> list[dict[str,
 
 
 def pi_mcp_config(servers: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build pi's per-session `mcp.json` (the highest-precedence pi config).
+    """Build native Pi 0.99.2 agent-directory MCP configuration.
 
-    A server whose credential is present gets a `bearerTokenEnv` entry. A server
-    in the descriptor table whose credential is missing is written as an explicit
-    `disabled` entry instead: because this file outranks every other pi config
-    source, an inherited host-global entry for the same name cannot survive and
-    fail at connect time. The caller rewrites this file on every launch, so a
-    credential removed between launches cannot leave a stale active entry.
+    Credentials remain environment references. Missing credentials disable the
+    managed entry, and relaunch replaces stale entries. Trusted project config
+    may override this agent-directory file; this is not a tool isolation gate.
+    No retired pi-mcp-adapter fields or host normalization shim are required.
     """
     entries: dict[str, Any] = {
         server["name"]: {
             "url": server["url"],
-            "auth": "bearer",
-            "bearerTokenEnv": server["token_env"],
-            "lifecycle": "lazy",
-            "requestTimeoutMs": _positive_int(server.get("request_timeout_ms"), 120000),
+            "headers": {"Authorization": "Bearer ${" + server["token_env"] + "}"},
+            "exposure": "codemode",
+            "timeout": _positive_int(server.get("request_timeout_ms"), 120000) / 1000,
         }
         for server in servers
     }
     for server in MCP_SERVERS:
-        entries.setdefault(server["name"], {"disabled": True})
+        # Native validation still requires a transport for disabled entries.
+        entries.setdefault(server["name"], {"url": server["url"], "enabled": False})
     return {"mcpServers": entries}
 
 
@@ -271,6 +283,7 @@ def hermes_mcp_servers(servers: list[dict[str, Any]]) -> dict[str, Any]:
         server["name"]: {
             "url": server["url"],
             "headers": {"Authorization": "Bearer ${" + server["token_env"] + "}"},
+            "timeout": _positive_int(server.get("request_timeout_ms"), 120000) / 1000,
         }
         for server in servers
     }

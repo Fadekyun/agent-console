@@ -1,3 +1,8 @@
+## Native MCP parity — 2026-10-02 (#6 / #123)
+
+- v0.19.3 emits native Pi configuration and matches Hermes server selection/timeouts. Installed native clients verified four local authenticated tool calls each without wrapper translation. Disabled/relaunch and trusted-project precedence are explicit; host configuration remains untouched.
+- This completes the bounded MCP configuration correction. Full provider skill discovery and remaining Workbench acceptance stay tracked in `FULL_REVAMP_ACCEPTANCE.md`.
+
 ## Shared launch validation — 2026-10-02 (#90 / #140)
 
 - v0.19.2 uses the creation validator for reviewed connected steps and compares the admitted configuration before native startup. Inherited projects and actual narrowed native sandbox are now part of the review/receipt contract.

@@ -1,3 +1,10 @@
+## 0.19.3 — 2026-10-02 (staging, #6 / #123)
+
+- Impact: generates native Pi MCP configuration without the retired adapter schema; Pi/Hermes receive the same credential-enabled n8n, Directus, OpenRouter and Bushi descriptors and second-based request timeouts. Source Pi launcher uses the current package scope.
+- Configuration/migration: no DB migration. Verified Pi 0.99.2 / Hermes 0.21.4; existing sessions/configuration remain until explicit relaunch. New URL overrides: `OPENROUTER_MCP_URL`, `BUSHI_MCP_URL`. Credentials stay environment references. Existing current-console wrappers/configuration are untouched.
+- Verification: 16 adapter tests and installed native clients each discover/call four authenticated loopback fixture tools. Native Pi validates disabled entries and trusted-project override semantics. See `NATIVE_MCP_VERIFICATION.md`; no external MCP mutation or model task is claimed.
+- Rollback: select 0.19.2 with state retained; its older Pi format needs the existing host normalization shim for new native Pi launches. Retain current host wrappers and do not restart existing sessions merely to change release.
+
 ## 0.19.2 — 2026-10-02 (staging, #90 / #140)
 
 - Impact: connected-step preview shares normal session creation validation, inherits its parent project, and binds the resolved configuration/native sandbox before admission. Plan/read actions stay read-only; Configuration reports the actual task sandbox. Removes the default staging General maintenance-guide assignment that blocked plain Shell.
