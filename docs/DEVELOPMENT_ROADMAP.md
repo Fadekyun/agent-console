@@ -1,5 +1,9 @@
 # Development Roadmap
 
+### 2026-10-02 — #90 launch feedback cleanup
+
+- Real staging verification confirmed recipe execution, preserved dirty worktree and one attributed input. Clear save-only feedback once launching, and omit inapplicable model controls from Shell configuration.
+
 ### 2026-10-02 — #90 recipes and recorded configuration
 
 - Added reusable task/settings recipes, actual launch preview, explicit launch receipts and idempotent request handling. Shared validation covers repository/project, roles, account/model settings and skill policy.

@@ -5,7 +5,9 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
   function explain(target,value){
     const list=el('dl',null,'configuration-list');
     for(const [key,label] of Object.entries(labels)){
-      list.append(el('dt',label),el('dd',value.config[key]??(['model','reasoning_effort','plan_reasoning_effort'].includes(key)?'Harness default · not pinned':'Not set')));
+      if(value.config.tool==='shell'&&['auth_context','agent_mode','provider','model','reasoning_effort','plan_reasoning_effort'].includes(key))continue;
+      const stored=value.config[key],text=typeof stored==='boolean'?(stored?'Yes':'No'):stored??(['model','reasoning_effort','plan_reasoning_effort'].includes(key)?'Harness default · not pinned':'Not set');
+      list.append(el('dt',label),el('dd',text));
     }
     target.append(list);
     if(value.workspace)target.append(el('p','Workspace: '+value.workspace,'overview-meta'));
@@ -31,7 +33,7 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
     control.value=value;
   }
   function populate(request,{recipe=null,source=null}={}){
-    openCreate();
+    message('');openCreate();
     for(const key of ['tool','profile'])if(request[key]){selectValue(form.elements[key],request[key]);form.elements[key].dispatchEvent(new Event('change'));}
     for(const [key,value] of Object.entries(request)){
       const control=form.elements[key];if(!control||value==null||key==='name')continue;
@@ -61,7 +63,7 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
         try{
           const launched=await api('/api/workbench/launches',submission);
           if(launched.state!=='created'){result.textContent=launched.error||'Launch is still pending. Check again before starting another session.';run.textContent='Check launch';return;}
-          $('#create-dialog').close();await refresh();openSession(launched.name);
+          message('');$('#create-dialog').close();await refresh();openSession(launched.name);
         }catch(error){result.textContent=error.message+' Check this launch before starting another.';run.textContent='Check launch';}
         finally{launching=false;run.disabled=false;}
       };

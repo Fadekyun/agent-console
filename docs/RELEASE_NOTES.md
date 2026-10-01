@@ -1,3 +1,10 @@
+## 0.16.1 — 2026-10-02 (staging, #90)
+
+- Impact: a successful recipe launch clears the earlier save-only notice. Shell configuration omits inapplicable model/account fields and worktree policy reads Yes/No.
+- Configuration/migration: none.
+- Verification: desktop/phone recipe journeys assert the stale notice clears; live staging configuration screenshots and source identity checks.
+- Rollback: select staging 0.16.0; records and current console are unchanged.
+
 ## 0.16.0 — 2026-10-02 (staging, #90)
 
 - Impact: reusable recipes save/edit/remove without launching, then preview actual settings and skill revisions before explicit launch. Session Configuration records model/reasoning settings, role and launcher fingerprints, permission mode and selected skill hashes. Continue work starts a new conversation in the preserved workspace, including uncommitted files, and delivers the latest explicit result as an attributed input. Changed settings/roles/skills/launchers require a new review; live or supervised attempts use their existing controls. Repeated launch requests cannot create duplicate sessions, and lost acknowledgments recover only from matching receipts.

@@ -62,6 +62,7 @@ test('recipes save without launching, review configuration and launch once',asyn
   await page.getByRole('button',{name:'Review launch',exact:true}).click();
   await expect(page.locator('#launch-preview')).toContainText('Repository');expect(launches).toHaveLength(0);
   await page.locator('#confirm-launch').click();await expect(page.locator('#session-title')).toHaveText('recipe-run');
+  await expect(page.locator('#notice')).toBeHidden();
   expect(launches).toHaveLength(1);expect(launches[0].expected_hash).toBe('a'.repeat(64));
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   const frame=page.frameLocator('iframe:not([hidden])');await expect(frame.locator('#connection')).toHaveText('Connected');
