@@ -1,3 +1,10 @@
+## 0.23.2 — unreleased, 2026-10-02 (#90)
+
+- Impact: an open terminal now shows one set of lifecycle actions. The session heading hides Open terminal and Stop session while the terminal is visible and restores them when it closes; the terminal header remains the single Stop/Close location. Phone outer headers use a single compact row (Sessions + Stop + Close) with 44px targets, the connection status stays available as screen-reader-only text and on the Sessions control, and Full screen stays desktop-only. A closed terminal stays closed across background refreshes.
+- Configuration/migration: none. Browser-only change; refresh the page after release. No backend, schema, PTY or session behavior changes.
+- Verification: Workbench browser tests on desktop, 360px and 390px cover duplicate lifecycle actions, close/reopen/switch/stopped sessions, close-then-refresh persistence, stale refresh after Stop, control bounds/44px targets, phone resized-height/orientation viewports, a 200% zoom-equivalent viewport, and the existing viewport/scroll regressions.
+- Rollback: select 0.23.1, retaining all state. No session or configuration migration.
+
 ## 0.23.1 — unreleased, 2026-10-02 (#90)
 
 - Impact: open desktop sessions fit short windows; long names and repository paths no longer push the terminal below the screen. Tree and details scroll within their panes. Embedded terminals use the outer Full screen control, removing the duplicate iframe action.

@@ -1,3 +1,9 @@
+## Consolidated terminal lifecycle controls — 2026-10-02 (#90)
+
+- While an open terminal is visible, the session heading hides its Open terminal and Stop session actions so the terminal header is the single lifecycle location; the heading actions are restored when the terminal closes. Visibility is computed centrally in `syncTerminalVisibility()` so refreshes cannot re-show a duplicate Stop.
+- Phone outer headers stay one compact row (Sessions + Stop + Close) with 44px targets; the outer connection status is kept as screen-reader-only text and mirrored onto the Sessions control, because the embedded terminal hides its own connection line. Full screen remains desktop-only.
+- Remaining: physical mobile keyboard/orientation verification.
+
 ## Session viewport correction — 2026-10-02 (#90)
 
 - Open desktop sessions allocate remaining viewport space to the terminal instead of a fixed 540px panel. Long heading text stays on one line with full-text titles; tree and details have independent scrolling.

@@ -59,7 +59,8 @@ body.terminal-open{overflow:hidden}
 #session-view>.back{margin-bottom:12px}
 #session-title{font-size:26px}
 .terminal-panel>header>div{display:flex;gap:4px}
-@media(max-width:760px){.tree-panel{max-height:45dvh}.workspace.tree-collapsed{display:flex}.terminal-panel>header{flex-wrap:wrap}.terminal-panel>header #terminal-status{flex:1}.terminal-panel>header>div{margin-left:auto}.node>.add-session{display:block}}
+/* One compact outer row on phones. The status stays in the accessibility tree (sr-only) because the embedded terminal hides its own connection line. */
+@media(max-width:760px){.tree-panel{max-height:45dvh}.workspace.tree-collapsed{display:flex}.terminal-panel>header{flex-wrap:nowrap}.terminal-panel>header #terminal-status{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}.terminal-panel>header>div{margin-left:auto;flex-wrap:nowrap}.node>.add-session{display:block}}
 
 /* An open desktop session fills the available window; only its panes scroll. */
 @media(min-width:761px){

@@ -126,13 +126,23 @@ function openTerminal() {
     state.frames.set(s.tmux_name, frame); $('#terminal-frames').append(frame);
   }
   state.frames.forEach(f => { f.hidden = f !== frame; }); $('#terminal-panel').hidden = false;
-  $('#terminal-status').textContent = `${s.tmux_name} · ${frame.dataset.status || 'Connecting…'}`;
-  $('#terminal-status').title = s.tmux_name;
+  setTerminalStatus(`${s.tmux_name} · ${frame.dataset.status || 'Connecting…'}`);
   syncTerminalVisibility();
+}
+function setTerminalStatus(text) {
+  $('#terminal-status').textContent = text;
+  $('#terminal-status').title = text;
+  // The outer status line is visually hidden on phones, so expose the same text on the
+  // Sessions control to keep the selected session and connection inspectable.
+  $('#terminal-sessions').title = text;
 }
 function syncTerminalVisibility() {
   const visible = !$('#session-view').hidden && !$('#terminal-panel').hidden;
   state.frames.forEach(frame => frame.contentWindow?.postMessage({type:'agent-console:terminal-visibility', visible:visible && !frame.hidden}, location.origin));
+  // Single source of truth for lifecycle actions: while the terminal is open its header
+  // owns them, so the session heading must not show duplicate Open/Stop controls.
+  const headingActions = $('#session-view > .heading > .session-actions');
+  if (headingActions) headingActions.hidden = visible;
   const desktopSession = visible && !matchMedia('(max-width:760px)').matches;
   const enteringSession = desktopSession && !document.body.classList.contains('session-terminal');
   document.body.classList.toggle('session-terminal', desktopSession);
@@ -339,6 +349,6 @@ window.addEventListener('message', event => {
   if (event.origin !== location.origin || event.data?.type !== 'agent-console:terminal-status' || typeof event.data.status !== 'string') return;
   for (const [name, frame] of state.frames) if (event.source === frame.contentWindow) {
     frame.dataset.status = event.data.status;
-    if (name === state.selected?.tmux_name) $('#terminal-status').textContent = `${name} · ${event.data.status}`;
+    if (name === state.selected?.tmux_name) setTerminalStatus(`${name} · ${event.data.status}`);
   }
 });

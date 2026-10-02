@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 async function openInput(target){if(await target.locator('#input-drawer').isHidden())await target.locator('#toggle-composer').click();}
 async function openMore(target){if(!await target.locator('#terminal-more').evaluate(e=>e.open))await target.locator('#terminal-more > summary').click();}
+async function ensureTerminal(page){
+  await expect(page.locator('#session-title')).toBeVisible();
+  if(await page.locator('#terminal-panel').isHidden())await page.locator('#open-terminal').click();
+  await expect(page.locator('#terminal-panel')).toBeVisible();
+}
 
 function workbenchData(sessions,steps=[]) {
   const aliases=Object.fromEntries(steps.flatMap(step=>step.attempts.map(a=>[a.session_id,step.id])));
@@ -218,7 +223,7 @@ test('terminal reconnect preserves reading position and composer survives reload
 });
 test('nested terminal owns wheel and touch scrolling without moving the work page', async({page},info)=>{
   await fixture(page); await page.goto('/work#session/session-one');
-  await page.getByRole('button',{name:'Open terminal',exact:true}).click();
+  await ensureTerminal(page);
   const frame=page.frames().find(f=>f.url().includes('/terminal?'));
   await expect.poll(()=>frame.evaluate(()=>Boolean(window.__terminal))).toBe(true);
   await frame.evaluate(()=>{for(let i=0;i<400;i++)window.__terminal.writeln(`SCROLL ${i}`);});
@@ -466,7 +471,7 @@ test('closing and switching terminals detaches hidden clients and stop stays acc
   sessions.push({...sessions[0],id:'other',tmux_name:'session-other'});
   await page.routeWebSocket('**/ws/sessions/**',ws=>{opened++;ws.onClose(()=>{closed++;});ws.send('live\r\n');});
   await page.route('**/api/sessions/session-one/kill',async route=>{kills++;sessions[0].running=false;sessions[0].actions=[];await route.fulfill({json:sessions[0]});});
-  await page.goto('/work#session/session-one');await page.locator('#open-terminal').click();
+  await page.goto('/work#session/session-one');await ensureTerminal(page);
   await expect.poll(()=>opened).toBe(1);
   await openInput(page.frameLocator('iframe:not([hidden])'));await page.frameLocator('iframe:not([hidden])').locator('#composer').fill('keep this draft');
   await expect(page.locator('#stop-terminal-session')).toBeVisible();
@@ -474,7 +479,8 @@ test('closing and switching terminals detaches hidden clients and stop stays acc
   await expect(page.locator('#stop-session')).toBeVisible();
   await page.locator('#open-terminal').click();await expect.poll(()=>opened).toBe(2);
   await expect(page.frameLocator('iframe:not([hidden])').locator('#composer')).toHaveValue('keep this draft');
-  await page.evaluate(()=>{location.hash='#session/session-other';});await page.locator('#open-terminal').click();
+  await page.evaluate(()=>{location.hash='#session/session-other';});await expect(page.locator('#session-title')).toHaveText('session-other');
+  if(await page.locator('#terminal-panel').isHidden())await page.locator('#open-terminal').click();
   await expect.poll(()=>closed).toBe(2);await expect.poll(()=>opened).toBe(3);
   await page.evaluate(()=>{location.hash='#session/session-one';});await expect(page.locator('#session-title')).toHaveText('session-one');
   if(await page.locator('#terminal-panel').isHidden())await page.locator('#open-terminal').click();
@@ -488,7 +494,7 @@ test('type and scroll work together and typing exits history without sending scr
   await fixture(page);const inputs=[];
   await page.route('**/api/interface',route=>route.fulfill({json:{label:'Test',terminal_scroll:'tmux'}}));
   await page.routeWebSocket('**/ws/sessions/**',ws=>{ws.onMessage(message=>inputs.push(Buffer.isBuffer(message)?message.toString():message));ws.send('ready\r\n');});
-  await page.goto('/work#session/session-one');await page.locator('#open-terminal').click();
+  await page.goto('/work#session/session-one');await ensureTerminal(page);
   const frame=page.frameLocator('iframe:not([hidden])');await expect(frame.locator('#connection')).toHaveText('Connected');
   await expect(frame.locator('[data-mode=type]')).toHaveAttribute('aria-pressed','true');
   // The server history capability arrives independently of the WebSocket.
@@ -504,15 +510,25 @@ test('type and scroll work together and typing exits history without sending scr
 
 test('stop closes the terminal even while an earlier refresh is pending',async({page})=>{
   const {sessions}=await fixture(page);
-  await page.goto('/work#session/session-one');await page.locator('#open-terminal').click();
+  const headingActions=page.locator('#session-view > .heading > .session-actions');
+  await page.goto('/work#session/session-one');await ensureTerminal(page);
   await expect(page.frameLocator('iframe:not([hidden])').locator('#connection')).toHaveText('Connected');
+  await expect(headingActions).toBeHidden();await expect(page.getByRole('button',{name:'Stop session',exact:true})).toHaveCount(1);
   let pending;const stale=structuredClone(workbenchData(sessions));
   await page.route('**/api/workbench',async route=>{pending=route;});
   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await expect.poll(()=>Boolean(pending)).toBe(true);
   await page.route('**/api/sessions/session-one/kill',async route=>{sessions[0].running=false;sessions[0].actions=[];await route.fulfill({json:sessions[0]});});
   page.once('dialog',d=>d.accept());await page.locator('#stop-terminal-session').click();
   await expect(page.locator('#terminal-panel')).toBeHidden();await expect(page.locator('iframe')).toHaveCount(0);
+  await expect(headingActions).toBeVisible();await expect(page.getByRole('button',{name:'Stop session',exact:true})).toHaveCount(1);
   await page.unroute('**/api/workbench');await pending.fulfill({json:stale});
+  // The stale response still reports the old running session; the terminal must stay closed.
+  // The follow-up refresh reports the stopped session, so the heading set remains but its
+  // kill action (and the duplicate terminal-header Stop) must not reappear.
+  await expect(page.locator('#terminal-panel')).toBeHidden();await expect(headingActions).toBeVisible();
+  await expect(page.locator('#open-terminal')).toBeDisabled();
+  await expect(page.locator('#stop-terminal-session')).toBeHidden();
+  await expect(page.getByRole('button',{name:'Stop session',exact:true})).toHaveCount(0);
 });
 
 test('native mouse scrolling reaches a full-screen app without entering tmux copy mode',async({page},info)=>{
@@ -522,7 +538,7 @@ test('native mouse scrolling reaches a full-screen app without entering tmux cop
     ws.onMessage(message=>inputs.push(Buffer.isBuffer(message)?message.toString('latin1'):message));
     ws.send('\x1b[?1049h\x1b[?1000h\x1b[?1006hNative full-screen app\r\n');
   });
-  await page.goto('/work#session/session-one');await page.locator('#open-terminal').click();
+  await page.goto('/work#session/session-one');await ensureTerminal(page);
   const frame=page.frameLocator('iframe:not([hidden])');await expect(frame.locator('#connection')).toHaveText('Connected');
   const native=page.frames().find(f=>f.url().includes('/terminal?'));
   await expect.poll(()=>native.evaluate(()=>window.__terminal.modes.mouseTrackingMode)).not.toBe('none');
@@ -549,7 +565,7 @@ test('native mouse scrolling reaches a full-screen app without entering tmux cop
 test('legacy binary mouse reports preserve bytes instead of UTF-8 encoding',async({page})=>{
   await fixture(page);const binary=[];
   await page.routeWebSocket('**/ws/sessions/**',ws=>{ws.onMessage(message=>{if(Buffer.isBuffer(message))binary.push([...message]);});ws.send('\x1b[?1000h');});
-  await page.goto('/work#session/session-one');await page.locator('#open-terminal').click();
+  await page.goto('/work#session/session-one');await ensureTerminal(page);
   const native=page.frames().find(f=>f.url().includes('/terminal?'));
   await expect.poll(()=>native.evaluate(()=>window.__terminal?.modes.mouseTrackingMode)).toBe('vt200');
   await native.evaluate(()=>{const screen=document.querySelector('.xterm-screen'),box=screen.getBoundingClientRect();screen.dispatchEvent(new WheelEvent('wheel',{deltaY:-80,clientX:box.x+box.width-20,clientY:box.y+30,bubbles:true,cancelable:true}));});
@@ -597,7 +613,7 @@ test('collapsible branches and full-screen tree navigate every layer without los
   const before=(await page.locator('.session-main').boundingBox()).width;
   await page.locator('#tree-panel > summary').click();
   if(info.project.name==='desktop')expect((await page.locator('.session-main').boundingBox()).width-before).toBeGreaterThan(100);
-  await page.getByRole('button',{name:'Open terminal',exact:true}).click();
+  await ensureTerminal(page);
   const frame=page.frameLocator('iframe:not([hidden])');await openInput(frame);await frame.locator('#composer').fill('Root draft');
   await frame.locator('#toggle-composer').click();
   if(info.project.name==='desktop')await page.locator('#expand-terminal').click();
@@ -648,7 +664,7 @@ test('short desktop session keeps terminal and details within the viewport', asy
   expect(box.y+box.height).toBeLessThanOrEqual(600);
   expect(box.height).toBeGreaterThan(200);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(1024);
-  const stop=await page.locator('#stop-session').boundingBox();
+  const stop=await page.locator('#stop-terminal-session').boundingBox();
   expect(stop.x+stop.width).toBeLessThanOrEqual(1024);
   await page.screenshot({path:'review-evidence/short-window-after.png'});
   expect(await page.evaluate(()=>document.documentElement.scrollHeight)).toBeLessThanOrEqual(600);
@@ -679,4 +695,108 @@ test('embedded terminal delegates full screen to its containing view', async ({p
   await expect(frame.locator('#connection')).toHaveText('Connected');
   await openMore(frame);
   await expect(frame.locator('#fullscreen')).toBeHidden();
+});
+
+test('one lifecycle action set is available while the terminal is open and restored when closed',async({page})=>{
+  const {sessions}=await fixture(page);
+  sessions.push({...sessions[0],id:'other',tmux_name:'session-other'});
+  sessions.push({...sessions[0],id:'stopped',tmux_name:'session-stopped',running:false,actions:[]});
+  const headingActions=page.locator('#session-view > .heading > .session-actions');
+  await page.goto('/work#session/session-one');
+  // Desktop opens the terminal on route; mobile starts closed. Normalise to an open terminal.
+  await ensureTerminal(page);
+  await expect(headingActions).toBeHidden();
+  await expect(page.locator('#open-terminal')).toBeHidden();
+  await expect(page.locator('#stop-session')).toBeHidden();
+  await expect(page.locator('#stop-terminal-session')).toBeVisible();
+  await expect(page.getByRole('button',{name:'Stop session',exact:true})).toHaveCount(1);
+  // Close restores the heading set and a completed refresh must keep the terminal closed.
+  await page.locator('#close-terminal').click();
+  await expect(page.locator('#terminal-panel')).toBeHidden();
+  const refreshed=page.waitForResponse(response=>response.url().includes('/api/workbench')&&response.ok());
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await refreshed;
+  await expect(page.locator('#refresh')).toBeEnabled();
+  await expect(page.locator('#terminal-panel')).toBeHidden();
+  await expect(headingActions).toBeVisible();
+  await expect(page.locator('#open-terminal')).toBeVisible();
+  await expect(page.locator('#stop-session')).toBeVisible();
+  await expect(page.locator('#stop-terminal-session')).toBeHidden();
+  await expect(page.getByRole('button',{name:'Stop session',exact:true})).toHaveCount(1);
+  await page.locator('#open-terminal').click();
+  await expect(headingActions).toBeHidden();
+  await page.evaluate(()=>{location.hash='#session/session-other';});
+  await expect(page.locator('#session-title')).toHaveText('session-other');
+  if(await page.locator('#terminal-panel').isHidden())await page.locator('#open-terminal').click();
+  await expect(page.locator('#terminal-panel')).toBeVisible();
+  await expect(headingActions).toBeHidden();
+  await expect(page.getByRole('button',{name:'Stop session',exact:true})).toHaveCount(1);
+  await page.evaluate(()=>{location.hash='#session/session-stopped';});
+  await expect(page.locator('#session-title')).toHaveText('session-stopped');
+  await expect(page.locator('#terminal-panel')).toBeHidden();
+  await expect(headingActions).toBeVisible();
+  await expect(page.locator('#open-terminal')).toBeDisabled();
+  await expect(page.locator('#stop-session')).toBeHidden();
+  await expect(page.getByRole('button',{name:'Stop session',exact:true})).toHaveCount(0);
+});
+
+test('phone terminal header keeps one row of usable lifecycle controls',async({page},info)=>{
+  test.skip(info.project.name==='desktop');
+  await fixture(page);
+  await page.goto('/work#session/session-one');
+  await ensureTerminal(page);
+  const assertRow=async()=>{
+    const viewport=page.viewportSize();
+    const header=await page.locator('#terminal-panel > header').boundingBox();
+    const boxes=await Promise.all(['#terminal-sessions','#stop-terminal-session','#close-terminal'].map(selector=>page.locator(selector).boundingBox()));
+    const centers=boxes.map(box=>box.y+box.height/2);
+    expect(Math.max(...centers)-Math.min(...centers)).toBeLessThanOrEqual(6);
+    expect(header.height).toBeLessThanOrEqual(60);
+    for(const box of boxes){
+      expect(box.height).toBeGreaterThanOrEqual(44);
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x+box.width).toBeLessThanOrEqual(viewport.width+0.5);
+      expect(box.y+box.height).toBeLessThanOrEqual(viewport.height+0.5);
+    }
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+    expect(await page.evaluate(()=>window.scrollY)).toBe(0);
+  };
+  const status=page.locator('#terminal-status');
+  await expect(status).toBeAttached();
+  expect((await status.textContent()).trim().length).toBeGreaterThan(0);
+  expect(await status.evaluate(el=>getComputedStyle(el).display)).not.toBe('none');
+  await expect(page.locator('#expand-terminal')).toBeHidden();
+  await assertRow();
+  // Keyboard and orientation changes shrink or reflow the phone viewport.
+  for(const size of [{width:360,height:420},{width:700,height:360},{width:390,height:844}]){
+    await page.setViewportSize(size);
+    await expect(page.locator('#terminal-panel')).toBeVisible();
+    await assertRow();
+  }
+});
+
+test('desktop terminal controls fit normal and 200% zoom equivalent viewports',async({page},info)=>{
+  test.skip(info.project.name!=='desktop');
+  await fixture(page);
+  await page.goto('/work#session/session-one');
+  await ensureTerminal(page);
+  const fits=async(width,height)=>{
+    const boxes=await Promise.all(['#terminal-sessions','#stop-terminal-session','#close-terminal'].map(selector=>page.locator(selector).boundingBox()));
+    for(const box of boxes){
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x+box.width).toBeLessThanOrEqual(width+0.5);
+      expect(box.y+box.height).toBeLessThanOrEqual(height+0.5);
+    }
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  };
+  await expect(page.locator('#terminal-status')).toBeVisible();
+  await expect(page.locator('#expand-terminal')).toBeVisible();
+  await fits(1280,800);
+  const panel=await page.locator('#terminal-panel').boundingBox();
+  expect(panel.y+panel.height).toBeLessThanOrEqual(800);
+  await page.setViewportSize({width:640,height:400});
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(640);
+  await expect(page.locator('#terminal-panel')).toBeVisible();
+  await fits(640,400);
+  expect(await page.evaluate(()=>window.scrollY)).toBe(0);
 });
