@@ -900,3 +900,24 @@ test('mark reviewed preserves failed outcome and blocked attention has no shortc
   await expect(page.locator('#work-list')).toContainText('Attention: Blocked');
   await expect(page.locator('#work-list').getByRole('button',{name:'Mark reviewed',exact:true})).toHaveCount(0);
 });
+
+
+test('Add session stays visible without shifting the tree on hover or focus',async({page})=>{
+  const {sessions}=await fixture(page);
+  sessions.push({...sessions[0],id:'child',tmux_name:'session-child',parent_session_id:'root'});
+  await page.goto('/work#session/session-one');
+  await page.mouse.move(0,0);
+  const row=page.locator('#session-tree .node[data-node="child"]');
+  const add=row.getByRole('button',{name:'+ Add session',exact:true});
+  await expect(add).toBeVisible();
+  const before=await row.boundingBox();
+  expect((await add.boundingBox()).height).toBeGreaterThanOrEqual(44);
+  await row.hover();
+  expect(await row.boundingBox()).toEqual(before);
+  await page.mouse.move(0,0);await add.focus();
+  await expect(add).toBeFocused();
+  expect(await row.boundingBox()).toEqual(before);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#create-dialog')).toBeVisible();
+  await expect(page.locator('#create-dialog')).toContainText('session-child');
+});

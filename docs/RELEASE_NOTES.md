@@ -1,3 +1,10 @@
+## 0.24.1 — unreleased, 2026-10-03 (#90)
+
+- Impact: Add session remains visible in eligible session tree rows, with muted text and hover/focus highlighting; rows no longer jump when the pointer enters.
+- Configuration/migration: none. CSS-only behavior change; refresh after release.
+- Verification: 9 browser checks pass across desktop, 360px and 390px, covering persistent visibility, stable row bounds during hover/focus, 44px touch targets, keyboard child creation and existing child creation/focus regressions. All 3 version checks pass.
+- Rollback: select the retained v0.24.0 release and restart the web service; retain all session state.
+
 ## 0.24.0 — unreleased, 2026-10-02 (#90)
 
 - Impact: reversible persisted stopped-session Hide/Restore and collapsed paginated History; visible running children are never hidden when a parent is stopped; explicit reviewed acknowledgement preserves result outcomes; recovered refresh notices clear stale alerts without discarding new ones; matched-child direct links on root search cards; compact work summaries with full task search and unchanged reused cards; visible phone terminal connection label.

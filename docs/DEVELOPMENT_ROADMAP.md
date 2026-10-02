@@ -1,3 +1,7 @@
+## Persistent Add session controls — 2026-10-03 (#90)
+
+- Completed in v0.24.1. Eligible tree rows always show Add session; hover and keyboard focus highlight the control without changing row height. Existing mobile touch targets and child creation behavior are preserved.
+
 ## Hide/Restore stopped sessions, paginated History, compact summaries, phone connection label — 2026-10-02 (#90)
 
 - Completed in v0.24.0. Reversible persisted stopped-session Hide/Restore with collapsed paginated History; visible running children are never hidden; explicit reviewed acknowledgement preserves result outcomes; recovered refresh notices; matched-child direct links on root search cards; compact work summaries with full task search; visible phone terminal connection label. No DB schema change; new private workbench-visibility.json in state directory.
