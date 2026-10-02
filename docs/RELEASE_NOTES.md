@@ -1,3 +1,10 @@
+## 0.23.1 — unreleased, 2026-10-02 (#90)
+
+- Impact: open desktop sessions fit short windows; long names and repository paths no longer push the terminal below the screen. Tree and details scroll within their panes. Embedded terminals use the outer Full screen control, removing the duplicate iframe action.
+- Configuration/migration: none. Refresh browser pages after release.
+- Verification: reproduce at 1024×600 with long names/paths and 25 children; check 800×500, details, terminal scrolling, expand/restore, close/reopen, navigation and desktop/phone terminal controls with Playwright.
+- Rollback: select 0.23.0, retaining all state. Its fixed desktop terminal height can restore page scrolling.
+
 ## 0.23.0 — 2026-10-02 (#90)
 
 - Impact: direct input is the terminal default on every viewport. Input/paste/send controls are optional, preserve drafts when collapsed, and show a draft indicator. Extra terminal keys/modes move into More; Reconnect appears when available. Session sidebar and tree branches collapse; a full-screen Sessions dialog supports navigation and adding children at any layer. Attention editing and Settings diagnostics use disclosures.

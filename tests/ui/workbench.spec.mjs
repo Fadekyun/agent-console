@@ -632,3 +632,51 @@ test('failed direct input exposes the fallback without erasing its saved draft',
   await expect(page.locator('#composer')).toHaveValue('Recoverable draft');
   await expect(page.locator('#connection')).toHaveText('Terminal is disconnected');
 });
+
+
+test('short desktop session keeps terminal and details within the viewport', async ({page}, info) => {
+  test.skip(info.project.name !== 'desktop');
+  await page.setViewportSize({width:1024,height:600});
+  const {sessions}=await fixture(page);
+  sessions[0].tmux_name='session-'+'long-name-'.repeat(18);
+  sessions[0].repository='/workspace/'+'long-path/'.repeat(20);
+  for(let i=0;i<25;i++)sessions.push({...sessions[0],id:`child-${i}`,tmux_name:`child-${i}`,parent_session_id:'root'});
+  await page.goto('/work#session/'+encodeURIComponent(sessions[0].tmux_name));
+  const frame=page.frameLocator('iframe:not([hidden])');
+  await expect(frame.locator('#connection')).toHaveText('Connected');
+  const box=await page.locator('#terminal-panel').boundingBox();
+  expect(box.y+box.height).toBeLessThanOrEqual(600);
+  expect(box.height).toBeGreaterThan(200);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(1024);
+  const stop=await page.locator('#stop-session').boundingBox();
+  expect(stop.x+stop.width).toBeLessThanOrEqual(1024);
+  await page.screenshot({path:'review-evidence/short-window-after.png'});
+  expect(await page.evaluate(()=>document.documentElement.scrollHeight)).toBeLessThanOrEqual(600);
+  await page.locator('#session-detail > summary').click();
+  await page.locator('#show-output').click();
+  expect(await page.evaluate(()=>document.documentElement.scrollHeight)).toBeLessThanOrEqual(600);
+  await frame.locator('#terminal').dispatchEvent('wheel',{deltaY:500});
+  expect(await page.evaluate(()=>window.scrollY)).toBe(0);
+  await page.setViewportSize({width:800,height:500});
+  await expect.poll(async()=>{const box=await page.locator('#terminal-panel').boundingBox();return box.y+box.height;}).toBeLessThanOrEqual(500);
+  await page.locator('#session-detail > summary').click();
+  await page.locator('#expand-terminal').click();
+  await expect(page.locator('#terminal-panel')).toHaveClass(/expanded/);
+  await page.locator('#expand-terminal').click();
+  await page.locator('#close-terminal').click();
+  await expect(page.locator('#terminal-panel')).toBeHidden();
+  await page.locator('#open-terminal').click();
+  await expect(frame.locator('#connection')).toHaveText('Connected');
+  await page.evaluate(()=>{location.hash='#work';});
+  await expect(page.locator('body')).not.toHaveClass(/session-terminal/);
+});
+
+test('embedded terminal delegates full screen to its containing view', async ({page}) => {
+  await fixture(page);
+  await page.goto('/work#session/session-one');
+  if(await page.locator('#terminal-panel').isHidden())await page.locator('#open-terminal').click();
+  const frame=page.frameLocator('iframe:not([hidden])');
+  await expect(frame.locator('#connection')).toHaveText('Connected');
+  await openMore(frame);
+  await expect(frame.locator('#fullscreen')).toBeHidden();
+});

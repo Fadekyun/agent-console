@@ -36,8 +36,10 @@ function renderSession() {
   const s = state.selected;
   if (!s) return;
   $('#session-title').textContent = s.tmux_name;
+  $('#session-title').title = s.tmux_name;
   $('#session-state').textContent = status(s);
   $('#session-meta').textContent = `${s.tool || 'Terminal'} · ${s.profile || 'Session'} · ${s.repository || ''}`;
+  $('#session-meta').title = $('#session-meta').textContent;
   $('#session-brief').textContent = s.initial_task || 'No stored task brief.';
   overview.renderTree(s,state.selectedNodeId);
   const node=overview.nodeFor(s);
@@ -131,6 +133,11 @@ function openTerminal() {
 function syncTerminalVisibility() {
   const visible = !$('#session-view').hidden && !$('#terminal-panel').hidden;
   state.frames.forEach(frame => frame.contentWindow?.postMessage({type:'agent-console:terminal-visibility', visible:visible && !frame.hidden}, location.origin));
+  const desktopSession = visible && !matchMedia('(max-width:760px)').matches;
+  const enteringSession = desktopSession && !document.body.classList.contains('session-terminal');
+  document.body.classList.toggle('session-terminal', desktopSession);
+  if (enteringSession) window.scrollTo(0, 0);
+  document.documentElement.style.setProperty('--workbench-top', `${Math.round($('.top').getBoundingClientRect().bottom)}px`);
   document.body.classList.toggle('terminal-open', visible && ($('#terminal-panel').classList.contains('expanded') || matchMedia('(max-width:760px)').matches));
   const viewport = window.visualViewport;
   document.documentElement.style.setProperty('--terminal-height', `${Math.round(viewport?.height || innerHeight)}px`);

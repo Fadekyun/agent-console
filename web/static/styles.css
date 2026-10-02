@@ -367,3 +367,6 @@ dialog::backdrop { background: rgb(0 0 0 / .58); } .dialog-form, dialog form { d
 .terminal-menu .key-strip, .terminal-embedded .terminal-menu .key-strip { display:flex; flex-wrap:wrap; overflow:visible; }
 #reconnect { margin-left:auto; }
 @media(max-width:760px){.terminal-controls > button,#terminal-more > summary { min-height:44px; }}
+
+/* The containing workbench owns expansion; an iframe cannot expand its layout. */
+.terminal-embedded #fullscreen { display:none; }

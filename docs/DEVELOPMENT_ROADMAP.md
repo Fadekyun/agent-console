@@ -1,3 +1,9 @@
+## Session viewport correction — 2026-10-02 (#90)
+
+- Open desktop sessions allocate remaining viewport space to the terminal instead of a fixed 540px panel. Long heading text stays on one line with full-text titles; tree and details have independent scrolling.
+- Remove the duplicate embedded Full screen action; retain expansion in the containing workbench and standalone terminal.
+- Further consolidation of parent and embedded toolbar rows remains a separate UI change. Physical mobile keyboard and trackpad verification remains open.
+
 ## Progressive console controls — 2026-10-02 (#90)
 
 - Implemented the next UI pass: optional composer, compact terminal menu, collapsible sidebar/branches and full-screen session navigation, plus secondary attention/settings disclosures.

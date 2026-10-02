@@ -60,3 +60,25 @@ body.terminal-open{overflow:hidden}
 #session-title{font-size:26px}
 .terminal-panel>header>div{display:flex;gap:4px}
 @media(max-width:760px){.tree-panel{max-height:45dvh}.workspace.tree-collapsed{display:flex}.terminal-panel>header{flex-wrap:wrap}.terminal-panel>header #terminal-status{flex:1}.terminal-panel>header>div{margin-left:auto}.node>.add-session{display:block}}
+
+/* An open desktop session fills the available window; only its panes scroll. */
+@media(min-width:761px){
+  body.session-terminal{overflow:hidden}
+  body.session-terminal .top{padding:10px 20px}
+  body.session-terminal main{height:calc(var(--terminal-height,100dvh) - var(--workbench-top,56px));padding:12px 20px;display:flex;flex-direction:column;min-height:0}
+  body.session-terminal #notice{flex:none;max-height:15dvh;overflow:auto;margin-bottom:8px}
+  body.session-terminal #session-view{flex:1;min-height:0;display:flex;flex-direction:column}
+  body.session-terminal #session-view>.back{align-self:start;margin-bottom:6px}
+  body.session-terminal #session-view>.heading{flex:none;margin-bottom:10px}
+  body.session-terminal #session-view>.heading>div:first-child{flex:1;min-width:0}
+  body.session-terminal #session-view>.heading>.session-actions{flex:none;display:flex;gap:8px}
+  body.session-terminal #session-state{margin-bottom:4px}
+  body.session-terminal #session-title{font-size:22px;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  body.session-terminal #session-meta{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  body.session-terminal .workspace{flex:1;min-height:0;align-items:stretch;gap:14px}
+  body.session-terminal .tree-panel{max-height:100%;overscroll-behavior:contain}
+  body.session-terminal .session-main{display:flex;flex-direction:column;min-height:0}
+  body.session-terminal .terminal-panel:not(.expanded){flex:1;min-height:120px;height:auto;max-height:none;resize:none;margin-bottom:8px}
+  body.session-terminal #session-detail{flex:none;max-height:40%;overflow:auto;overscroll-behavior:contain;padding:8px 14px}
+  body.session-terminal #session-detail>summary{position:sticky;top:-8px;background:var(--paper);z-index:1}
+}
