@@ -14,7 +14,7 @@
     <label class="compact-theme">Theme<select id="terminal-theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
   </header>
   <div class="terminal-controls">
-    <div class="mode-switch" aria-label="Terminal interaction mode"><button data-mode="scroll">Scroll</button><button data-mode="type">Type</button><button data-mode="select">Select</button></div>
+    <div class="mode-switch" aria-label="Terminal interaction mode"><button data-mode="scroll">Scroll</button><button data-mode="type" title="Type directly and scroll through output">Type &amp; scroll</button><button data-mode="select">Select</button></div>
     <div class="key-strip" aria-label="Terminal keys and controls">
       <button data-key="\u0003">Ctrl-C</button><button data-key="\u0010">Ctrl-P</button><button data-key="\u001b">Esc</button><button data-key="\t">Tab</button><button data-key="\u001b[A">↑</button><button data-key="\u001b[B">↓</button><button data-key="\u001b[5~">Page up</button><button data-key="\u001b[6~">Page down</button>
       <button id="text-view">Text view / Copy</button><button id="load-brief">Load brief</button><button id="peers">Peers</button><button id="detach">Detach (Ctrl-A d)</button><button id="reconnect" disabled>Reconnect</button><button id="fullscreen">Full screen</button>
@@ -31,6 +31,6 @@
   <dialog id="copy-sheet"><div class="dialog-form"><h2>Copy terminal selection</h2><p class="muted">Select the text below and use the system Copy action.</p><textarea id="copy-sheet-text" rows="10" readonly></textarea><div class="dialog-actions"><button data-close="copy-sheet">Close</button></div></div></dialog>
   <dialog id="paste-sheet"><div class="dialog-form"><h2>Paste from device</h2><p class="muted">Clipboard access is unavailable or denied. Paste below using your device’s Paste action, then review it in the composer.</p><textarea id="paste-sheet-text" rows="6" placeholder="Paste here for review"></textarea><div class="dialog-actions"><button data-close="paste-sheet">Cancel</button><button id="use-manual-paste" class="primary">Use in composer</button></div></div></dialog>
   <textarea id="terminal-clipboard-fallback" class="visually-hidden" aria-hidden="true"></textarea>
-  <script type="module" src="/static/terminal.js?v=11"></script>
+  <script type="module" src="/static/terminal.js?v=12"></script>
 </body>
 </html>

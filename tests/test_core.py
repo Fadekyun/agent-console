@@ -85,6 +85,24 @@ class SessionIntegrationTests(unittest.TestCase):
         killed = self.manager.kill("legacy-test", allow_unmanaged=True)
         self.assertEqual(killed["status"], "process-exited")
 
+    def test_kill_preserves_private_recent_output_and_capture_failure_keeps_session(self):
+        name = "stop-transcript"
+        self.manager.create(tool="shell", profile="general", name=name, repository=str(self.workspace))
+        tmux = self.manager.tmux_for_name(name)
+        with patch.object(tmux, "capture", side_effect=RuntimeError("capture unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "capture unavailable"):
+                self.manager.kill(name)
+        self.assertTrue(tmux.exists(name))
+        with patch.object(tmux, "capture", return_value=("kept output\n", False)):
+            stopped = self.manager.kill(name)
+        self.assertFalse(stopped["running"])
+        path = Path(stopped["archived_transcript"])
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        review = self.manager.review_session(name)
+        self.assertEqual(review["source"], "archived-transcript")
+        self.assertEqual(review["content"], "kept output\n")
+        self.assertTrue(self.workspace.exists())
+
     def test_attention_state_is_explicit_and_survives_reconciliation_and_exit(self) -> None:
         session = self.manager.create(
             tool="shell",

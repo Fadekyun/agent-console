@@ -32,3 +32,8 @@
 @media(max-width:760px){#work-view>.heading{display:block}#work-view>.heading .session-actions button{flex:1}.configuration-list{grid-template-columns:1fr 1.5fr}}
 
 .release-evidence{min-width:0;margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:7px}.release-evidence label{display:flex;align-items:flex-start;gap:10px;min-height:44px;padding:8px 0}.release-evidence input[type=checkbox]{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;padding:0}.release-evidence label span{min-width:0;overflow-wrap:anywhere}
+
+/* Keep the page behind an open full-screen terminal still, including the mobile keyboard. */
+body.terminal-open{overflow:hidden}
+#terminal-panel.expanded{top:var(--terminal-top,0px);height:var(--terminal-height,100dvh);bottom:auto}
+@media(max-width:760px){.terminal-panel{top:var(--terminal-top,0px);height:var(--terminal-height,100dvh);bottom:auto}.terminal-panel>header{padding:4px 8px}.terminal-panel>header>div{display:flex;gap:4px}.terminal-panel>header button{padding:5px 7px}#session-view>.heading .session-actions{display:flex;gap:8px}#session-view>.heading .session-actions button{flex:1}}

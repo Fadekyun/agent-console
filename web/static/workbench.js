@@ -9,7 +9,7 @@ const state = { sessions: [], me: null, selected: null, work: null, selectedNode
 const names = { normal: 'Working', needs_input: 'Needs input', blocked: 'Blocked', ready_for_review: 'Ready for review' };
 const pendingSessionActions = new Set();
 function renderPendingActions() {
-  for (const [selector, action] of [['#interrupt-session','interrupt'],['#stop-session','kill'],['#attention-form button[type=submit]','attention']]) {
+  for (const [selector, action] of [['#interrupt-session','interrupt'],['#stop-session','kill'],['#stop-terminal-session','kill'],['#attention-form button[type=submit]','attention']]) {
     const button=$(selector),pending=pendingSessionActions.has(`${state.selected?.id}:${action}`);
     button.disabled=pending;button.setAttribute('aria-busy',String(pending));
   }
@@ -51,11 +51,12 @@ function renderSession() {
   $('#continue-session').hidden=!!s.running||!s.managed||s.execution_kind==='integration-plan';
   $('#interrupt-session').hidden = !s.actions?.includes('interrupt');
   $('#stop-session').hidden = !s.actions?.includes('kill');
+  $('#stop-terminal-session').hidden = !s.actions?.includes('kill');
   renderPendingActions();
   // Refresh session state without replacing a status note the user is editing.
   const attention = $('#attention-form');
   if (attention.dataset.session !== s.id) {
-    $('#session-detail').open = !matchMedia('(max-width:760px)').matches;
+    $('#session-detail').open = false;
     attention.dataset.session = s.id; attention.elements.state.value = s.attention_state || 'normal'; attention.elements.note.value = s.attention_note || '';
     $('#session-output').hidden = true; $('#session-skills').hidden = true; $('#session-history').hidden=true;$('#session-configuration').hidden=true;
   }
@@ -91,9 +92,14 @@ function route() {
   if (sessionName && !state.selected) message('This session is no longer available. Return to Work.', 'route');
   else if ($('#notice').dataset.kind === 'route') message('');
   renderWork(); renderSession();
-  for (const [name, frame] of state.frames) frame.hidden = name !== state.selected?.tmux_name;
+  for (const [name, frame] of state.frames) {
+    if (!state.sessions.some(session => session.tmux_name === name && session.running)) {
+      frame.remove(); state.frames.delete(name);
+    } else frame.hidden = name !== state.selected?.tmux_name;
+  }
   if (!state.selected || !state.frames.has(state.selected.tmux_name)) $('#terminal-panel').hidden = true;
   if (!showingResults && state.selected?.running && previous !== state.selected.tmux_name && !matchMedia('(max-width:760px)').matches) openTerminal();
+  syncTerminalVisibility();
 }
 async function refresh() {
   if (state.loading) return state.loading;
@@ -111,12 +117,26 @@ function openTerminal() {
   if (!frame) {
     // Bound browser PTYs; drafts survive eviction in the terminal's sessionStorage.
     if (state.frames.size >= 3) { const [name, old] = state.frames.entries().next().value; old.remove(); state.frames.delete(name); }
-    frame = el('iframe'); frame.title = `Terminal: ${s.tmux_name}`; frame.src = `/terminal?session=${encodeURIComponent(s.tmux_name)}&embed=1&mode=scroll`;
+    frame = el('iframe'); frame.title = `Terminal: ${s.tmux_name}`; frame.src = `/terminal?session=${encodeURIComponent(s.tmux_name)}&embed=1&mode=type&lifecycle=managed`;
+    frame.addEventListener('load', syncTerminalVisibility);
     state.frames.set(s.tmux_name, frame); $('#terminal-frames').append(frame);
   }
   state.frames.forEach(f => { f.hidden = f !== frame; }); $('#terminal-panel').hidden = false;
   $('#terminal-status').textContent = frame.dataset.status || 'Connecting…';
+  syncTerminalVisibility();
 }
+function syncTerminalVisibility() {
+  const visible = !$('#session-view').hidden && !$('#terminal-panel').hidden;
+  state.frames.forEach(frame => frame.contentWindow?.postMessage({type:'agent-console:terminal-visibility', visible:visible && !frame.hidden}, location.origin));
+  document.body.classList.toggle('terminal-open', visible && ($('#terminal-panel').classList.contains('expanded') || matchMedia('(max-width:760px)').matches));
+  const viewport = window.visualViewport;
+  document.documentElement.style.setProperty('--terminal-height', `${Math.round(viewport?.height || innerHeight)}px`);
+  document.documentElement.style.setProperty('--terminal-top', `${Math.round(viewport?.offsetTop || 0)}px`);
+}
+window.visualViewport?.addEventListener('resize', syncTerminalVisibility);
+window.visualViewport?.addEventListener('scroll', syncTerminalVisibility);
+window.addEventListener('resize', syncTerminalVisibility);
+
 function options(select, entries, preferred) {
   select.replaceChildren(...entries.map(([value, label]) => { const option = el('option', label); option.value = value; return option; }));
   if (entries.some(([value]) => value === preferred)) select.value = preferred;
@@ -205,12 +225,15 @@ async function sessionAction(action, payload, method='POST') {
   pendingSessionActions.add(key);renderPendingActions();
   try {
     await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${action}`,payload,method);await refresh();
+    if(action==='kill')message(`Stopped ${s.tmux_name}. Files and recent output are kept.`);
     if(action==='attention')message(`Status updated for ${s.tmux_name}.`);
   } catch(error) { message(`${s.tmux_name}: ${error.message}`); }
   finally { pendingSessionActions.delete(key);renderPendingActions(); }
 }
 $('#interrupt-session').onclick = () => { if (confirm(`Interrupt ${state.selected.tmux_name}?`)) sessionAction('interrupt', {}); };
-$('#stop-session').onclick = () => { if (confirm(`Stop ${state.selected.tmux_name}? Its files and transcript will be kept.`)) sessionAction('kill', { confirmed: true }); };
+const stopSelectedSession = () => { if (confirm(`Stop ${state.selected.tmux_name}? This ends its running process. Files and recent output will be kept.`)) sessionAction('kill', { confirmed: true }); };
+$('#stop-session').onclick = stopSelectedSession;
+$('#stop-terminal-session').onclick = stopSelectedSession;
 $('#attention-form').onsubmit = event => { event.preventDefault();const f=event.target;sessionAction('attention',{state:f.elements.state.value,note:f.elements.note.value},'PATCH'); };
 $('#show-output').onclick = async () => { const s = state.selected; try { const output = await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/review?lines=500`); if (s.id !== state.selected?.id) return; $('#output-text').textContent = output.content || 'No captured output.'; $('#session-output').hidden = false; } catch (e) { message(e.message); } };
 $('#show-skills').onclick = async () => {
@@ -261,13 +284,14 @@ form.elements.tool.addEventListener('change', previewSkills);
 $('#new-session').onclick = () => openCreate(); $('#cancel-create').onclick = () => $('#create-dialog').close();
 form.elements.profile.onchange = configureRole; form.elements.tool.onchange = configureTool;
 $('#open-terminal').onclick = openTerminal;
-$('#close-terminal').onclick = () => { $('#terminal-panel').hidden = true; $('#terminal-panel').classList.remove('expanded'); $('#expand-terminal').textContent = 'Full screen'; };
-$('#expand-terminal').onclick = () => { const expanded = $('#terminal-panel').classList.toggle('expanded'); $('#expand-terminal').textContent = expanded ? 'Restore' : 'Full screen'; };
+$('#close-terminal').onclick = () => { $('#terminal-panel').hidden = true; $('#terminal-panel').classList.remove('expanded'); $('#expand-terminal').textContent = 'Full screen'; syncTerminalVisibility(); };
+$('#expand-terminal').onclick = () => { const expanded = $('#terminal-panel').classList.toggle('expanded'); $('#expand-terminal').textContent = expanded ? 'Restore' : 'Full screen'; syncTerminalVisibility(); };
 $('#refresh').onclick = refresh;
 window.addEventListener('hashchange', route); window.addEventListener('focus', refresh);
 initTheme($('#theme'));
 try {
   const [me, instance] = await Promise.all([api('/api/me'), api('/api/interface')]); state.me = me; state.workspace = instance.workspace;
+  if(me.session_limits)$('#session-capacity').textContent=`Up to ${me.session_limits.managed} running sessions. Stopped sessions do not use a slot.`;
   $('#instance').textContent = instance.label;
   for (const id of ['#current-version','#settings-current']) if (instance.current_url) { $(id).href = instance.current_url; $(id).hidden = false; }
   $('#tools').replaceChildren(...me.tool_status.map(x => el('p', `${x.name} · ${x.status}${x.reason ? ` — ${x.reason}` : ''}`, 'tool')));

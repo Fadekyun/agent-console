@@ -367,6 +367,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             "tool_status": catalog,
             "auth_contexts": session_manager.auth_contexts(),
             "default_tool": "codex",
+            "session_limits": {"managed": session_manager.settings.max_managed_sessions, "children": session_manager.settings.max_children_per_parent},
             "default_agent_modes": {"codex": "auto", "codex-pro": "auto", "opencode": "plan"},
             "profiles": profile_summaries(),
         }

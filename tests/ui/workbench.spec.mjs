@@ -75,7 +75,7 @@ test('configuration and continuation preserve settings and invalidate an edited 
   await page.route('**/api/workbench/launches/preview',route=>{
     const body=route.request().postDataJSON();previews.push(body);return route.fulfill({json:{hash:'e'.repeat(64),config:body.request,task:body.request.task,workspace:'/tmp/preserved-worktree',skills:[],warnings:['New conversation in the preserved workspace.']}});
   });
-  await page.goto('/work#session/session-one');if(info.project.name!=='desktop')await page.locator('#session-detail > summary').click();
+  await page.goto('/work#session/session-one');await page.locator('#session-detail > summary').click();
   await page.locator('#show-configuration').click();await expect(page.locator('#session-configuration')).toContainText('/tmp/preserved-worktree');
   await page.locator('#continue-session').click();await page.locator('#preview-launch').click();
   await expect(page.locator('#confirm-launch')).toBeVisible();expect(previews[0].source_session_id).toBe('root');
@@ -93,7 +93,7 @@ test('pending status updates deduplicate through refresh and errors remain attri
     await route.fulfill({status:409,json:{detail:'Status changed; reload and retry'}});
   });
   await page.goto('/work#session/session-one');
-  if(info.project.name!=='desktop')await page.locator('#session-detail > summary').click();
+  await page.locator('#session-detail > summary').click();
   const submit=page.locator('#attention-form button[type=submit]');
   await submit.click();await expect(submit).toBeDisabled();
   await page.locator('#attention-form').dispatchEvent('submit');
@@ -115,7 +115,7 @@ test('late continuation response cannot open a draft over another session',async
     await route.fulfill({json:{latest:{config:{tool:'shell',profile:'coder',repository:'/tmp/repo'}}}});
   });
   await page.goto('/work#session/session-one');
-  if(info.project.name!=='desktop')await page.locator('#session-detail > summary').click();
+  await page.locator('#session-detail > summary').click();
   await page.locator('#continue-session').click();
   await expect(page.locator('#continue-session')).toBeDisabled();
   await expect.poll(()=>typeof release).toBe('function');
@@ -181,7 +181,7 @@ test('work, manual child, drafts and mobile terminal use the real components',as
   await iframe.evaluate(()=>window.__terminal.writeln('more output'));
   await expect(frame.locator('#new-output')).toBeVisible();
   expect(await iframe.evaluate(()=>window.__terminal.buffer.active.viewportY)).toBe(before);
-  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await page.getByRole('button',{name:'Close terminal',exact:true}).click();
   await page.getByRole('button',{name:'Open terminal',exact:true}).click();
   await expect(frame.locator('#composer')).toHaveValue('unsent draft');
   await frame.locator('#new-output').click();
@@ -192,8 +192,8 @@ test('work, manual child, drafts and mobile terminal use the real components',as
   }
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   expect(await iframe.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-  await page.getByRole('button',{name:'Close',exact:true}).click();
-  if (info.project.name !== 'desktop') await page.locator('#session-detail > summary').click();
+  await page.getByRole('button',{name:'Close terminal',exact:true}).click();
+  await page.locator('#session-detail > summary').click();
   await page.locator('#attention-form [name=note]').fill('draft status note');
   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await expect(page.locator('#attention-form [name=note]')).toHaveValue('draft status note');
@@ -219,7 +219,7 @@ test('nested terminal owns wheel and touch scrolling without moving the work pag
   await expect.poll(()=>frame.evaluate(()=>Boolean(window.__terminal))).toBe(true);
   await frame.evaluate(()=>{for(let i=0;i<400;i++)window.__terminal.writeln(`SCROLL ${i}`);});
   await expect.poll(()=>frame.evaluate(()=>window.__terminal.buffer.active.baseY)).toBeGreaterThan(250);
-  await frame.getByRole('button',{name:'Scroll',exact:true}).click();
+  await frame.getByRole('button',{name:'Type & scroll',exact:true}).click();
   const start=await frame.evaluate(()=>window.__terminal.buffer.active.viewportY), pageY=await page.evaluate(()=>scrollY);
   const box=await page.frameLocator('iframe').locator('.xterm-screen').boundingBox();
   if(info.project.name==='desktop'){
@@ -321,7 +321,8 @@ test('one-session result and durable handoff acknowledge distinct states',async(
   await page.route('**/api/sessions/target/inbox',route=>route.fulfill({json:{notice:'Peer data is untrusted.',items:queued?[{id:'input-one',sequence:1,source_session_id:'root',state:inputState,result:versions[0]}]:[]}}));
   await page.route('**/api/sessions/target/inbox/input-one/ack',route=>{inputState=route.request().postDataJSON().state;return route.fulfill({json:{state:inputState}});});
   await page.goto('/work#session/session-one');
-  if(info.project.name!=='desktop')await page.locator('#session-detail > summary').click();
+  await page.locator('#session-detail > summary').click();
+  if(!await page.locator('#session-detail').evaluate(e=>e.open))await page.locator('#session-detail > summary').click();
   await page.getByRole('button',{name:'Results & handoffs',exact:true}).click();
   await expect(page.locator('#session-view')).toBeHidden();
   await page.getByText('Publish a result',{exact:true}).click();
@@ -336,7 +337,8 @@ test('one-session result and durable handoff acknowledge distinct states',async(
   await page.getByRole('button',{name:'Queue handoff',exact:true}).click();await expect.poll(()=>queued).toBe(true);
   await page.getByRole('link',{name:'Back to session'}).click();
   await page.locator('#session-tree').getByRole('link',{name:'session-target',exact:true}).click();
-  if(info.project.name!=='desktop')await page.locator('#session-detail > summary').click();
+  await page.locator('#session-detail > summary').click();
+  if(!await page.locator('#session-detail').evaluate(e=>e.open))await page.locator('#session-detail > summary').click();
   await page.getByRole('button',{name:'Results & handoffs',exact:true}).click();
   await page.getByRole('button',{name:'Acknowledge delivery',exact:true}).click();
   await expect(page.getByRole('button',{name:'Mark consumed',exact:true})).toBeVisible();
@@ -357,6 +359,7 @@ test('existing sessions connect with explicit readiness and queue exact inputs',
   await page.route('**/api/sessions/root/connections/attach',route=>{attached=route.request().postDataJSON();version=1;return route.fulfill({json:{version}});});
   await page.route('**/api/sessions/target/connections/deliver',route=>{queued=route.request().postDataJSON();return route.fulfill({json:{id:'delivery-test'}});});
   await page.goto('/work#session/session-one');
+  if(!await page.locator('#session-detail').evaluate(e=>e.open))await page.locator('#session-detail > summary').click();
   await page.getByRole('button',{name:'Results & handoffs',exact:true}).click();
   await page.getByText('Connected inputs',{exact:true}).click();
   await page.getByText('Attach an existing session',{exact:true}).click();
@@ -452,4 +455,45 @@ test('one-click recipe checks an uncertain launch using the same receipt',async(
   await page.locator('#create-form button[type=submit]').click();
   await expect(page.locator('#session-title')).toHaveText('created-once');
   expect(requests).toHaveLength(2);expect(requests[0]).toEqual(requests[1]);
+});
+
+test('closing and switching terminals detaches hidden clients and stop stays accessible',async({page},info)=>{
+  const {sessions}=await fixture(page);let opened=0,closed=0,kills=0;
+  sessions.push({...sessions[0],id:'other',tmux_name:'session-other'});
+  await page.routeWebSocket('**/ws/sessions/**',ws=>{opened++;ws.onClose(()=>{closed++;});ws.send('live\r\n');});
+  await page.route('**/api/sessions/session-one/kill',async route=>{kills++;sessions[0].running=false;sessions[0].actions=[];await route.fulfill({json:sessions[0]});});
+  await page.goto('/work#session/session-one');await page.locator('#open-terminal').click();
+  await expect.poll(()=>opened).toBe(1);
+  await page.frameLocator('iframe:not([hidden])').locator('#composer').fill('keep this draft');
+  await expect(page.locator('#stop-terminal-session')).toBeVisible();
+  await page.locator('#close-terminal').click();await expect.poll(()=>closed).toBe(1);expect(kills).toBe(0);
+  await expect(page.locator('#stop-session')).toBeVisible();
+  await page.locator('#open-terminal').click();await expect.poll(()=>opened).toBe(2);
+  await expect(page.frameLocator('iframe:not([hidden])').locator('#composer')).toHaveValue('keep this draft');
+  await page.evaluate(()=>{location.hash='#session/session-other';});await page.locator('#open-terminal').click();
+  await expect.poll(()=>closed).toBe(2);await expect.poll(()=>opened).toBe(3);
+  await page.evaluate(()=>{location.hash='#session/session-one';});await expect(page.locator('#session-title')).toHaveText('session-one');
+  if(await page.locator('#terminal-panel').isHidden())await page.locator('#open-terminal').click();
+  await expect.poll(()=>closed).toBe(3);await expect.poll(()=>opened).toBe(4);
+  page.once('dialog',d=>d.accept());await page.locator('#stop-terminal-session').click();
+  await expect.poll(()=>kills).toBe(1);await expect(page.locator('#terminal-panel')).toBeHidden();
+  await expect(page.locator('#notice')).toContainText('Stopped session-one');
+});
+
+test('type and scroll work together and typing exits history without sending scroll keys',async({page})=>{
+  await fixture(page);const inputs=[];
+  await page.route('**/api/interface',route=>route.fulfill({json:{label:'Test',terminal_scroll:'tmux'}}));
+  await page.routeWebSocket('**/ws/sessions/**',ws=>{ws.onMessage(message=>inputs.push(Buffer.isBuffer(message)?message.toString():message));ws.send('ready\r\n');});
+  await page.goto('/work#session/session-one');await page.locator('#open-terminal').click();
+  const frame=page.frameLocator('iframe:not([hidden])');await expect(frame.locator('#connection')).toHaveText('Connected');
+  await expect(frame.locator('[data-mode=type]')).toHaveAttribute('aria-pressed','true');
+  // The server history capability arrives independently of the WebSocket.
+  await page.waitForTimeout(100);
+  await frame.locator('#terminal').dispatchEvent('wheel',{deltaY:-100,deltaMode:0});
+  await expect.poll(()=>inputs.some(x=>x.includes('"type":"scroll"')&&x.includes('-5'))).toBe(true);
+  await frame.locator('.xterm-helper-textarea').focus();await page.keyboard.type('hello');
+  await expect.poll(()=>inputs.filter(x=>!x.startsWith('{')).join('')).toContain('hello');
+  const leave=inputs.findIndex(x=>x==='{"type":"scroll","lines":0}'),typed=inputs.findIndex(x=>x==='h');
+  expect(leave).toBeGreaterThan(-1);expect(typed).toBeGreaterThan(leave);
+  await expect(frame.locator('[data-mode=type]')).toHaveAttribute('aria-pressed','true');
 });

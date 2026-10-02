@@ -424,6 +424,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
         me = self.client.get("/api/me", headers=self.headers).json()
+        self.assertEqual(me["session_limits"], {"managed": 4, "children": self.manager.settings.max_children_per_parent})
         self.assertEqual(me["default_tool"], "codex")
         self.assertEqual(me["default_agent_modes"]["codex"], "auto")
         profiles = me["profiles"]

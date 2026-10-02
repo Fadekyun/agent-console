@@ -12,6 +12,8 @@ const terminalFrame = $('.terminal-frame');
 if (terminalFrame) terminalFrame.setAttribute('aria-label', `Terminal session ${name}`);
 
 const isEmbedded = location.search.includes('embed=1');
+const managedVisibility = isEmbedded && new URLSearchParams(location.search).get('lifecycle') === 'managed';
+let viewVisible = !managedVisibility;
 const coarsePointer = matchMedia('(pointer: coarse)').matches;
 if (isEmbedded) document.body.classList.add('terminal-embedded');
 const terminal = new Terminal({ cursorBlink: true, scrollback: 10000, fontSize: coarsePointer ? 13 : 14, theme: xtermTheme() });
@@ -25,13 +27,15 @@ const reconnect = $('#reconnect');
 const composer = $('#composer');
 const newOutput = $('#new-output');
 let socket;
-let mode = coarsePointer || new URLSearchParams(location.search).get('mode') === 'scroll' ? 'scroll' : 'type';
+let mode = new URLSearchParams(location.search).get('mode') || (coarsePointer ? 'scroll' : 'type');
+let focusOnConnect = !coarsePointer && !isEmbedded;
 let resizeFrame;
 let alternateScreen = false;
 let touchStartY = null;
 let following = true;
 let serverHistory = false;
 let historyMode = false;
+let pendingScroll = 0, scrollTimer = null;
 let hasUnread = false;
 let briefLoaded = false;
 let reconnectTimer = null;
@@ -54,19 +58,41 @@ window.addEventListener('message', (event) => {
   if (!isEmbedded) return;
   if (event.origin !== window.location.origin) return;
   if (event.source !== window.parent) return;
+  if (managedVisibility && event.data?.type === 'agent-console:terminal-visibility' && typeof event.data.visible === 'boolean') {
+    if (viewVisible === event.data.visible) return;
+    viewVisible = event.data.visible;
+    if (viewVisible) { autoReconnectEnabled = true; cancelReconnect(); connect(); }
+    else {
+      saveDraft(); if (historyMode) leaveHistory(); autoReconnectEnabled = false; cancelReconnect();
+      if (socket) { socket.onclose = null; socket.onerror = null; socket.onmessage = null; socket.close(); socket = null; }
+      setStatus('Terminal closed · session still running');
+    }
+    return;
+  }
   if (event.data?.type !== 'agent-console:focus-terminal') return;
   if (mode === 'type') terminal.focus();
 });
 
 function leaveHistory() {
+  clearTimeout(scrollTimer); scrollTimer = null; pendingScroll = 0;
   if (historyMode && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'scroll', lines: 0 }));
   historyMode = false; following = true; newOutput.hidden = true;
 }
 function scrollHistory(lines) {
   if (!lines || socket?.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify({ type: 'scroll', lines: Math.max(-50, Math.min(50, lines)) }));
+  // Coalesce wheel/touch bursts instead of queuing a tmux subprocess per event.
+  pendingScroll = Math.max(-200, Math.min(200, pendingScroll + lines));
+  if (!scrollTimer) scrollTimer = setTimeout(flushScroll, 32);
   historyMode = true; following = false; newOutput.hidden = false;
   newOutput.textContent = 'Latest output';
+}
+function flushScroll() {
+  scrollTimer = null;
+  if (!pendingScroll || socket?.readyState !== WebSocket.OPEN) { pendingScroll = 0; return; }
+  const lines = Math.max(-50, Math.min(50, pendingScroll));
+  pendingScroll -= lines;
+  socket.send(JSON.stringify({type:'scroll', lines}));
+  if (pendingScroll) scrollTimer = setTimeout(flushScroll, 32);
 }
 function send(value) {
   if (socket?.readyState !== WebSocket.OPEN) throw new Error('Terminal is disconnected');
@@ -83,7 +109,7 @@ function resize() {
   cancelAnimationFrame(resizeFrame);
   resizeFrame = requestAnimationFrame(() => {
     try {
-      if (!terminalFrame.clientWidth || !terminalFrame.clientHeight) return;
+      if (!viewVisible || !terminalFrame.clientWidth || !terminalFrame.clientHeight) return;
       fit.fit();
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
       if (following) terminal.scrollToBottom();
@@ -119,12 +145,13 @@ function cancelReconnect() {
 }
 
 function connect() {
+  if (!viewVisible) return;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (socket) { socket.onclose = null; socket.onerror = null; socket.onmessage = null; socket.close(); }
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   socket = new WebSocket(`${protocol}//${location.host}/ws/sessions/${encodeURIComponent(name)}`);
   socket.binaryType = 'arraybuffer'; setStatus('Connecting…'); reconnect.disabled = true;
-  socket.onopen = () => { cancelReconnect(); setStatus('Connected'); resize(); if (following) terminal.scrollToBottom(); if (mode === 'type') terminal.focus(); };
+  socket.onopen = () => { cancelReconnect(); setStatus('Connected'); resize(); if (following) terminal.scrollToBottom(); if (focusOnConnect && mode === 'type' && document.activeElement !== composer) terminal.focus(); focusOnConnect = false; };
   socket.onmessage = (event) => {
     const output = typeof event.data === 'string' ? event.data : decoder.decode(event.data, { stream: true });
     terminal.write(output, () => {
@@ -141,12 +168,14 @@ function connect() {
     });
   };
   socket.onclose = (event) => {
-    if (event.code === 4001) {
+    if (event.code === 4001 || event.code === 4404) {
       autoReconnectEnabled = false; setStatus('Session ended');
       reconnect.disabled = true;
     } else if (event.code === 4000) {
       autoReconnectEnabled = false; setStatus('Detached by user; tmux is still running');
       reconnect.disabled = false;
+    } else if ([4400, 4403, 4429].includes(event.code)) {
+      autoReconnectEnabled = false; setStatus(event.reason || 'Connection unavailable'); reconnect.disabled = false;
     } else {
       setStatus(`Detached (${event.code}${event.reason ? `: ${event.reason}` : ''})`);
       reconnect.disabled = true;
@@ -156,12 +185,12 @@ function connect() {
   socket.onerror = () => { setStatus('Connection error'); }; // close schedules exactly one retry
 }
 
-function setMode(selected) {
+function setMode(selected, focus = true) {
   mode = ['scroll', 'type', 'select'].includes(selected) ? selected : 'scroll';
   document.body.dataset.terminalMode = mode;
   terminal.options.disableStdin = mode !== 'type';
   $$('[data-mode]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.mode === mode)));
-  if (mode === 'type') { if (historyMode) leaveHistory(); terminal.focus(); }
+  if (mode === 'type') { if (historyMode) leaveHistory(); if (focus) terminal.focus(); }
   else terminal.blur();
 }
 
@@ -326,13 +355,13 @@ let touchViewport = 0;
 let touchAlternate = false;
 let touchLines = 0;
 $('#terminal').addEventListener('wheel', (event) => {
-  if (mode !== 'scroll' || !serverHistory || event.ctrlKey) return;
+  if (!['scroll', 'type'].includes(mode) || !serverHistory || event.ctrlKey) return;
   event.preventDefault(); event.stopPropagation();
   const lines = Math.sign(event.deltaY) * Math.max(1, Math.round(Math.abs(event.deltaY) / (event.deltaMode === 0 ? 20 : 1)));
   if (lines < 0 || historyMode) scrollHistory(lines);
 }, { passive: false, capture: true });
 $('#terminal').addEventListener('touchstart', (event) => {
-  if (mode !== 'scroll' || event.touches.length !== 1) { touchStartY = null; return; }
+  if (!['scroll', 'type'].includes(mode) || event.touches.length !== 1) { touchStartY = null; return; }
   touchStartY = event.touches[0].clientY;
   touchViewport = terminal.buffer.active.viewportY; touchLines = 0;
   touchAlternate = terminal.buffer.active.type === 'alternate' || alternateScreen;
@@ -352,10 +381,10 @@ $('#terminal').addEventListener('touchmove', (event) => {
   }
 }, { passive: false, capture: true });
 $('#terminal').addEventListener('touchend', (event) => {
-  if (mode !== 'scroll' || touchStartY === null) return;
+  if (!['scroll', 'type'].includes(mode) || touchStartY === null) return;
   const delta = (event.changedTouches[0]?.clientY ?? touchStartY) - touchStartY;
   touchStartY = null; event.stopPropagation();
-  if (!serverHistory && touchAlternate && Math.abs(delta) >= 48) {
+  if (mode === 'scroll' && !serverHistory && touchAlternate && Math.abs(delta) >= 48) {
     try { send(delta > 0 ? '\x1b[5~' : '\x1b[6~'); } catch (error) { setStatus(error.message); }
   }
 }, { passive: true, capture: true });
@@ -404,7 +433,7 @@ composer.addEventListener('keydown', (event) => {
 });
 
 initTheme($('#terminal-theme'), () => { terminal.options.theme = xtermTheme(); resize(); });
-setMode(mode); syncVisualViewport(); autoSizeComposer(); autoReconnectEnabled = true; cancelReconnect(); connect(); loadBrief(true);
+setMode(mode, false); syncVisualViewport(); autoSizeComposer(); autoReconnectEnabled = true; cancelReconnect(); connect(); loadBrief(true);
 fetch(`/api/sessions/${encodeURIComponent(name)}/review?lines=1`, { cache: 'no-store' })
   .then((response) => response.ok ? response.json() : null)
   .then((body) => { alternateScreen = Boolean(body?.alternate_screen); })

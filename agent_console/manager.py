@@ -2055,6 +2055,15 @@ class SessionManager:
         tmux = self.tmux_for_name(name)
         pane_pids = tmux.pane_pids(name)
         if tmux.exists(name):
+            # Preserve bounded recent output before ending the pane. A failed capture
+            # leaves the process running, so the UI never falsely promises recovery.
+            captured, _ = tmux.capture(name, lines=REVIEW_MAX_LINES, max_bytes=REVIEW_MAX_BYTES)
+            transcript = self.settings.state_dir / "transcripts" / f"{name}-stopped-{time.time_ns()}.txt"
+            descriptor = os.open(transcript, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+                output.write(captured)
+            with self.database.connect() as conn:
+                conn.execute("UPDATE sessions SET archived_transcript=? WHERE id=?", (str(transcript), session["id"]))
             tmux.kill(name)
         for _ in range(20):
             if not tmux.exists(name):

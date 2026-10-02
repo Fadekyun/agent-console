@@ -1,3 +1,9 @@
+## Terminal interaction and session lifecycle — 2026-10-02 (#90)
+
+- Combined typing/history scrolling, hidden-view PTY detachment, focus and viewport handling, visible stop action, and saved recent output address functional friction.
+- Main cap is configurable and raised to 24; Settings reports the active value.
+- Further UI simplification is proposed in UI_REVIEW_20261002.md: compact tree, progressive terminal controls and a consolidated details drawer. This broader redesign is not implemented by this repair.
+
 ## Native session-tree awareness — 2026-10-02 (#90)
 
 - Live group discovery and relative/stable-ID output reads work across native harnesses without workflow state or published results.

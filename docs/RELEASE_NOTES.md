@@ -1,3 +1,10 @@
+## 0.22.0 — 2026-10-02 (#90)
+
+- Impact: embedded terminals default to combined typing and history scrolling. Hidden views detach their browser PTY; reopening retains drafts and reconnects. Terminal startup no longer steals focus from the surrounding page. Wheel/touch bursts are coalesced. Stop is visible in the session heading and terminal header, Close terminal only disconnects the view, and stopping preserves private bounded recent output. Secondary session details start collapsed.
+- Configuration/migration: no schema migration. `/api/me` reports configured session limits; Settings displays the cap. Main deployment raises `AGENT_CONSOLE_MAX_SESSIONS` from the default 12 to 24; staging keeps its separate cap. Scheduled workflow envelopes and child limits are unchanged.
+- Verification: lifecycle/API tests, desktop/360px/390px Workbench tests for simultaneous typing/scrolling, hidden-client detachment, stop, draft preservation and focus; real staging tmux checks. See UI_REVIEW_20261002.md for findings and proposed next design pass.
+- Rollback: select 0.21.0, retaining state and saved transcripts. Restore the prior runtime.env only if operator edits have not intervened; the cap is independent of source rollback. Existing session processes are preserved on web-only restart.
+
 ## 0.21.0 — 2026-10-02 (#90)
 
 - Impact: grouped native sessions discover their live parent tree using `session relatives --current` and `session tree --current`. Relative or stable-ID output reads eliminate manual name lookup. Later additions and renames are visible on refresh. Normal launch instructions and guides no longer require workflow reporting or waiting for every child.
