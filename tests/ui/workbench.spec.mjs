@@ -497,3 +497,16 @@ test('type and scroll work together and typing exits history without sending scr
   expect(leave).toBeGreaterThan(-1);expect(typed).toBeGreaterThan(leave);
   await expect(frame.locator('[data-mode=type]')).toHaveAttribute('aria-pressed','true');
 });
+
+test('stop closes the terminal even while an earlier refresh is pending',async({page})=>{
+  const {sessions}=await fixture(page);
+  await page.goto('/work#session/session-one');await page.locator('#open-terminal').click();
+  await expect(page.frameLocator('iframe:not([hidden])').locator('#connection')).toHaveText('Connected');
+  let pending;const stale=structuredClone(workbenchData(sessions));
+  await page.route('**/api/workbench',async route=>{pending=route;});
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await expect.poll(()=>Boolean(pending)).toBe(true);
+  await page.route('**/api/sessions/session-one/kill',async route=>{sessions[0].running=false;sessions[0].actions=[];await route.fulfill({json:sessions[0]});});
+  page.once('dialog',d=>d.accept());await page.locator('#stop-terminal-session').click();
+  await expect(page.locator('#terminal-panel')).toBeHidden();await expect(page.locator('iframe')).toHaveCount(0);
+  await page.unroute('**/api/workbench');await pending.fulfill({json:stale});
+});

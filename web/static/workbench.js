@@ -224,7 +224,15 @@ async function sessionAction(action, payload, method='POST') {
   const key=`${s.id}:${action}`;if(pendingSessionActions.has(key))return;
   pendingSessionActions.add(key);renderPendingActions();
   try {
-    await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${action}`,payload,method);await refresh();
+    await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${action}`,payload,method);
+    if(action==='kill') {
+      state.frames.get(s.tmux_name)?.remove();state.frames.delete(s.tmux_name);
+      if(state.selected?.id===s.id)$('#terminal-panel').hidden=true;
+      syncTerminalVisibility();
+    }
+    // A refresh started before the mutation can still contain the old live state.
+    if(state.loading)await state.loading;
+    await refresh();
     if(action==='kill')message(`Stopped ${s.tmux_name}. Files and recent output are kept.`);
     if(action==='attention')message(`Status updated for ${s.tmux_name}.`);
   } catch(error) { message(`${s.tmux_name}: ${error.message}`); }
