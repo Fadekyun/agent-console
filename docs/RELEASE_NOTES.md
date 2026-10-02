@@ -1,3 +1,10 @@
+## 0.21.0 — 2026-10-02 (#90)
+
+- Impact: grouped native sessions discover their live parent tree using `session relatives --current` and `session tree --current`. Relative or stable-ID output reads eliminate manual name lookup. Later additions and renames are visible on refresh. Normal launch instructions and guides no longer require workflow reporting or waiting for every child.
+- Configuration/migration: none; uses existing native parent links across harnesses. No schema change. New instructions apply to future launches; existing sessions can use the commands immediately. Tree membership is context, not delegation or shared model memory. Scheduled workflows retain their contracts.
+- Verification: read-only CLI tests cover late additions, rename, ancestors, descendants, ambiguous selection, saved transcript bounds, unrelated trees and cycles. Existing session/launcher tests and direct-child browser checks cover the unchanged launch path.
+- Rollback: select 0.20.2 with state retained; restore guide backups only if rollout hashes still match. Older source lacks relative CLI commands. Running terminals and historical workflow records remain intact.
+
 ## 0.20.2 — 2026-10-02 (#90)
 
 - Impact: manual Add session opens a child terminal directly. Dependency scheduling is an explicit option; agent proposals retain review. Recipe and continuation drafts start with one button; configuration validation and receipt deduplication happen internally. Optional configuration preview remains available.

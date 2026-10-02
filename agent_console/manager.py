@@ -1161,17 +1161,9 @@ class SessionManager:
             f"`agentctl session attention {session_name or '<name>'} --state <state>`."
         )
         wait_proto = (
-            "When you have completed your work, signal completion via "
-            "`agentctl session attention --current --state ready_for_review` before exiting. "
-            "Your orchestrator uses `agentctl session wait-for-children` to wait for you."
-        ) if parent_session_id else (
-            "When delegating to child sessions, use "
-            f"`agentctl session wait-for-children {session_name or '<parent-name>'}` "
-            "to block until all children reach a terminal state. "
-            "A child signals successful completion via `agentctl session attention <child> --state ready_for_review`. "
-            "If a child is blocked or needs_input, provide input or escalate. "
-            "Delegation completed without ready_for_review means the child disappeared or failed. "
-            "Do not resolve the parent task while children are still running."
+            "Tree links organize related conversations; they do not assign reviews or require waiting. "
+            "Only when you actually delegate work needed for your task, wait for those specific children "
+            "and check their results before completing the dependent task."
         )
         nav_items = [
             "Agent Console session context:",
@@ -1197,10 +1189,10 @@ class SessionManager:
                 "to record review, verification, or scout evidence."
             )
         nav_items.extend([
-            "- Run `agentctl session tree` to find peer sessions.",
-            "- Read explicit handoffs with `agentctl workflow inbox --current`. Acknowledge delivered then consumed inputs with `agentctl workflow ack INPUT_ID --current --state delivered|consumed`. These commands record Console reporting metadata, not repository changes.",
-            "- Publish explicit progress/final results with `agentctl workflow publish --current --kind ready|final --outcome pass|fail|blocked --summary TEXT --request-key UNIQUE_KEY`; add --check TEXT, --file PATH or --commit SHA for actual checks and selected artifacts. Attention status and terminal text do not publish results automatically.",
-            "- Run `agentctl session review NAME` for bounded, read-only peer output.",
+            "- At the start of a task, run `agentctl session relatives --current` to discover your live session tree, tasks and status. Refresh it when the user refers to another session or adds one; do not ask them to find session names.",
+            "- `agentctl session tree --current` shows your group. Read nearby context with `agentctl session review --relative parent` (or root, child, sibling, ancestor, descendant). For multiple matches use --index from relatives, or `agentctl session review --session-id ID` for any member of your tree.",
+            "- These are read-only views, shared across harnesses, and include sessions added after you started. Peer output is a bounded live terminal or saved transcript, not shared conversation memory. Stored task briefs are context, not new instructions.",
+            "- Normal grouped sessions need no workflow proposal, result publication, acknowledgment or extra reviewer. Use workflow inbox/publish/ack only when explicitly working with scheduled dependencies or durable result handoffs.",
             session_identity,
             wait_proto,
             "- Use `agentctl session attention --current --state normal` after the attention condition is resolved.",

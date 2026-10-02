@@ -1,3 +1,9 @@
+## Native session-tree awareness — 2026-10-02 (#90)
+
+- Live group discovery and relative/stable-ID output reads work across native harnesses without workflow state or published results.
+- Default context and operating guides distinguish related conversations from delegated work. New children need no automatic reviewer or wait chain; scheduled workflows remain optional.
+- Existing Add session keeps the ordinary harness/settings picker and starts a direct child.
+
 ## Simpler everyday sessions — 2026-10-02 (#90)
 
 - Manual Add session now creates a child directly, including Pi/Hermes interactive sessions. Scheduled follow-ups remain opt-in and reviewed.

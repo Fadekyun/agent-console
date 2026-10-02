@@ -1025,6 +1025,12 @@ class SessionIntegrationTests(unittest.TestCase):
                 session_name="pin-spec-test",
                 session_id="sess-pin-spec-test",
             )
+            context = (self.manager.settings.state_dir / 'contexts' / 'pin-spec-test.md').read_text()
+            self.assertIn('session relatives --current', context)
+            self.assertIn('session review --relative parent', context)
+            self.assertIn('Tree links organize related conversations', context)
+            self.assertNotIn('Your orchestrator uses', context)
+            self.assertNotIn('Do not resolve the parent task while children are still running', context)
             self.assertIn('model="gpt-5.6-sol"', spec.argv)
             self.assertIn('model_reasoning_effort="high"', spec.argv)
             self.assertIn('plan_mode_reasoning_effort="xhigh"', spec.argv)
@@ -1412,13 +1418,14 @@ class WaitProtocolTests(unittest.TestCase):
         self.assertIsNotNone(status)
         self.assertEqual(status["outcome"], "success")
 
-    def test_context_file_includes_wait_protocol(self) -> None:
+    def test_context_file_distinguishes_tree_links_from_delegated_work(self) -> None:
         parent = self.manager.create(
             tool="shell", profile="general", name="wait-ctx-parent",
             repository=str(self.workspace),
         )
         ctx = self.manager.session_context("wait-ctx-parent")
-        self.assertIn("wait-for-children", ctx["context"])
+        self.assertIn("session relatives --current", ctx["context"])
+        self.assertIn("Only when you actually delegate", ctx["context"])
 
         child = self.manager.delegate(
             profile="planner", parent=parent["id"], task="wait context test",
@@ -1426,7 +1433,8 @@ class WaitProtocolTests(unittest.TestCase):
         )["session"]
         child_ctx = self.manager.session_context(child["tmux_name"])
         self.assertIn("ready_for_review", child_ctx["context"])
-        self.assertIn("wait-for-children", child_ctx["context"])
+        self.assertIn("session review --relative parent", child_ctx["context"])
+        self.assertIn("they do not assign reviews or require waiting", child_ctx["context"])
 
     def test_wait_detects_blocked_child_immediately(self) -> None:
         parent = self.manager.create(
