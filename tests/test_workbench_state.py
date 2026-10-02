@@ -62,6 +62,9 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(view['groups'][0]['children_total'],1)
         history=self.state.history(old['id']);self.assertTrue(any(e['action']=='result.published' for e in history['events']))
         self.assertEqual(self.engine.inspect(old['id'])['root_id'],root['id'])
+        old['initial_task']='Original native brief';current['initial_task']='Current native brief'
+        compact=self.state.snapshot(compact=True);briefs={s['id']:s.get('initial_task') for s in compact['sessions']}
+        self.assertEqual(briefs[old['id']],'Original native brief');self.assertEqual(briefs[current['id']],'Current native brief')
 
     def test_add_below_unlaunched_step_waits_for_its_logical_input(self):
         root=self.session('root');data={'task':'Pending step','reason':'Distinct task','expected_output':'Result','config':{'tool':'shell','profile':'general'},'dependencies':[],'request_key':'one','actor':'test'}
@@ -96,3 +99,81 @@ class WorkbenchTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'managed interactive'):
                 self.engine.svc.session(session['id'])
         with self.assertRaises(KeyError):self.state.history('missing')
+    def test_hide_stopped_parent_running_child_retains_group_and_child_visible(self):
+        parent=self.session('parent');child=self.session('child',parent=parent['id'],running=True)
+        self.publish(parent)
+        self.state.set_visibility(parent['id'],True)
+        view=self.state.snapshot()
+        nodes={n['id']:n for n in view['nodes']}
+        self.assertEqual(len(nodes),2)
+        self.assertEqual(len(view['groups']),1)
+        self.assertEqual(nodes[parent['id']]['hidden'],True)
+        self.assertEqual(nodes[child['id']]['hidden'],False)
+        with self.manager.database.connect() as db:
+            rows=db.execute('SELECT status,tmux_name FROM sessions ORDER BY id').fetchall()
+            self.assertEqual({r['status'] for r in rows},{'detached','process-exited'})
+
+    def test_hide_running_session_raises_and_no_preference_written(self):
+        running=self.session('running',running=True)
+        with self.assertRaisesRegex(ValueError,'Running sessions cannot be hidden'):
+            self.state.set_visibility(running['id'],True)
+        self.assertEqual(self.state.visibility.read(),{})
+
+    def test_legacy_archived_defaults_hidden_explicit_restore_persists(self):
+        session=self.session('legacy')
+        with self.manager.database.connect() as db:
+            db.execute('UPDATE sessions SET status=? WHERE id=?',('archived',session['id']))
+        session['status']='archived'
+        view=self.state.snapshot();node=next(n for n in view['nodes'] if n['id']==session['id'])
+        self.assertEqual(node['hidden'],True)
+        self.state.set_visibility(session['id'],False)
+        new_state=WorkbenchState(self.manager)
+        node=new_state.snapshot()['nodes'];node=next(n for n in node if n['id']==session['id'])
+        self.assertEqual(node['hidden'],False)
+        with self.manager.database.connect() as db:
+            row=db.execute('SELECT status FROM sessions WHERE id=?',(session['id'],)).fetchone()
+            self.assertEqual(row['status'],'archived')
+    def test_compact_snapshot_omits_session_task_keeps_node_task(self):
+        task='Full searchable UniqueTail'*100
+        session=self.session('compact')
+        session['initial_task']=task
+        with self.manager.database.connect() as db:
+            db.execute('UPDATE sessions SET initial_task=? WHERE id=?',(task,session['id']))
+        full=self.state.snapshot()
+        compact=self.state.snapshot(compact=True)
+        self.assertEqual(full['sessions'][0]['initial_task'],task)
+        self.assertNotIn('initial_task',compact['sessions'][0])
+        self.assertEqual(next(n['task'] for n in full['nodes']),task)
+        self.assertEqual(next(n['task'] for n in compact['nodes']),task)
+        self.assertEqual(len(compact['groups']),len(full['groups']))
+        self.assertEqual({g['root_id'] for g in compact['groups']},{g['root_id'] for g in full['groups']})
+        self.assertLess(len(json.dumps(compact,sort_keys=True,ensure_ascii=False)),len(json.dumps(full,sort_keys=True,ensure_ascii=False)))
+
+    def test_strict_visibility_payload_and_missing_identity(self):
+        from agent_console.workbench_state import HideRequest
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            HideRequest(hidden='true')
+        self.assertIs(True,HideRequest(hidden=True).hidden)
+        with self.assertRaises(KeyError):self.state.set_visibility('missing',True)
+        self.assertEqual(self.state.visibility.read(),{})
+
+    def test_visibility_route_keeps_identity_guard_and_strict_payload(self):
+        from fastapi import FastAPI, Header, HTTPException
+        from fastapi.testclient import TestClient
+        from agent_console.workbench_state import workbench_routes
+        session=self.session('api-stopped')
+        def identity(x_operator: str | None = Header(None)):
+            if x_operator!='test':raise HTTPException(401,'Authentication required')
+        app=FastAPI();app.include_router(workbench_routes(self.manager,identity))
+        with TestClient(app) as client:
+            path=f"/api/workbench/sessions/{session['id']}/visibility"
+            self.assertEqual(client.patch(path,json={'hidden':True}).status_code,401)
+            self.assertEqual(self.state.visibility.read(),{})
+            self.assertEqual(client.patch(path,json={'hidden':'true'},headers={'x-operator':'test'}).status_code,422)
+            response=client.patch(path,json={'hidden':True},headers={'x-operator':'test'})
+            self.assertEqual(response.status_code,200)
+            self.assertTrue(response.json()['hidden'])
+            self.assertTrue(self.state.snapshot()['nodes'][0]['hidden'])
+        with self.manager.database.connect() as db:
+            self.assertEqual(db.execute('SELECT status FROM sessions WHERE id=?',(session['id'],)).fetchone()['status'],'process-exited')

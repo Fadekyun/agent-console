@@ -1,3 +1,7 @@
+## Hide/Restore stopped sessions, paginated History, compact summaries, phone connection label — 2026-10-02 (#90)
+
+- Completed in v0.24.0. Reversible persisted stopped-session Hide/Restore with collapsed paginated History; visible running children are never hidden; explicit reviewed acknowledgement preserves result outcomes; recovered refresh notices; matched-child direct links on root search cards; compact work summaries with full task search; visible phone terminal connection label. No DB schema change; new private workbench-visibility.json in state directory.
+
 ## Consolidated terminal lifecycle controls — 2026-10-02 (#90)
 
 - While an open terminal is visible, the session heading hides its Open terminal and Stop session actions so the terminal header is the single lifecycle location; the heading actions are restored when the terminal closes. Visibility is computed centrally in `syncTerminalVisibility()` so refreshes cannot re-show a duplicate Stop.

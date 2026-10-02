@@ -1,10 +1,35 @@
 const attentionNames={normal:'None',needs_input:'Needs input',blocked:'Blocked',ready_for_review:'Needs review'};
-export function setupOverview({state,el,openCreate}) {
+export function setupOverview({state,el,openCreate,api,message,refresh}) {
   const $=selector=>document.querySelector(selector),keys=['project','profile','tool','mechanical','attention','result','scope'];
   let preferences={};try{const stored=JSON.parse(localStorage.getItem('workbench-filters')||'{}');if(stored&&typeof stored==='object'&&!Array.isArray(stored))preferences=stored;}catch{}
   function keepFocus(root){const active=document.activeElement;if(!root.contains(active))return()=>{};const href=active.getAttribute('href'),text=active.textContent,node=active.closest('[data-node]')?.dataset.node;return()=>{if(document.activeElement===document.body)[...root.querySelectorAll('a,button,summary')].find(n=>n.getAttribute('href')===href&&n.textContent===text&&n.closest('[data-node]')?.dataset.node===node)?.focus({preventScroll:true});};}
-  function save(){const values={search:$('#search').value,show:$('#state-filter').value};for(const key of keys)values[key]=$('#filter-'+key).value;try{localStorage.setItem('workbench-filters',JSON.stringify(values));}catch{}}
-  function nodeFor(session){return state.work?.nodes.find(n=>n.id===(state.work.aliases[session.id]||session.id));}
+  function save(){const values={search:$('#search').value,show:$('#state-filter').value,includeHidden:$('#include-hidden')?.checked||false};for(const key of keys)values[key]=$('#filter-'+key).value;try{localStorage.setItem('workbench-filters',JSON.stringify(values));}catch{}}
+  let indexed=null,nodesById=new Map(),sessionsById=new Map(),membersByRoot=new Map(),childrenByParent=new Map();
+  function indexWork(){
+    if(indexed===state.work)return;indexed=state.work;
+    nodesById=new Map((state.work?.nodes||[]).map(n=>[n.id,n]));
+    sessionsById=new Map(state.sessions.map(s=>[s.id,s]));membersByRoot=new Map();childrenByParent=new Map();
+    for(const node of state.work?.nodes||[]){
+      if(!membersByRoot.has(node.root_id))membersByRoot.set(node.root_id,[]);membersByRoot.get(node.root_id).push(node);
+      if(!childrenByParent.has(node.owner_id))childrenByParent.set(node.owner_id,[]);childrenByParent.get(node.owner_id).push(node);
+    }
+  }
+  function nodeFor(session){indexWork();return nodesById.get(state.work?.aliases?.[session.id]||session.id);}
+  let renderKey='',historyOpen=null,historyLimit=20,activeLimit=20,searchTimer;
+  const pending=new Set(),cardCache=new Map();
+  function changedFilters(){historyOpen=null;historyLimit=activeLimit=20;save();renderWork();}
+  async function mutate(node,action){
+    indexWork();const session=sessionsById.get(node.native_id);if(!session)return;
+    const key=`${session.id}:${action}`;if(pending.has(key))return;
+    pending.add(key);renderKey='';renderWork();
+    try{
+      if(action==='visibility')await api(`/api/workbench/sessions/${encodeURIComponent(session.id)}/visibility`,{hidden:!node.hidden},'PATCH');
+      else await api(`/api/sessions/${encodeURIComponent(session.tmux_name)}/attention`,{state:'normal',note:session.attention_note||''},'PATCH');
+      message(action==='visibility'?`${node.hidden?'Restored':'Hidden'} ${session.tmux_name}. History and files are kept.`:`Marked ${session.tmux_name} reviewed. Result outcomes are kept.`);
+      if(state.loading)await state.loading;await refresh();
+    }catch(error){message(`${session.tmux_name}: ${error.message}`);}
+    finally{pending.delete(key);renderKey='';renderWork();}
+  }
   function link(node,results=false){return node.native_name?`#${results?'results':'session'}/${encodeURIComponent(node.native_name)}`:`#step/${encodeURIComponent(node.id)}`;}
   function statuses(node){
     const wrap=el('div',null,'work-statuses');
@@ -34,45 +59,84 @@ export function setupOverview({state,el,openCreate}) {
     return Object.entries(fields).every(([key,field])=>!$('#filter-'+key).value||node[field]===$('#filter-'+key).value);
   }
   function renderWork(){
-    if(!state.work)return;
-    filterOptions();const {nodes,groups,readiness}=state.work;const root=$('#work-list'),restoreFocus=keepFocus(root);root.replaceChildren();
+    if(!state.work||$('#work-view').hidden)return;
+    indexWork();filterOptions();
+    const {nodes,groups,readiness}=state.work,root=$('#work-list');
+    const includeHidden=$('#include-hidden')?.checked||false,show=$('#state-filter').value,allNodes=$('#filter-scope').value==='all';
+    const query=$('#search').value.trim(),filtered=query||keys.some(k=>k!=='scope'&&$('#filter-'+k).value);
+    const expanded=historyOpen??(show!=='active'||!!filtered);
+    const key=JSON.stringify([nodes,groups,readiness.ready,readiness.warnings,query,show,keys.map(k=>$('#filter-'+k).value),includeHidden,expanded,historyLimit,activeLimit,[...pending]]);
+    if(key===renderKey)return;renderKey=key;
+    const restoreFocus=keepFocus(root);root.replaceChildren();
+    const visible=node=>includeHidden||!node.hidden||node.mechanical==='running'||node.waiting;
     const strip=$('#attention-strip');strip.replaceChildren();
-    const attention=nodes.filter(n=>n.needs_attention);
-    if(attention.length){const a=el('a',`${attention.length} session${attention.length===1?' needs':'s need'} attention`);a.href=link(attention[0],!!attention[0].result||!!attention[0].decision);strip.append(a);}
+    const attention=nodes.filter(n=>visible(n)&&n.needs_attention);
+    if(attention.length){
+      const a=el('a',`${attention.length} session${attention.length===1?' needs':'s need'} attention`);a.href='#work';
+      a.onclick=()=>{$('#state-filter').value='attention';changedFilters();};strip.append(a);
+    }
     if(readiness.warnings.length){const a=el('a',`${readiness.warnings.length} readiness warning${readiness.warnings.length===1?'':'s'}`);a.href='#settings';strip.append(a);}
     strip.hidden=!strip.childElementCount;
-    const sections=new Map(),show=$('#state-filter').value,allNodes=$('#filter-scope').value==='all';
-    function appendCard(node,group){
-      if(!sections.has(group.priority)){const section=el('section',null,'work-section'),cards=el('div',null,'cards');section.append(el('h2',['Needs attention','Running','Waiting','Recent'][group.priority]),cards);root.append(section);sections.set(group.priority,cards);}
-      const card=el('article',null,'card'),members=nodes.filter(n=>group.member_ids.includes(n.id));card.dataset.node=node.id;
-      const title=el('h3',node.title.length>100?node.title.slice(0,97)+'…':node.title);card.append(title,statuses(node));
-      if(node.task)card.append(el('p',node.task,'brief muted'));
-      card.append(el('p',`${node.project_name?node.project_name+' · ':''}${node.repository||'No repository'}`,'overview-meta'),el('p',`${node.profile||'Session'} · ${node.tool||'Terminal'}${node.tool&&node.tool!=='shell'?' / '+(node.model||'Default model (not recorded)'):''} · ${node.last_activity?new Date(node.last_activity).toLocaleString():'No activity recorded'}`,'overview-meta'));
-      if(!allNodes&&group.children_total)card.append(el('p',`${group.children_complete}/${group.children_total} children complete${members.some(n=>n.id!==node.id&&n.mechanical==='running')?' · child running':''}`,'small'));
-      const recent=allNodes?node:members.filter(n=>n.result).sort((a,b)=>b.result.created_at.localeCompare(a.result.created_at))[0];
-      if(recent?.result){const result=el('div',null,'recent-result');result.append(el('strong',`${recent.result.kind==='final'?'Final':'Ready'} · ${recent.result.outcome}`),el('p',recent.result.summary,'brief'));card.append(result);}
-      const focus=allNodes?node:members.find(n=>n.needs_attention)||node;
-      const actions=el('div',null,'work-card-actions'),open=el('a','Open work','button');open.href=link(focus);actions.append(open);
-      if(focus.result||focus.decision){const resultLink=el('a',focus.result_state==='failed'?'Review failure':focus.decision==='proposed'?'Review next step':'Results','button');resultLink.href=link(focus,true);actions.append(resultLink);}
-      card.append(actions);sections.get(group.priority).append(card);
-    }
     const entries=[];
     for(const group of groups){
-      const members=nodes.filter(n=>group.member_ids.includes(n.id));
-      const eligible=members.filter(matches);if(!eligible.length)continue;
-      for(const node of allNodes?eligible:[nodes.find(n=>n.id===group.root_id)]){
-        const view=allNodes?{...group,priority:node.needs_attention?0:node.mechanical==='running'?1:node.waiting?2:3,last_activity:node.last_activity}:group;
-        entries.push({node,group:view});
+      const members=membersByRoot.get(group.root_id)||[],eligible=members.filter(n=>visible(n)&&matches(n));
+      if(!eligible.length)continue;
+      for(const node of allNodes?eligible:[nodesById.get(group.root_id)]){
+        if(!node)continue;
+        const visibleMembers=allNodes?[node]:members.filter(visible);
+        const active=visibleMembers.some(n=>n.mechanical==='running'||n.waiting);
+        const priority=visibleMembers.some(n=>n.needs_attention)?0:visibleMembers.some(n=>n.mechanical==='running')?1:visibleMembers.some(n=>n.waiting)?2:3;
+        if(show==='attention'&&priority!==0)continue;
+        entries.push({node,group,members:visibleMembers,eligible,active,priority});
       }
     }
-    entries.sort((a,b)=>b.group.last_activity.localeCompare(a.group.last_activity));entries.sort((a,b)=>a.group.priority-b.group.priority);
-    let recentCount=0;
-    for(const {node,group} of entries){
-      if(show==='attention'&&group.priority!==0)continue;
-      if(show==='active'&&group.priority===3&&recentCount++>=12)continue;
-      appendCard(node,group);
+    entries.sort((a,b)=>a.priority-b.priority||b.group.last_activity.localeCompare(a.group.last_activity));
+    const current=entries.filter(e=>e.active),history=entries.filter(e=>!e.active),sections=new Map(),usedCards=new Set();
+    function appendCard(entry,target){
+      const {node,group,members,eligible}=entry,cardKey=JSON.stringify([node,group,members,eligible.map(n=>n.id),query,allNodes,[...pending]]);
+      usedCards.add(node.id);const cached=cardCache.get(node.id);
+      if(cached?.key===cardKey){target.append(cached.card);return;}
+      const card=el('article',null,'card');card.dataset.node=node.id;
+      card.append(el('h3',node.title.length>100?node.title.slice(0,97)+'…':node.title),statuses(node));
+      if(node.hidden)card.append(el('p','Hidden session · shown as context for its children','small muted'));
+      if(node.task)card.append(el('p',node.task.slice(0,500),'brief muted'));
+      card.append(el('p',`${node.project_name?node.project_name+' · ':''}${node.repository||'No repository'}`,'overview-meta'),el('p',`${node.profile||'Session'} · ${node.tool||'Terminal'}${node.tool&&node.tool!=='shell'?' / '+(node.model||'Default model (not recorded)'):''} · ${node.last_activity?new Date(node.last_activity).toLocaleString():'No activity recorded'}`,'overview-meta'));
+      if(!allNodes&&group.children_total)card.append(el('p',`${group.children_complete}/${group.children_total} children complete${members.some(n=>n.id!==node.id&&n.mechanical==='running')?' · child running':''}`,'small'));
+      const matched=!allNodes&&query?eligible.filter(n=>n.id!==node.id):[];
+      if(matched.length){
+        const matches=el('div',null,'matched-children');matches.append(el('small',`${matched.length} matching child session${matched.length===1?'':'s'}`));
+        for(const child of matched.slice(0,5)){const a=el('a',child.title);a.href=link(child);matches.append(a);}
+        if(matched.length>5)matches.append(el('small',`${matched.length-5} more matches in the session tree`));card.append(matches);
+      }
+      const recent=allNodes?node:members.filter(n=>n.result).sort((a,b)=>b.result.created_at.localeCompare(a.result.created_at))[0];
+      if(recent?.result){const result=el('div',null,'recent-result');result.append(el('strong',`${recent.result.kind==='final'?'Final':'Ready'} · ${recent.result.outcome}`),el('p',recent.result.summary.slice(0,300),'brief'));card.append(result);}
+      const focus=allNodes?node:members.find(n=>n.needs_attention)||members.find(n=>n.mechanical==='running')||members.find(n=>n.waiting)||matched[0]||members.find(n=>n.id===node.id)||members[0]||node;
+      const actions=el('div',null,'work-card-actions'),open=el('a','Open work','button');open.href=link(focus);actions.append(open);
+      if(focus.result||focus.decision){const resultLink=el('a',focus.result_state==='failed'?'Review failure':focus.decision==='proposed'?'Review next step':'Results','button');resultLink.href=link(focus,true);actions.append(resultLink);}
+      const native=sessionsById.get(node.native_id);
+      if(native&&!native.running){const button=el('button',node.hidden?'Restore':'Hide');button.disabled=pending.has(`${native.id}:visibility`);button.onclick=()=>mutate(node,'visibility');button.title='Keep all history and files; only change list visibility';actions.append(button);}
+      const reviewNative=sessionsById.get(focus.native_id);
+      if(focus.reviewable&&reviewNative?.managed&&reviewNative.execution_kind!=='integration-plan'){
+        const button=el('button','Mark reviewed');button.disabled=pending.has(`${reviewNative.id}:review`);button.onclick=()=>mutate(focus,'review');actions.append(button);
+      }
+      card.append(actions);target.append(card);cardCache.set(node.id,{key:cardKey,card});
     }
-    if(!root.childElementCount)root.append(el('p',nodes.length?'No work matches these filters.':'Your staging workspace is ready. Start a session to begin.','empty'));
+    for(const entry of current.slice(0,activeLimit)){
+      if(!sections.has(entry.priority)){const section=el('section',null,'work-section'),cards=el('div',null,'cards');section.append(el('h2',['Needs attention','Running','Waiting','Recent'][entry.priority]),cards);root.append(section);sections.set(entry.priority,cards);}
+      appendCard(entry,sections.get(entry.priority));
+    }
+    if(current.length>activeLimit){const more=el('button',`Show more active work (${current.length-activeLimit} remaining)`);more.onclick=()=>{activeLimit+=20;renderWork();};root.append(more);}
+    if(history.length){
+      const panel=el('details',null,'work-history'),count=history.reduce((n,e)=>n+e.members.filter(m=>m.needs_attention).length,0);
+      panel.id='work-history';panel.open=expanded;
+      panel.append(el('summary',`History · ${history.length} ${allNodes?'sessions':'work groups'}${count?' · '+count+' need attention':''}`));
+      panel.addEventListener('toggle',()=>{if(panel.open!==(historyOpen??(show!=='active'||!!filtered))){historyOpen=panel.open;renderWork();}});
+      if(expanded){const cards=el('div',null,'cards');for(const entry of history.slice(0,historyLimit))appendCard(entry,cards);panel.append(cards);
+        if(history.length>historyLimit){const more=el('button',`Show more history (${history.length-historyLimit} remaining)`);more.onclick=()=>{historyLimit+=20;renderWork();};panel.append(more);}}
+      root.append(panel);
+    }
+    if(!entries.length)root.append(el('p',nodes.length?'No work matches these filters. Include hidden to find sessions you have hidden.':'Your staging workspace is ready. Start a session to begin.','empty'));
+    for(const id of cardCache.keys())if(!usedCards.has(id))cardCache.delete(id);
     const warningsKey=JSON.stringify(readiness.warnings),readinessPanel=$('#readiness-summary').parentElement;
     if(readiness.warnings.length&&readinessPanel.dataset.warnings!==warningsKey)readinessPanel.open=true;
     readinessPanel.dataset.warnings=warningsKey;
@@ -85,19 +149,23 @@ export function setupOverview({state,el,openCreate}) {
   function renderTree(session,selectedId){
     const node=nodeFor(session);if(!node)return;
     const tree=$('#session-tree'),restoreFocus=keepFocus(tree),expanded=new Set([...tree.querySelectorAll('details[open]')].map(d=>d.dataset.node));
-    const members=state.work.nodes.filter(n=>n.root_id===node.root_id),root=members.find(n=>n.id===node.root_id),items=[],visited=new Set();
-    const selection=selectedId||node.id;
+    indexWork();const members=membersByRoot.get(node.root_id)||[],root=nodesById.get(node.root_id),items=[],visited=new Set();
+    const selection=selectedId||node.id,shown=new Set();
+    for(const member of members)if($('#include-hidden')?.checked||!member.hidden||member.id===selection){
+      let current=member;const seen=new Set();
+      while(current&&!seen.has(current.id)){seen.add(current.id);shown.add(current.id);current=nodesById.get(current.owner_id);}
+    }
     if(lastSelection!==selection){
-      const seen=new Set();let ancestor=members.find(n=>n.id===selection);
-      while(ancestor&&!seen.has(ancestor.id)){seen.add(ancestor.id);collapsedBranches.delete(ancestor.owner_id);ancestor=members.find(n=>n.id===ancestor.owner_id);}
+      const seen=new Set();let ancestor=nodesById.get(selection);
+      while(ancestor&&!seen.has(ancestor.id)){seen.add(ancestor.id);collapsedBranches.delete(ancestor.owner_id);ancestor=nodesById.get(ancestor.owner_id);}
       lastSelection=selection;
     }
     function visit(current,depth){
-      if(visited.has(current.id))return;visited.add(current.id);
+      if(!current||!shown.has(current.id)||visited.has(current.id))return;visited.add(current.id);
       const item=el('div',null,`node${current.id===(selectedId||node.id)?' active':''}`);item.style.setProperty('--depth',depth);item.dataset.node=current.id;
       const a=el('a',current.title.length>80?current.title.slice(0,77)+'…':current.title);a.href=link(current);if(current.id===(selectedId||node.id))a.setAttribute('aria-current','page');
-      const children=members.filter(n=>n.owner_id===current.id),heading=el('div',null,'node-heading');
-      heading.append(a);
+      const children=(childrenByParent.get(current.id)||[]).filter(n=>shown.has(n.id)),heading=el('div',null,'node-heading');
+      heading.append(a);if(current.hidden)heading.append(el('small','Hidden','muted'));
       if(children.length){
         const toggle=el('button',collapsedBranches.has(current.id)?'▸':'▾','branch-toggle');
         toggle.setAttribute('aria-label',`Toggle children of ${current.title}`);toggle.setAttribute('aria-expanded',String(!collapsedBranches.has(current.id)));
@@ -105,7 +173,7 @@ export function setupOverview({state,el,openCreate}) {
         heading.append(toggle);
       }
       item.append(heading,el('small',`${current.profile||'Session'} · ${current.attempt_state||current.mechanical} · result ${current.result_state}`));
-      const native=state.sessions.find(s=>s.id===current.native_id);
+      const native=sessionsById.get(current.native_id);
       if(!native||native.managed&&native.execution_kind!=='integration-plan'){
         const add=el('button','+ Add session','add-session');add.onclick=()=>openCreate(native||{id:current.id,tmux_name:current.title,tool:current.tool,profile:current.profile,repository:current.repository});item.append(add);
       }
@@ -117,9 +185,10 @@ export function setupOverview({state,el,openCreate}) {
     visit(root,0);tree.replaceChildren(...items);restoreFocus();
   }
   $('#search').value=preferences.search||'';$('#state-filter').value=preferences.show||'active';
-  for(const key of keys){const select=$('#filter-'+key);if(!['project','profile','tool'].includes(key))select.value=preferences[key]||'';select.onchange=()=>{save();renderWork();};}
-  $('#search').oninput=()=>{save();renderWork();};$('#state-filter').onchange=()=>{save();renderWork();};
-  $('#reset-filters').onclick=()=>{preferences={};$('#search').value='';$('#state-filter').value='active';for(const key of keys)$('#filter-'+key).value='';save();renderWork();};
+  for(const key of keys){const select=$('#filter-'+key);if(!['project','profile','tool'].includes(key))select.value=preferences[key]||'';select.onchange=changedFilters;}
+  $('#search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(changedFilters,150);};$('#state-filter').onchange=changedFilters;
+  if($('#include-hidden')){$('#include-hidden').checked=preferences.includeHidden===true;$('#include-hidden').onchange=changedFilters;}
+  $('#reset-filters').onclick=()=>{preferences={};$('#search').value='';$('#state-filter').value='active';for(const key of keys)$('#filter-'+key).value='';if($('#include-hidden'))$('#include-hidden').checked=false;changedFilters();};
   $('#session-tree').onkeydown=event=>{
     if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key))return;
     const targets=[...$('#session-tree').querySelectorAll('a,button,summary')].filter(n=>n.getClientRects().length),index=targets.indexOf(document.activeElement);if(index<0)return;

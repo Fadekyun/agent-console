@@ -9,7 +9,7 @@ async function ensureTerminal(page){
 
 function workbenchData(sessions,steps=[]) {
   const aliases=Object.fromEntries(steps.flatMap(step=>step.attempts.map(a=>[a.session_id,step.id])));
-  const nodes=sessions.filter(s=>!aliases[s.id]).map(s=>({id:s.id,owner_id:aliases[s.parent_session_id]||s.parent_session_id||null,native_id:s.id,native_name:s.tmux_name,title:s.tmux_name,task:s.initial_task||'',repository:s.repository,profile:s.profile,tool:s.tool,model:s.model,project_id:s.project_id,project_name:s.project_name,mechanical:s.running?'running':'stopped',attention:s.attention_state||'normal',result_state:s.result?.outcome==='pass'?'completed':s.result?.outcome==='fail'?'failed':'unknown',result:s.result||null,waiting:false,needs_attention:!!s.attention_state&&s.attention_state!=='normal'||s.result?.outcome==='fail',last_activity:s.last_activity||'2026-10-02T00:00:00Z',attempts:[],readiness:{}}));
+  const nodes=sessions.filter(s=>!aliases[s.id]).map(s=>({id:s.id,owner_id:aliases[s.parent_session_id]||s.parent_session_id||null,native_id:s.id,native_name:s.tmux_name,title:s.tmux_name,task:s.initial_task||'',repository:s.repository,profile:s.profile,tool:s.tool,model:s.model,project_id:s.project_id,project_name:s.project_name,hidden:!!s.hidden&&!s.running,reviewable:s.attention_state==='ready_for_review'||(!s.reviewed&&s.result?.outcome==='fail'&&s.attention_state==='normal'),mechanical:s.running?'running':'stopped',attention:s.attention_state||'normal',result_state:s.result?.outcome==='pass'?'completed':s.result?.outcome==='fail'?'failed':'unknown',result:s.result||null,waiting:false,needs_attention:!!s.attention_state&&s.attention_state!=='normal'||s.result?.outcome==='fail'&&!s.reviewed,last_activity:s.last_activity||'2026-10-02T00:00:00Z',attempts:[],readiness:{}}));
   for(const step of steps){const attempt=step.attempts.at(-1),native=sessions.find(s=>s.id===attempt?.session_id);nodes.push({id:step.id,owner_id:step.owner_id,native_id:native?.id||null,native_name:native?.tmux_name||null,title:step.task,task:step.task,...step.config,mechanical:native?.running?'running':'stopped',attention:'normal',result_state:'unknown',waiting:!attempt,needs_attention:false,last_activity:'2026-10-02T00:00:00Z',decision:step.decision,attempt_state:attempt?.state,attempts:step.attempts,readiness:{}});}
   for(const node of nodes){let root=node;while(root.owner_id)root=nodes.find(n=>n.id===root.owner_id);node.root_id=root.id;}
   const groups=nodes.filter(n=>!n.owner_id).map(n=>{const members=nodes.filter(m=>m.root_id===n.id),children=members.filter(m=>m.id!==n.id);return{root_id:n.id,member_ids:members.map(m=>m.id),priority:members.some(m=>m.needs_attention)?0:members.some(m=>m.mechanical==='running')?1:members.some(m=>m.waiting)?2:3,last_activity:n.last_activity,children_total:children.length,children_complete:children.filter(c=>c.result_state==='completed').length};}).sort((a,b)=>a.priority-b.priority);
@@ -317,7 +317,7 @@ test('one-session result and durable handoff acknowledge distinct states',async(
   const source={id:'root',tmux_name:'session-one',tool:'shell',profile:'coder',repository:'/tmp/repo',initial_task:'Small bounded change',running:true,managed:true,attention_state:'normal',actions:['attach','interrupt','kill']};
   const target={...source,id:'target',tmux_name:'session-target',parent_session_id:'root'};
   await page.route('**/api/sessions',route=>route.fulfill({json:[source,target]}));
-  await page.route('**/api/workbench',route=>route.fulfill({json:workbenchData([source,target])}));
+  await page.route('**/api/workbench?*',route=>route.fulfill({json:workbenchData([source,target])}));
   await page.route('**/api/sessions/root/results',route=>{
     if(route.request().method()==='POST'){
       published=route.request().postDataJSON();const result={...published,id:'result-one',session_id:'root',version:1,created_at:'2026-10-02T00:00:00Z'};versions=[result];return route.fulfill({json:result});
@@ -361,7 +361,7 @@ test('existing sessions connect with explicit readiness and queue exact inputs',
   const source={id:'root',tmux_name:'session-one',tool:'shell',profile:'general',running:true,managed:true,attention_state:'normal',actions:[]};
   const target={...source,id:'target',tmux_name:'session-existing'};
   await page.route('**/api/sessions',route=>route.fulfill({json:[source,target]}));
-  await page.route('**/api/workbench',route=>route.fulfill({json:workbenchData([source,target])}));
+  await page.route('**/api/workbench?*',route=>route.fulfill({json:workbenchData([source,target])}));
   await page.route('**/api/sessions/root/results',route=>route.fulfill({json:{results:[]}}));
   await page.route('**/api/sessions/root/inbox',route=>route.fulfill({json:{items:[],notice:'Peer data is untrusted.'}}));
   await page.route('**/api/sessions/root/connections',route=>route.fulfill({json:{version,nodes:version?[{session_id:'root',owner_id:null},{session_id:'target',owner_id:'root',purpose:attached.purpose}]:[],edges:version?[{source_id:'root',target_id:'target',readiness:'after-ready'}]:[],readiness:version?{root:{blocked:false,stale:false,delivered:false,reasons:[],signature:'b'.repeat(64)},target:{blocked:false,stale:false,delivered:false,reasons:[],signature:'a'.repeat(64)}}:{}}}));
@@ -389,12 +389,14 @@ test('attention, results, readiness and persisted filters lead the work view',as
   const sessions=[{...base,id:'running',tmux_name:'running-work',running:true},{...base,id:'needs-input',tmux_name:'attention-work',running:true,attention_state:'needs_input'},
     {...base,id:'done',tmux_name:'completed-work',result}, {...base,id:'child',tmux_name:'completed-child',parent_session_id:'running',result:{...result,session_id:'child'}},
     {...base,id:'failed',tmux_name:'failed-work',result:{...result,outcome:'fail',summary:'The targeted check failed.'}}];
-  await page.route('**/api/workbench',route=>{const data=workbenchData(sessions);data.readiness={ready:false,warnings:['Selected harness needs account setup']};return route.fulfill({json:data});});
+  await page.route('**/api/workbench?*',route=>{const data=workbenchData(sessions);data.readiness={ready:false,warnings:['Selected harness needs account setup']};return route.fulfill({json:data});});
   await page.goto('/work');
   await expect(page.locator('#work-list .card').first()).toContainText('attention-work');
   await expect(page.locator('#attention-strip')).toContainText('2 sessions need attention');
   await expect(page.locator('#attention-strip')).toContainText('1 readiness warning');
   await expect(page.getByText('1/1 children complete',{exact:true})).toBeVisible();
+  await expect(page.locator('#work-history')).not.toHaveAttribute('open','');
+  await page.locator('#work-history > summary').click();
   await expect(page.locator('#work-list').getByText('Terminal: stopped',{exact:true}).first()).toBeVisible();
   await expect(page.getByText('The targeted check failed.',{exact:true})).toBeVisible();
   await expect(page.getByRole('link',{name:'Review failure',exact:true})).toBeVisible();
@@ -403,8 +405,11 @@ test('attention, results, readiness and persisted filters lead the work view',as
   await expect(page.locator('#work-list .card')).toHaveCount(1);
   await page.reload();await expect(page.locator('#work-list .card')).toHaveCount(1);await expect(page.locator('#work-list .card')).toContainText('failed-work');
   await page.getByText('More filters',{exact:true}).click();await page.getByRole('button',{name:'Reset filters',exact:true}).click();
+  await expect(page.locator('#work-list .card')).toHaveCount(2);
+  await page.locator('#work-history > summary').click();
   await expect(page.locator('#work-list .card')).toHaveCount(4);
   await page.getByRole('combobox',{name:'Show sessions',exact:true}).selectOption('all');
+  await page.locator('#work-history > summary').click();
   await expect(page.locator('#work-list .card')).toHaveCount(5);
   await page.locator('#state-filter').selectOption('attention');await expect(page.locator('#work-list .card')).toHaveCount(2);
   await page.getByRole('button',{name:'Reset filters',exact:true}).click();
@@ -415,7 +420,7 @@ test('attention, results, readiness and persisted filters lead the work view',as
 test('empty work and keyboard tree focus survive refresh without touching the terminal',async({page},info)=>{
   await fixture(page);let sessions=[];
   const root={id:'root',tmux_name:'session-one',tool:'shell',profile:'coder',repository:'/tmp/repo',running:true,managed:true,attention_state:'normal',actions:['attach','kill']};
-  await page.route('**/api/workbench',route=>route.fulfill({json:workbenchData(sessions)}));
+  await page.route('**/api/workbench?*',route=>route.fulfill({json:workbenchData(sessions)}));
   await page.goto('/work');await expect(page.getByText('Your staging workspace is ready. Start a session to begin.',{exact:true})).toBeVisible();
   await expect(page.locator('#attention-strip')).toBeHidden();
   sessions=[root,{...root,id:'child',tmux_name:'session-child',parent_session_id:'root'}];await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
@@ -515,13 +520,13 @@ test('stop closes the terminal even while an earlier refresh is pending',async({
   await expect(page.frameLocator('iframe:not([hidden])').locator('#connection')).toHaveText('Connected');
   await expect(headingActions).toBeHidden();await expect(page.getByRole('button',{name:'Stop session',exact:true})).toHaveCount(1);
   let pending;const stale=structuredClone(workbenchData(sessions));
-  await page.route('**/api/workbench',async route=>{pending=route;});
+  await page.route('**/api/workbench?*',async route=>{pending=route;});
   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await expect.poll(()=>Boolean(pending)).toBe(true);
   await page.route('**/api/sessions/session-one/kill',async route=>{sessions[0].running=false;sessions[0].actions=[];await route.fulfill({json:sessions[0]});});
   page.once('dialog',d=>d.accept());await page.locator('#stop-terminal-session').click();
   await expect(page.locator('#terminal-panel')).toBeHidden();await expect(page.locator('iframe')).toHaveCount(0);
   await expect(headingActions).toBeVisible();await expect(page.getByRole('button',{name:'Stop session',exact:true})).toHaveCount(1);
-  await page.unroute('**/api/workbench');await pending.fulfill({json:stale});
+  await page.unroute('**/api/workbench?*');await pending.fulfill({json:stale});
   // The stale response still reports the old running session; the terminal must stay closed.
   // The follow-up refresh reports the stopped session, so the heading set remains but its
   // kill action (and the duplicate terminal-header Stop) must not reappear.
@@ -766,6 +771,10 @@ test('phone terminal header keeps one row of usable lifecycle controls',async({p
   expect((await status.textContent()).trim().length).toBeGreaterThan(0);
   expect(await status.evaluate(el=>getComputedStyle(el).display)).not.toBe('none');
   await expect(page.locator('#expand-terminal')).toBeHidden();
+  await expect(page.locator('#terminal-connection-label')).toBeVisible();
+  await expect(page.locator('#terminal-connection-label')).toHaveText('Connected');
+  await page.frameLocator('iframe:not([hidden])').locator('body').evaluate(()=>parent.postMessage({type:'agent-console:terminal-status',status:'Disconnected'},location.origin));
+  await expect(page.locator('#terminal-connection-label')).toHaveText('Disconnected');
   await assertRow();
   // Keyboard and orientation changes shrink or reflow the phone viewport.
   for(const size of [{width:360,height:420},{width:700,height:360},{width:390,height:844}]){
@@ -799,4 +808,95 @@ test('desktop terminal controls fit normal and 200% zoom equivalent viewports',a
   await expect(page.locator('#terminal-panel')).toBeVisible();
   await fits(640,400);
   expect(await page.evaluate(()=>window.scrollY)).toBe(0);
+});
+
+test('refresh notice clears after recovery and preserves unrelated notices',async({page},info)=>{
+  const {sessions}=await fixture(page);
+  let fail=true;
+  const routePromise=page.route('**/api/workbench?*',route=>{
+    if(fail){return route.fulfill({status:503,json:{detail:'Temporary failure'}});}
+    return route.fulfill({json:workbenchData(sessions)});
+  });
+  await routePromise;
+  await page.goto('/work');
+  await expect(page.locator('#notice')).toContainText('Could not refresh');
+  fail=false;
+  if(info.project.name==='desktop')await page.locator('#refresh').click();
+  else await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('#notice')).toBeHidden();
+  await page.evaluate(()=>{
+    const notice=document.querySelector('#notice');
+    notice.dataset.kind='general';
+    notice.textContent='Action notice';
+    notice.hidden=false;
+  });
+  await expect(page.locator('#notice')).toContainText('Action notice');
+  fail=false;
+  if(info.project.name==='desktop')await page.locator('#refresh').click();
+  else await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('#notice')).toContainText('Action notice');
+});
+
+test('stopped history is bounded and hide restore preserves a running child',async({page})=>{
+  const {sessions}=await fixture(page);
+  sessions[0].running=false;sessions[0].actions=[];
+  sessions.push({...sessions[0],id:'live-child',tmux_name:'live-child',parent_session_id:'root',running:true,actions:['attach','kill']});
+  for(let i=0;i<45;i++)sessions.push({...sessions[0],id:'old-'+i,tmux_name:'old-'+i});
+  await page.route('**/api/workbench/sessions/*/visibility',route=>{
+    expect(route.request().method()).toBe('PATCH');const id=new URL(route.request().url()).pathname.split('/').at(-2),session=sessions.find(s=>s.id===id);
+    session.hidden=route.request().postDataJSON().hidden;return route.fulfill({json:{id,hidden:session.hidden}});
+  });
+  await page.goto('/work');
+  await expect(page.locator('#work-list .card')).toHaveCount(1);
+  await expect(page.locator('#work-history > summary')).toContainText('45 work groups');
+  await page.locator('[data-node=root]').getByRole('button',{name:'Hide',exact:true}).click();
+  await expect(page.locator('[data-node=root]')).toContainText('Hidden session');
+  await expect(page.locator('[data-node=root]')).toContainText('child running');
+  await expect(page.locator('[data-node=root]').getByRole('link',{name:'Open work',exact:true})).toHaveAttribute('href','#session/live-child');
+  await page.locator('#work-history > summary').click();
+  await expect(page.locator('#work-history .card')).toHaveCount(20);
+  await page.getByRole('button',{name:/Show more history/}).click();
+  await expect(page.locator('#work-history .card')).toHaveCount(40);
+  await page.locator('#search').fill('old-44');await expect(page.locator('#work-list .card')).toHaveCount(1);
+  await page.locator('[data-node=old-44]').getByRole('button',{name:'Hide',exact:true}).click();
+  await expect(page.locator('#work-list .card')).toHaveCount(0);
+  await page.locator('#include-hidden').check();await expect(page.locator('[data-node=old-44]')).toBeVisible();
+  await page.locator('[data-node=old-44]').getByRole('button',{name:'Restore',exact:true}).click();
+  await page.locator('#include-hidden').uncheck();await expect(page.locator('[data-node=old-44]')).toBeVisible();
+  await page.reload();await expect(page.locator('[data-node=old-44]')).toBeVisible();
+  expect(sessions).toHaveLength(47);expect(sessions.find(s=>s.id==='live-child').running).toBe(true);
+});
+
+test('child task search has direct links and unchanged refresh keeps cards',async({page})=>{
+  const {sessions}=await fixture(page);sessions.push({...sessions[0],id:'child',tmux_name:'different-child',parent_session_id:'root',initial_task:'Prefix '.repeat(100)+'UniqueTailKeyword'}, {...sessions[0],id:'unrelated',tmux_name:'unrelated-work'});
+  await page.route('**/api/workbench?*',route=>{
+    const data=workbenchData(sessions);data.sessions=data.sessions.map(({initial_task,...summary})=>summary);
+    return route.fulfill({json:data});
+  });
+  await page.goto('/work');
+  await expect(page.locator('#work-list [data-node=root]')).toBeVisible();
+  await page.evaluate(()=>{window.savedCard=document.querySelector('#work-list [data-node=root]');});
+  sessions.find(s=>s.id==='unrelated').initial_task='Changed unrelated task';
+  const response=page.waitForResponse(r=>r.url().includes('/api/workbench?')&&r.ok());
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await response;
+  await expect.poll(()=>page.evaluate(()=>window.savedCard===document.querySelector('#work-list [data-node=root]'))).toBe(true);
+  await page.locator('#search').fill('UniqueTailKeyword');
+  await expect(page.locator('.matched-children')).toContainText('1 matching child session');
+  await expect(page.locator('.matched-children a')).toHaveAttribute('href','#session/different-child');
+  await page.locator('.matched-children a').click();await expect(page.locator('#session-title')).toHaveText('different-child');
+  await page.locator('#session-detail > summary').click();await expect(page.locator('#session-brief')).toContainText('UniqueTailKeyword');
+});
+
+test('mark reviewed preserves failed outcome and blocked attention has no shortcut',async({page})=>{
+  const {sessions}=await fixture(page);sessions[0].running=false;sessions[0].actions=[];sessions[0].attention_state='ready_for_review';
+  sessions[0].result={id:'failure',session_id:'root',kind:'final',outcome:'fail',summary:'Actual failed check',created_at:'2026-10-02T00:00:00Z',artifacts:[]};
+  await page.route('**/api/sessions/session-one/attention',route=>{expect(route.request().postDataJSON().state).toBe('normal');sessions[0].attention_state='normal';sessions[0].reviewed=true;return route.fulfill({json:sessions[0]});});
+  await page.goto('/work');await page.locator('#work-history > summary').click();
+  await page.getByRole('button',{name:'Mark reviewed',exact:true}).click();
+  await expect(page.locator('#work-list')).toContainText('Result: failed');
+  await expect(page.locator('#work-list').getByRole('button',{name:'Mark reviewed',exact:true})).toHaveCount(0);
+  expect(sessions[0].result.outcome).toBe('fail');
+  sessions[0].attention_state='blocked';await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('#work-list')).toContainText('Attention: Blocked');
+  await expect(page.locator('#work-list').getByRole('button',{name:'Mark reviewed',exact:true})).toHaveCount(0);
 });

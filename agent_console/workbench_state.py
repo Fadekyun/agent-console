@@ -3,8 +3,9 @@ import json
 import shutil
 import time
 from fastapi import APIRouter, Depends
-
+from pydantic import BaseModel, StrictBool
 from .workflow_service import WorkflowService
+from .workbench_visibility import WorkbenchVisibility
 
 
 def result_summary(result):
@@ -15,9 +16,14 @@ def result_summary(result):
     }
 
 
+class HideRequest(BaseModel):
+    hidden: StrictBool
+
+
 class WorkbenchState:
     def __init__(self, manager):
         self.manager=manager;self._readiness=None;self._readiness_at=0
+        self.visibility=WorkbenchVisibility(self.manager.settings.state_dir)
 
     def readiness(self, *, refresh=False):
         if not refresh and self._readiness and time.monotonic()-self._readiness_at<30:return self._readiness
@@ -32,8 +38,11 @@ class WorkbenchState:
         self._readiness={'ready':not warnings,'warnings':warnings,'tools':catalog};self._readiness_at=time.monotonic()
         return self._readiness
 
-    def snapshot(self):
+    def snapshot(self, *, compact=False):
         sessions=self.manager.list_sessions();by_id={s['id']:s for s in sessions}
+        visibility=self.visibility.read()
+        for session in sessions:
+            session["hidden"]=bool(not session["running"] and visibility.get(session["id"],session.get("status")=="archived"))
         svc=WorkflowService(self.manager);graph=svc.graph();store=svc.store
         with self.manager.database.connect() as db:
             projects={r['id']:r['name'] for r in db.execute('SELECT id,name FROM projects')}
@@ -100,6 +109,8 @@ class WorkbenchState:
                 'model':config.get('model') or (session or {}).get('model'),
                 'mechanical':mechanical,'attention':attention,'result_state':result_state,'result':result,
                 'waiting':waiting,'needs_attention':needs_attention,'last_activity':activity,
+                'hidden':bool(session and session.get('hidden') and not waiting),
+                'reviewable':attention=='ready_for_review' or (attention=='normal' and unresolved_failure),
                 'decision':step['decision'] if step else None,'attempt_state':state,'attempts':history,
                 'readiness':ready,'error':(step or {}).get('error') or (attempt or {}).get('error') or '',
                 'workflow_state':workflow_state,
@@ -111,7 +122,6 @@ class WorkbenchState:
             visited={node['id']};owner=node['owner_id'];root=node['id']
             while owner and owner not in visited:
                 root=owner;visited.add(owner);owner=nodes[owner]['owner_id']
-            # Corrupt legacy parentage must not make navigation disappear/loop.
             if owner:node['owner_id']=None;root=node['id']
             node['root_id']=root
         groups=[]
@@ -124,7 +134,40 @@ class WorkbenchState:
                            'children_total':len(children),'children_complete':sum(n['result_state']=='completed' and not n['readiness'].get('stale') for n in children),
                            'member_ids':[n['id'] for n in members]})
         groups.sort(key=lambda g:g['last_activity'],reverse=True);groups.sort(key=lambda g:g['priority'])
+        if compact:
+            # Keep searchable tasks once on ordinary nodes; historical native attempts
+            # retain their own briefs instead of borrowing the current logical task.
+            session_fields={'id','tmux_name','tool','profile','repository','model','project_id',
+                            'running','managed','status','attention_state','attention_note',
+                            'attention_updated_at','actions','execution_kind','parent_session_id',
+                            'created_at','last_activity','hidden'}
+            sessions=[{key:value for key,value in session.items()
+                       if key in session_fields or key=='initial_task' and (session['id'] in alias or session['id'] not in nodes)}
+                      for session in sessions]
+            def brief_result(result):
+                if not result:return result
+                return {key:value for key,value in result.items() if key!='artifacts'} | {'summary':result['summary'][:300]}
+            for node in nodes.values():
+                node['result']=brief_result(node['result'])
+                node['attempts']=[dict(attempt,result=brief_result(attempt.get('result'))) for attempt in node['attempts']]
         return {'sessions':sessions,'nodes':list(nodes.values()),'groups':groups,'aliases':alias,'readiness':self.readiness()}
+
+    def set_visibility(self, identity, hidden):
+        """Set hide/restore visibility for a single session identity."""
+        if not isinstance(hidden, bool):
+            raise ValueError("hidden must be a strict boolean")
+        sessions = self.manager.list_sessions()
+        session = None
+        for s in sessions:
+            if s['id'] == identity:
+                session = s
+                break
+        if session is None:
+            raise KeyError(f"session not found: {identity}")
+        if hidden and session['running']:
+            raise ValueError("Running sessions cannot be hidden")
+        self.visibility.set(session['id'], hidden)
+        return {'id': session['id'], 'hidden': hidden}
 
     def history(self, identity, before=2147483647, audit_before=2147483647):
         # Reading operator history must also work for imported/unmanaged and
@@ -155,12 +198,20 @@ class WorkbenchState:
 
 def workbench_routes(manager,require_identity):
     router=APIRouter(dependencies=[Depends(require_identity)]);state=WorkbenchState(manager)
+
     @router.get('/api/workbench')
-    def snapshot():return state.snapshot()
+    def snapshot(compact:bool=False):return state.snapshot(compact=compact)
+
     @router.get('/api/workbench/readiness')
     def readiness():return state.readiness(refresh=True)
+
     @router.get('/api/workbench/sessions/{identity}/history')
     def history(identity:str,before:int=2147483647,audit_before:int=2147483647):
         if before<1 or audit_before<1:raise ValueError('invalid history cursor')
         return state.history(identity,before,audit_before)
+
+    @router.patch('/api/workbench/sessions/{identity}/visibility')
+    def set_visibility(identity:str, payload:HideRequest):
+        return state.set_visibility(identity, payload.hidden)
+
     return router

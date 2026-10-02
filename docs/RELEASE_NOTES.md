@@ -1,3 +1,10 @@
+## 0.24.0 — unreleased, 2026-10-02 (#90)
+
+- Impact: reversible persisted stopped-session Hide/Restore and collapsed paginated History; visible running children are never hidden when a parent is stopped; explicit reviewed acknowledgement preserves result outcomes; recovered refresh notices clear stale alerts without discarding new ones; matched-child direct links on root search cards; compact work summaries with full task search and unchanged reused cards; visible phone terminal connection label.
+- Configuration/migration: no DB schema change. New private `workbench-visibility.json` in the state directory stores hide preferences; archived records are hidden by default, and Include hidden / Restore controls are available. Older UIs ignore the file.
+- Verification: 29 Workbench backend tests and 3 version checks pass. Browser coverage passes across desktop, 360px and 390px (94 checks, 5 intentional skips across the full run and focused corrections). Owner inspected desktop/phone mock screenshots; the phone terminal header remains 52px with visible connection text. Hide/Restore, live descendants, history pagination, acknowledgement without outcome changes, refresh recovery, full task search and compact-detail hydration are covered.
+- Rollback: select retained previous release and restart web only; keep DBs, tmux and the visibility file (older UI ignores it).
+
 ## 0.23.2 — unreleased, 2026-10-02 (#90)
 
 - Impact: an open terminal now shows one set of lifecycle actions. The session heading hides Open terminal and Stop session while the terminal is visible and restores them when it closes; the terminal header remains the single Stop/Close location. Phone outer headers use a single compact row (Sessions + Stop + Close) with 44px targets, the connection status stays available as screen-reader-only text and on the Sessions control, and Full screen stays desktop-only. A closed terminal stays closed across background refreshes.

@@ -9,7 +9,7 @@ const state = { sessions: [], me: null, selected: null, work: null, selectedNode
 const names = { normal: 'Working', needs_input: 'Needs input', blocked: 'Blocked', ready_for_review: 'Ready for review' };
 const pendingSessionActions = new Set();
 function renderPendingActions() {
-  for (const [selector, action] of [['#interrupt-session','interrupt'],['#stop-session','kill'],['#stop-terminal-session','kill'],['#attention-form button[type=submit]','attention']]) {
+  for (const [selector, action] of [['#interrupt-session','interrupt'],['#stop-session','kill'],['#stop-terminal-session','kill'],['#attention-form button[type=submit]','attention'],['#mark-reviewed','attention'],['#session-visibility','visibility']]) {
     const button=$(selector),pending=pendingSessionActions.has(`${state.selected?.id}:${action}`);
     button.disabled=pending;button.setAttribute('aria-busy',String(pending));
   }
@@ -29,7 +29,7 @@ let resultsSession = null, resultsReady = Promise.resolve();
 $('#show-results').onclick = () => { location.hash = `#results/${encodeURIComponent(state.selected.tmux_name)}`; };
 function status(s) { return s.attention_state !== 'normal' && s.attention_state ? names[s.attention_state] || s.attention_state : s.running ? 'Working' : 'Stopped'; }
 function sessionLink(s) { return `#session/${encodeURIComponent(s.tmux_name)}`; }
-const overview=setupOverview({state,el,openCreate});
+const overview=setupOverview({state,el,openCreate,api,message,refresh});
 const launches=setupLaunches({api,el,state,openCreate,getRequest:createRequest,refresh,message,openSession:name=>{location.hash=`#session/${encodeURIComponent(name)}`;route();openTerminal();}});
 function renderWork(){overview.renderWork();}
 function renderSession() {
@@ -43,6 +43,9 @@ function renderSession() {
   $('#session-brief').textContent = s.initial_task || 'No stored task brief.';
   overview.renderTree(s,state.selectedNodeId);
   const node=overview.nodeFor(s);
+  $('#session-visibility').hidden=!!s.running;
+  $('#session-visibility').textContent=node?.hidden?'Restore':'Hide';
+  $('#mark-reviewed').hidden=!node?.reviewable||!s.managed||s.execution_kind==='integration-plan';
   if(node){
     const historical=node.native_id!==s.id?node.attempts.find(a=>a.session_id===s.id):null;
     const displayed=historical?{...node,mechanical:s.running?'running':'stopped',attention:s.attention_state||'normal',result_state:historical.result?.outcome==='pass'?'completed':historical.result?.outcome==='fail'?'failed':'unknown',readiness:{}}:node;
@@ -109,8 +112,16 @@ async function refresh() {
   if (state.loading) return state.loading;
   $('#refresh').disabled=true;$('#work-list').setAttribute('aria-busy','true');
   state.loading = (async () => {
-    try { const work=await api('/api/workbench'); if(!Array.isArray(work.nodes)||!Array.isArray(work.sessions))throw new Error('Work summary unavailable');state.work=work;state.sessions=work.sessions;route(); }
-    catch (error) { message(`Could not refresh sessions: ${error.message}`); }
+    try {
+      const work=await api('/api/workbench?compact=true');
+      if(!Array.isArray(work.nodes)||!Array.isArray(work.sessions))throw new Error('Work summary unavailable');
+      const tasks=new Map(work.nodes.map(node=>[node.native_id,node.task]));
+      for(const session of work.sessions)if(session.initial_task===undefined&&tasks.has(session.id))session.initial_task=tasks.get(session.id);
+      state.work=work;state.sessions=work.sessions;
+      // Only clear the refresh failure notice on recovery; unrelated notices survive.
+      if($('#notice').dataset.kind==='refresh')message('');
+      route();
+    } catch (error) { message(`Could not refresh sessions: ${error.message}`, 'refresh'); }
     finally { state.loading = null;$('#refresh').disabled=false;$('#work-list').setAttribute('aria-busy','false'); }
   })();
   return state.loading;
@@ -135,6 +146,9 @@ function setTerminalStatus(text) {
   // The outer status line is visually hidden on phones, so expose the same text on the
   // Sessions control to keep the selected session and connection inspectable.
   $('#terminal-sessions').title = text;
+  // Show only the one-word connection state after the last middle dot.
+  const afterDot = text.split('·').pop()?.trim() || 'Connecting…';
+  $('#terminal-connection-label').textContent = afterDot;
 }
 function syncTerminalVisibility() {
   const visible = !$('#session-view').hidden && !$('#terminal-panel').hidden;
@@ -264,6 +278,23 @@ const stopSelectedSession = () => { if (confirm(`Stop ${state.selected.tmux_name
 $('#stop-session').onclick = stopSelectedSession;
 $('#stop-terminal-session').onclick = stopSelectedSession;
 $('#attention-form').onsubmit = event => { event.preventDefault();const f=event.target;sessionAction('attention',{state:f.elements.state.value,note:f.elements.note.value},'PATCH'); };
+$('#mark-reviewed').onclick=()=>{
+  const node=state.selected&&overview.nodeFor(state.selected);
+  if(!node?.reviewable)return;
+  sessionAction('attention',{state:'normal',note:state.selected.attention_note||''},'PATCH');
+};
+$('#session-visibility').onclick=async()=>{
+  const session=state.selected;if(!session||session.running)return;
+  const key=`${session.id}:visibility`;if(pendingSessionActions.has(key))return;
+  pendingSessionActions.add(key);renderPendingActions();
+  try{
+    const hidden=!overview.nodeFor(session)?.hidden;
+    await api(`/api/workbench/sessions/${encodeURIComponent(session.id)}/visibility`,{hidden},'PATCH');
+    message(`${hidden?'Hidden':'Restored'} ${session.tmux_name}. History and files are kept.`);
+    if(state.loading)await state.loading;await refresh();
+  }catch(error){message(`${session.tmux_name}: ${error.message}`);}
+  finally{pendingSessionActions.delete(key);renderPendingActions();}
+};
 $('#show-output').onclick = async () => { const s = state.selected; try { const output = await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/review?lines=500`); if (s.id !== state.selected?.id) return; $('#output-text').textContent = output.content || 'No captured output.'; $('#session-output').hidden = false; } catch (e) { message(e.message); } };
 $('#show-skills').onclick = async () => {
   const s = state.selected;
@@ -343,7 +374,7 @@ try {
   for (const id of ['#current-version','#settings-current']) if (instance.current_url) { $(id).href = instance.current_url; $(id).hidden = false; }
   $('#tools').replaceChildren(...me.tool_status.map(x => el('p', `${x.name} · ${x.status}${x.reason ? ` — ${x.reason}` : ''}`, 'tool')));
 } catch (e) { message(`Could not load settings: ${e.message}`); }
-await refresh(); setInterval(() => { if (!document.hidden) refresh(); }, 10000);
+await refresh(); setInterval(() => { if (!document.hidden && !['#settings','#skills'].includes(location.hash) && !document.activeElement?.matches('#search,.filter-grid select')) refresh(); }, 10000);
 
 window.addEventListener('message', event => {
   if (event.origin !== location.origin || event.data?.type !== 'agent-console:terminal-status' || typeof event.data.status !== 'string') return;

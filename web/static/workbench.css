@@ -83,3 +83,13 @@ body.terminal-open{overflow:hidden}
   body.session-terminal #session-detail{flex:none;max-height:40%;overflow:auto;overscroll-behavior:contain;padding:8px 14px}
   body.session-terminal #session-detail>summary{position:sticky;top:-8px;background:var(--paper);z-index:1}
 }
+
+/* Phone terminal header: compact connection state inside the 44px Sessions button */
+#terminal-sessions{min-width:0;white-space:nowrap;min-height:44px;display:flex;flex-direction:column;align-items:stretch;justify-content:center;gap:0;padding:2px 9px 2px 9px;text-align:left}
+#terminal-connection-label{display:none}
+@media(max-width:760px){#terminal-sessions{display:flex;flex-direction:column;justify-content:center;gap:0;line-height:1.2;min-width:0}#terminal-connection-label{display:block;font-size:10px;max-width:85px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.work-history{margin:24px 0;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.work-history>summary{font-weight:600;min-height:44px;padding:8px 0}
+.work-history>.cards{margin:12px 0}.matched-children{display:grid;gap:4px;overflow-wrap:anywhere}
+.hidden-filter{align-self:end;min-height:44px;white-space:nowrap}
+@media(max-width:760px){.filter-row>.hidden-filter{grid-column:1/-1}.work-history{padding:10px}.matched-children a{padding:5px 0}}
