@@ -35,6 +35,7 @@ let touchStartY = null;
 let following = true;
 let serverHistory = false;
 let historyMode = false;
+let nativeScrolled = false;
 let pendingScroll = 0, scrollTimer = null;
 let hasUnread = false;
 let briefLoaded = false;
@@ -63,7 +64,7 @@ window.addEventListener('message', (event) => {
     viewVisible = event.data.visible;
     if (viewVisible) { autoReconnectEnabled = true; cancelReconnect(); connect(); }
     else {
-      saveDraft(); if (historyMode) leaveHistory(); autoReconnectEnabled = false; cancelReconnect();
+      saveDraft(); if (historyMode || nativeScrolled) leaveHistory(); autoReconnectEnabled = false; cancelReconnect();
       if (socket) { socket.onclose = null; socket.onerror = null; socket.onmessage = null; socket.close(); socket = null; }
       setStatus('Terminal closed · session still running');
     }
@@ -75,8 +76,8 @@ window.addEventListener('message', (event) => {
 
 function leaveHistory() {
   clearTimeout(scrollTimer); scrollTimer = null; pendingScroll = 0;
-  if (historyMode && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'scroll', lines: 0 }));
-  historyMode = false; following = true; newOutput.hidden = true;
+  if ((historyMode || nativeScrolled) && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'scroll', lines: 0 }));
+  historyMode = false; nativeScrolled = false; following = true; newOutput.hidden = true;
 }
 function scrollHistory(lines) {
   if (!lines || socket?.readyState !== WebSocket.OPEN) return;
@@ -94,9 +95,9 @@ function flushScroll() {
   socket.send(JSON.stringify({type:'scroll', lines}));
   if (pendingScroll) scrollTimer = setTimeout(flushScroll, 32);
 }
-function send(value) {
+function send(value, mouse = false) {
   if (socket?.readyState !== WebSocket.OPEN) throw new Error('Terminal is disconnected');
-  if (historyMode) leaveHistory();
+  if (!mouse && (historyMode || nativeScrolled)) leaveHistory();
   socket.send(encoder.encode(value));
 }
 
@@ -151,7 +152,7 @@ function connect() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   socket = new WebSocket(`${protocol}//${location.host}/ws/sessions/${encodeURIComponent(name)}`);
   socket.binaryType = 'arraybuffer'; setStatus('Connecting…'); reconnect.disabled = true;
-  socket.onopen = () => { cancelReconnect(); setStatus('Connected'); resize(); if (following) terminal.scrollToBottom(); if (focusOnConnect && mode === 'type' && document.activeElement !== composer) terminal.focus(); focusOnConnect = false; };
+  socket.onopen = () => { cancelReconnect(); socket.send(JSON.stringify({type:'scroll',lines:0})); nativeScrolled = false; historyMode = false; setStatus('Connected'); resize(); if (following) terminal.scrollToBottom(); if (focusOnConnect && mode === 'type' && document.activeElement !== composer) terminal.focus(); focusOnConnect = false; };
   socket.onmessage = (event) => {
     const output = typeof event.data === 'string' ? event.data : decoder.decode(event.data, { stream: true });
     terminal.write(output, () => {
@@ -333,7 +334,14 @@ async function openPeers() {
   } catch (error) { list.innerHTML = `<p class="empty"></p>`; $('p', list).textContent = error.message || String(error); }
 }
 
-terminal.onData((value) => { if (mode === 'type') { try { send(value); } catch { /* status is visible */ } } });
+// Mouse reports are terminal input, not typing. Do not cancel tmux copy mode
+// between wheel events; tmux routes them to the application that requested them.
+terminal.onData((value) => { if (mode === 'type') { try { send(value, /^\x1b\[(?:<|M)/.test(value)); } catch { /* status is visible */ } } });
+terminal.onBinary((value) => {
+  if (mode === 'type' && socket?.readyState === WebSocket.OPEN) {
+    socket.send(Uint8Array.from(value, character => character.charCodeAt(0)));
+  }
+});
 terminal.onSelectionChange(() => { /* xterm selection is secondary to selectable Text View */ });
 terminal.onScroll(() => {
   if (historyMode) return;
@@ -354,15 +362,25 @@ window.__terminal = terminal;
 let touchViewport = 0;
 let touchAlternate = false;
 let touchLines = 0;
+let touchNative = false;
+let touchLastY = null;
 $('#terminal').addEventListener('wheel', (event) => {
-  if (!['scroll', 'type'].includes(mode) || !serverHistory || event.ctrlKey) return;
+  if (event.ctrlKey) return;
+  if (mode === 'type' && terminal.modes.mouseTrackingMode !== 'none') {
+    // Let xterm normalize high-resolution trackpad deltas and encode native mouse
+    // input. Full-screen agents own their history; tmux copy mode freezes that UI.
+    nativeScrolled = true;
+    return;
+  }
+  if (!['scroll', 'type'].includes(mode) || !serverHistory) return;
   event.preventDefault(); event.stopPropagation();
   const lines = Math.sign(event.deltaY) * Math.max(1, Math.round(Math.abs(event.deltaY) / (event.deltaMode === 0 ? 20 : 1)));
   if (lines < 0 || historyMode) scrollHistory(lines);
 }, { passive: false, capture: true });
 $('#terminal').addEventListener('touchstart', (event) => {
   if (!['scroll', 'type'].includes(mode) || event.touches.length !== 1) { touchStartY = null; return; }
-  touchStartY = event.touches[0].clientY;
+  touchStartY = event.touches[0].clientY; touchLastY = touchStartY;
+  touchNative = mode === 'type' && terminal.modes.mouseTrackingMode !== 'none';
   touchViewport = terminal.buffer.active.viewportY; touchLines = 0;
   touchAlternate = terminal.buffer.active.type === 'alternate' || alternateScreen;
   event.stopPropagation();
@@ -370,6 +388,12 @@ $('#terminal').addEventListener('touchstart', (event) => {
 $('#terminal').addEventListener('touchmove', (event) => {
   if (touchStartY === null || event.touches.length !== 1) return;
   event.preventDefault(); event.stopPropagation();
+  if (touchNative) {
+    const touch = event.touches[0], deltaY = touchLastY - touch.clientY;
+    touchLastY = touch.clientY;
+    $('.xterm-screen').dispatchEvent(new WheelEvent('wheel', {deltaY, clientX:touch.clientX, clientY:touch.clientY, bubbles:true, cancelable:true}));
+    return;
+  }
   if (serverHistory || !touchAlternate) {
     const height = $('.xterm-screen')?.getBoundingClientRect().height || terminal.rows * 16;
     const lines = Math.round((event.touches[0].clientY - touchStartY) / (height / terminal.rows));

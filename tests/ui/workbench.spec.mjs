@@ -510,3 +510,44 @@ test('stop closes the terminal even while an earlier refresh is pending',async({
   await expect(page.locator('#terminal-panel')).toBeHidden();await expect(page.locator('iframe')).toHaveCount(0);
   await page.unroute('**/api/workbench');await pending.fulfill({json:stale});
 });
+
+test('native mouse scrolling reaches a full-screen app without entering tmux copy mode',async({page},info)=>{
+  await fixture(page);const inputs=[];
+  await page.route('**/api/interface',route=>route.fulfill({json:{label:'Native mouse',terminal_scroll:'tmux'}}));
+  await page.routeWebSocket('**/ws/sessions/**',ws=>{
+    ws.onMessage(message=>inputs.push(Buffer.isBuffer(message)?message.toString('latin1'):message));
+    ws.send('\x1b[?1049h\x1b[?1000h\x1b[?1006hNative full-screen app\r\n');
+  });
+  await page.goto('/work#session/session-one');await page.locator('#open-terminal').click();
+  const frame=page.frameLocator('iframe:not([hidden])');await expect(frame.locator('#connection')).toHaveText('Connected');
+  const native=page.frames().find(f=>f.url().includes('/terminal?'));
+  await expect.poll(()=>native.evaluate(()=>window.__terminal.modes.mouseTrackingMode)).not.toBe('none');
+  const box=await frame.locator('.xterm-screen').boundingBox();
+  await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.wheel(0,-120);
+  await expect.poll(()=>inputs.some(x=>/^\x1b\[<64;/.test(x))).toBe(true);
+  // Trackpads send small pixel deltas: accumulate them through xterm, not one
+  // forced tmux line per fractional event.
+  await native.evaluate(()=>{const screen=document.querySelector('.xterm-screen'),box=screen.getBoundingClientRect();for(let i=0;i<100;i++)screen.dispatchEvent(new WheelEvent('wheel',{deltaY:-.4,clientX:box.x+30,clientY:box.y+30,bubbles:true,cancelable:true}));});
+  expect(inputs.filter(x=>x.startsWith('{')).map(x=>JSON.parse(x)).filter(x=>x.type==='scroll'&&x.lines!==0)).toEqual([]);
+  if(info.project.name!=='desktop'){
+    const before=inputs.filter(x=>/^\x1b\[<64;/.test(x)).length;
+    const cdp=await page.context().newCDPSession(page),x=box.x+box.width/2,y=box.y+40;
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:y+120}]});
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await cdp.detach();
+    await expect.poll(()=>inputs.filter(x=>/^\x1b\[<64;/.test(x)).length).toBeGreaterThan(before);
+  }
+  await frame.locator('.xterm-helper-textarea').focus();await page.keyboard.type('hello');
+  await expect.poll(()=>inputs.filter(x=>!x.startsWith('{')&&!x.startsWith('\x1b')).join('')).toContain('hello');
+  expect(inputs.some(x=>x==='{"type":"scroll","lines":0}')).toBe(true);
+});
+
+test('legacy binary mouse reports preserve bytes instead of UTF-8 encoding',async({page})=>{
+  await fixture(page);const binary=[];
+  await page.routeWebSocket('**/ws/sessions/**',ws=>{ws.onMessage(message=>{if(Buffer.isBuffer(message))binary.push([...message]);});ws.send('\x1b[?1000h');});
+  await page.goto('/work#session/session-one');await page.locator('#open-terminal').click();
+  const native=page.frames().find(f=>f.url().includes('/terminal?'));
+  await expect.poll(()=>native.evaluate(()=>window.__terminal?.modes.mouseTrackingMode)).toBe('vt200');
+  await native.evaluate(()=>{const screen=document.querySelector('.xterm-screen'),box=screen.getBoundingClientRect();screen.dispatchEvent(new WheelEvent('wheel',{deltaY:-80,clientX:box.x+box.width-20,clientY:box.y+30,bubbles:true,cancelable:true}));});
+  await expect.poll(()=>binary.some(bytes=>bytes[0]===27&&bytes[1]===91&&bytes[2]===77)).toBe(true);
+});

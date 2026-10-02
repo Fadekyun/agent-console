@@ -1,3 +1,10 @@
+## 0.22.1 — 2026-10-02 (#90)
+
+- Impact: mouse-enabled terminals use xterm's native wheel handling instead of forcing tmux copy mode. This lets full-screen agents receive their own scrolling input, including high-resolution trackpad deltas. Binary mouse reports are preserved. Typing exits tmux history after scrolling, and reconnect clears a previously stuck copy view. Touch gestures use the same native path when mouse reporting is active.
+- Configuration/migration: none. Refresh browser pages to load the fix; running sessions need no restart. Copy mode remains the fallback for terminals without mouse reporting.
+- Verification: native mouse/binary forwarding, fractional wheel input, touch routing and keyboard recovery regressions; a live-updating full-screen terminal fixture checks that scroll reaches the app without entering tmux copy mode. Physical Mac feedback remains necessary.
+- Rollback: select 0.22.0 with all state retained. Its wheel interception can reintroduce the frozen-view behavior. No session or configuration migration.
+
 ## 0.22.0 — 2026-10-02 (#90)
 
 - Impact: embedded terminals default to combined typing and history scrolling. Hidden views detach their browser PTY; reopening retains drafts and reconnects. Terminal startup no longer steals focus from the surrounding page. Wheel/touch bursts are coalesced. Stop is visible in the session heading and terminal header, Close terminal only disconnects the view, and stopping preserves private bounded recent output. Secondary session details start collapsed.

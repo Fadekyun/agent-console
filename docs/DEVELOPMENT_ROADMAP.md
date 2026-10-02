@@ -1,3 +1,8 @@
+## Native terminal scrolling — 2026-10-02 (#90)
+
+- Corrected the full-screen/trackpad gap in prior shell-only verification: preserve xterm native mouse input instead of unconditionally entering tmux copy mode.
+- Open-source comparison and preferred architecture are recorded in TERMINAL_REFERENCES.md. Retain xterm and the current session/auth backend; use ttyd's input-forwarding pattern rather than replacing the complete Console.
+
 ## Terminal interaction and session lifecycle — 2026-10-02 (#90)
 
 - Combined typing/history scrolling, hidden-view PTY detachment, focus and viewport handling, visible stop action, and saved recent output address functional friction.
