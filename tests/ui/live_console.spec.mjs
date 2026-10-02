@@ -83,7 +83,7 @@ test.describe('live Agent Console dogfood', () => {
         return sessions.find((item) => item.tmux_name === name)?.attached_clients;
       }).toBe(2);
 
-      await secondPage.locator('#detach').click();
+      await openMore(secondPage);await secondPage.locator('#detach').click();
       await expect(secondPage.locator('#connection')).toContainText('Detached');
       await secondPage.locator('#reconnect').click();
       await expect(secondPage.locator('#connection')).toContainText('Connected');

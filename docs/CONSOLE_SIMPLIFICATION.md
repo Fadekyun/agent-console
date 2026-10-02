@@ -61,3 +61,17 @@ phone keyboard behavior remain hardware acceptance checks.
 
 Deploy to the separate staging instance first, keeping the current instance and its
 rollback release available. This change has no database, session or credential migration.
+
+
+## Recorded verification
+
+- 69 Workbench cases passed across desktop/360px/390px; 12 final targeted checks
+  passed after the last small navigation/fallback adjustments (overlapping coverage).
+- 40 shared-terminal/legacy cases passed; 11 platform/live-only cases were intentionally
+  skipped. 19 backend Workbench launch/state tests passed in isolated state.
+- Staging source `c5aa9126f6b5b188497235c58fbfdcfea7363071` was exercised using two owned
+  shell sessions and a mouse-aware full-screen fixture. Native wheel reached the app,
+  visible ticks continued, direct typing worked, 360/390px tree switching preserved the
+  draft, and Stop ended only the selected child. Both probes were stopped afterward.
+- Opening/closing the composer changed the live desktop output height by 65px.
+  Main remains on 0.22.1; staging is 0.23.0. No model requests or account changes.
