@@ -1,3 +1,10 @@
+## 0.20.2 — 2026-10-02 (#90)
+
+- Impact: manual Add session opens a child terminal directly. Dependency scheduling is an explicit option; agent proposals retain review. Recipe and continuation drafts start with one button; configuration validation and receipt deduplication happen internally. Optional configuration preview remains available.
+- Configuration/migration: no schema or permission changes. Canonical Workbench .6, Coding .2 and Coordination .2 guides favor one-session completion, carry existing authorization forward and reserve extra reviewers/checkpoints for concrete needs or repository requirements. Existing running skill copies remain unchanged.
+- Verification: desktop/360px/390px browser checks cover direct children, optional scheduled acceptance, single-action recipe launch, continuation preview invalidation and uncertain-launch receipt reuse. Existing backend admission and release checks remain unchanged. Guide validators and version checks pass.
+- Rollback: select 0.20.1 with all state retained. Restore the three guide files only if they still match this rollout's hashes, using the host-local backups. Existing terminals and results remain intact.
+
 ## 0.20.1 — 2026-10-02 (staging, #90 / #140 / #6)
 
 - Impact: completes the staging acceptance record for Workbench, connected workflows and the skills control plane. No functional change after 0.20.0.

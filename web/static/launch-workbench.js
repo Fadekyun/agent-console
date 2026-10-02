@@ -42,10 +42,11 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
     form.dataset.launchConfig=JSON.stringify(request);form.dataset.review='true';
     if(recipe){form.dataset.recipe=JSON.stringify(recipe);form.elements.recipe_title.value=recipe.title;$('#save-recipe').textContent='Update recipe';}
     if(source){form.dataset.continuation=source.id;$('#create-title').textContent='Continue work';$('#create-help').textContent='Start a new conversation using recorded settings and the preserved workspace. The latest explicit result will be delivered as an input.';$('#recipe-save-panel').hidden=true;}
-    form.querySelector('button[type=submit]').textContent=source?'Review continuation':'Review launch';
-    $('#create-start-help').textContent='Preview settings and skill revisions, then launch. The task stays in the terminal composer until you send it.';
+    form.querySelector('button[type=submit]').textContent=source?'Continue work':'Start session';
+    $('#create-start-help').textContent='Start with these settings. The task stays in the terminal composer until you send it.';
   }
-  async function reviewLaunch(request=getRequest()){
+  async function reviewLaunch(request=getRequest(),{start=false}={}){
+    if(start&&review){await runLaunch();return;}
     const token=++sequence;review=null;const panel=$('#launch-preview'),button=$('#preview-launch');button.disabled=true;
     panel.hidden=false;panel.replaceChildren(el('p','Checking launch configuration…'));
     try{
@@ -58,17 +59,27 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
       const task=el('p',view.task||'No initial task','brief');panel.append(el('strong','Task'),task);
       const run=el('button','Launch session','primary');run.type='button';run.id='confirm-launch';
       const result=el('p');result.setAttribute('role','status');panel.append(run,result);
-      run.onclick=async()=>{
-        if(!review||launching)return;launching=true;run.disabled=true;const submission=review;
-        try{
-          const launched=await api('/api/workbench/launches',submission);
-          if(launched.state!=='created'){result.textContent=launched.error||'Launch is still pending. Check again before starting another session.';run.textContent='Check launch';return;}
-          message('');$('#create-dialog').close();await refresh();openSession(launched.name);
-        }catch(error){result.textContent=error.message+' Check this launch before starting another.';run.textContent='Check launch';}
-        finally{launching=false;run.disabled=false;}
-      };
+      run.onclick=()=>runLaunch();
+      if(start)await runLaunch();
     }catch(error){if(token===sequence)panel.replaceChildren(el('p',error.message,'danger'));}
     finally{button.disabled=false;}
+  }
+  async function runLaunch(){
+    if(!review||launching)return;
+    const submission=review;launching=true;
+    const controls=[...form.elements].map(control=>[control,control.disabled]);
+    for(const [control] of controls)control.disabled=true;
+    const panel=$('#launch-preview');let result=panel.querySelector('[role=status]');
+    if(!result){result=el('p');result.setAttribute('role','status');panel.append(result);}
+    try{
+      const launched=await api('/api/workbench/launches',submission);
+      if(launched.state!=='created'){
+        result.textContent=launched.error||'Launch is pending. Check its status before starting another session.';
+        form.querySelector('button[type=submit]').textContent='Check launch';return;
+      }
+      message('');$('#create-dialog').close();await refresh();openSession(launched.name);
+    }catch(error){result.textContent=error.message+' Check this launch before starting another.';form.querySelector('button[type=submit]').textContent='Check launch';}
+    finally{launching=false;for(const [control,disabled] of controls)control.disabled=disabled;const run=$('#confirm-launch');if(run)run.textContent='Check launch';}
   }
   async function recipes(){
     const list=$('#recipe-list');list.replaceChildren(el('p','Loading recipes…'));$('#recipe-dialog').showModal();

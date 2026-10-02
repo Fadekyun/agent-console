@@ -41,7 +41,7 @@ async function fixture(page) {
   return {requests,sessions};
 }
 
-test('recipes save without launching, review configuration and launch once',async({page})=>{
+test('recipes save without launching and start with one explicit action',async({page})=>{
   const {sessions}=await fixture(page),recipes=[],launches=[];
   await page.route('**/api/workbench/recipes',async route=>{
     if(route.request().method()==='POST'){const value=route.request().postDataJSON();const recipe={id:'recipe-one',revision:1,title:value.title,request:value.request};recipes.push(recipe);await route.fulfill({json:recipe});}
@@ -59,9 +59,8 @@ test('recipes save without launching, review configuration and launch once',asyn
   await page.locator('#cancel-create').click();await page.locator('#run-recipe').click();
   await page.getByRole('button',{name:'Use recipe',exact:true}).click();
   await expect(page.locator('[name=task]')).toHaveValue('Run the bounded repository check');
-  await page.getByRole('button',{name:'Review launch',exact:true}).click();
-  await expect(page.locator('#launch-preview')).toContainText('Repository');expect(launches).toHaveLength(0);
-  await page.locator('#confirm-launch').click();await expect(page.locator('#session-title')).toHaveText('recipe-run');
+  await page.getByRole('button',{name:'Start session',exact:true}).click();
+  await expect(page.locator('#session-title')).toHaveText('recipe-run');
   await expect(page.locator('#notice')).toBeHidden();
   expect(launches).toHaveLength(1);expect(launches[0].expected_hash).toBe('a'.repeat(64));
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
@@ -78,11 +77,11 @@ test('configuration and continuation preserve settings and invalidate an edited 
   });
   await page.goto('/work#session/session-one');if(info.project.name!=='desktop')await page.locator('#session-detail > summary').click();
   await page.locator('#show-configuration').click();await expect(page.locator('#session-configuration')).toContainText('/tmp/preserved-worktree');
-  await page.locator('#continue-session').click();await page.getByRole('button',{name:'Review continuation',exact:true}).click();
+  await page.locator('#continue-session').click();await page.locator('#preview-launch').click();
   await expect(page.locator('#confirm-launch')).toBeVisible();expect(previews[0].source_session_id).toBe('root');
   expect(previews[0].request.project_id).toBe('project-one');expect(previews[0].request.plan_reasoning_effort).toBe(null);
   await page.locator('[name=task]').fill('A revised next task');await expect(page.locator('#launch-preview')).toBeHidden();
-  await page.getByRole('button',{name:'Review continuation',exact:true}).click();await expect(page.locator('#launch-preview')).toContainText('A revised next task');
+  await page.locator('#preview-launch').click();await expect(page.locator('#launch-preview')).toContainText('A revised next task');
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
 
@@ -167,18 +166,9 @@ test('work, manual child, drafts and mobile terminal use the real components',as
   const task='Review only the changed layout. Check the mobile navigation, the terminal scroll position while reading output, and whether a long task remains readable without making the session card occupy the entire phone screen.';
   await page.locator('[name=task]').fill(task);
   await page.locator('[name=profile]').selectOption('reviewer');
-  await page.getByRole('button',{name:'Review next step',exact:true}).click();
-  await expect(page.locator('#workflow-next-steps h3')).toHaveText(task.slice(0,77).trimEnd()+'…');
-  await expect(page.getByText(task,{exact:true})).toBeHidden();
-  await page.getByText('Task & configuration',{exact:true}).click();
-  await expect(page.getByText(task,{exact:true})).toBeVisible();
-  await page.getByText('Task & configuration',{exact:true}).click();
-  await page.getByRole('button',{name:'Preview launch',exact:true}).click();
-  await expect(page.getByText('Native permissions: read-only',{exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'Accept next step',exact:true}).click();
-  await page.getByRole('button',{name:'Open session',exact:true}).click();
+  await expect(page.locator('#scheduled-options')).toBeHidden();
+  await page.getByRole('button',{name:'Add session',exact:true}).click();
   await expect(page.locator('#session-title')).toHaveText('session-two');
-  if(info.project.name!=='desktop')await page.getByRole('button',{name:'Open terminal',exact:true}).click();
   expect(requests).toHaveLength(1);expect(requests[0].profile).toBe('reviewer');expect(requests[0].worktree).toBe(false);
   const frame=page.frameLocator('iframe:not([hidden])');
   await expect(frame.locator('#connection')).toHaveText('Connected');
@@ -427,4 +417,39 @@ test('empty work and keyboard tree focus survive refresh without touching the te
   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await expect(frame.locator('#composer')).toBeFocused();await expect(frame.locator('#composer')).toHaveValue('Preserved during work updates');
   expect(page.frames()).toContain(frameHandle);
+});
+
+
+test('scheduled follow-ups remain an explicit reviewed choice',async({page})=>{
+  const {requests}=await fixture(page);
+  await page.goto('/work#session/session-one');
+  await page.getByRole('button',{name:'+ Add session',exact:true}).click();
+  await page.locator('[name=task]').fill('Check the selected result after completion');
+  await page.locator('#schedule-step').check();
+  await expect(page.locator('#scheduled-options')).toBeVisible();
+  await page.getByRole('button',{name:'Review scheduled step',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Preview launch',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Preview launch',exact:true}).click();
+  await expect(page.getByText('Native permissions: read-only',{exact:true})).toBeVisible();
+  expect(requests).toHaveLength(1);
+  await page.getByRole('button',{name:'Accept next step',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Open session',exact:true})).toBeVisible();
+});
+
+test('one-click recipe checks an uncertain launch using the same receipt',async({page})=>{
+  const {sessions}=await fixture(page),requests=[];
+  await page.route('**/api/workbench/recipes',route=>route.fulfill({json:[{id:'r',revision:1,title:'Small fix',request:{tool:'shell',profile:'coder',repository:'/tmp/repo',task:'Fix the layout',worktree:true}}]}));
+  await page.route('**/api/workbench/launches/preview',route=>route.fulfill({json:{hash:'a'.repeat(64),config:route.request().postDataJSON().request,skills:[]}}));
+  await page.route('**/api/workbench/launches',route=>{
+    requests.push(route.request().postDataJSON());
+    if(requests.length===1)return route.fulfill({json:{state:'uncertain',error:'Launch response pending'}});
+    sessions.push({...sessions[0],id:'created',tmux_name:'created-once'});
+    return route.fulfill({json:{state:'created',name:'created-once'}});
+  });
+  await page.goto('/work');await page.locator('#run-recipe').click();await page.getByRole('button',{name:'Use recipe',exact:true}).click();
+  await page.getByRole('button',{name:'Start session',exact:true}).click();
+  await expect(page.locator('#launch-preview')).toContainText('Launch response pending');
+  await page.locator('#create-form button[type=submit]').click();
+  await expect(page.locator('#session-title')).toHaveText('created-once');
+  expect(requests).toHaveLength(2);expect(requests[0]).toEqual(requests[1]);
 });

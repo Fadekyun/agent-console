@@ -1,3 +1,9 @@
+## Simpler everyday sessions — 2026-10-02 (#90)
+
+- Manual Add session now creates a child directly, including Pi/Hermes interactive sessions. Scheduled follow-ups remain opt-in and reviewed.
+- Recipe/continuation starts need one explicit action; validation runs internally and uncertain responses reuse the same receipt.
+- Updated operating guides remove routine review chains and repeat approval requests. Existing authorization, repository rules, skill trust and explicit release boundaries remain in effect.
+
 ## Staging revamp completed — 2026-10-02 (#90 / #140 / #6)
 
 - Workbench, optional connected-session growth, results/release controls and the portable skills control plane are implemented and published together to the isolated staging console.

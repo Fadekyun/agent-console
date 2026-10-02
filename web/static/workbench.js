@@ -133,17 +133,27 @@ function configureTool() {
   options(form.elements.auth_context, state.me.auth_contexts.filter(x => x.tool === tool && !['disabled','error','setup-required'].includes(x.status)).map(x => [x.name, `${x.name} · ${x.provider}`]));
   form.elements.reasoning_effort.disabled = !['codex','codex-pro'].includes(tool);
 }
+function configureSessionFlow() {
+  const parent=form.elements.parent.value;
+  const scheduled=!!parent&&$('#schedule-step').checked;
+  $('#scheduled-options').hidden=!scheduled;
+  form.elements.reason.required=scheduled;form.elements.expected_output.required=scheduled;
+  form.elements.name.disabled=scheduled;form.elements.name.closest('label').hidden=scheduled;
+  $('button[type=submit]',form).textContent=scheduled?'Review scheduled step':parent?'Add session':'Create session';
+  $('#create-start-help').textContent=scheduled?'This scheduled task needs one review before it can run automatically.':'The task opens as a draft. Send it from the terminal when you are ready.';
+}
+$('#schedule-step').onchange=configureSessionFlow;
 function openCreate(parent = null, step = null) {
   if (!state.me) { message('Tool information is still loading. Try again shortly.'); return; }
   form.reset(); launches.reset(parent); form.elements.parent.value = parent?.id || '';
   form.dataset.step = step ? JSON.stringify(step) : '';
-  $('#next-step-options').hidden=!parent;form.elements.name.disabled=!!parent;form.elements.name.closest('label').hidden=!!parent;
+  $('#next-step-options').hidden=!parent;
+  const nativeParent=parent&&state.sessions.some(s=>s.id===parent.id);
+  $('#schedule-step').checked=!!step||!!parent&&!nativeParent;$('#schedule-step').disabled=!!step||!!parent&&!nativeParent;
   form.elements.reason.value=step?.reason||'A separate session for this specific task.';form.elements.expected_output.value=step?.expected_output||'Complete the stated task and report the result, checks and selected artifacts.';
-  form.elements.reason.required=!!parent;form.elements.expected_output.required=!!parent;
-  $('button[type=submit]',form).textContent=parent?'Review next step':'Create session';
-  $('#create-start-help').textContent=parent?'Review the proposed task and effective configuration before accepting. It will start automatically when its required inputs and capacity are ready.':'The task opens as a draft in the terminal. Review it and press Send + Enter to begin.';
+  configureSessionFlow();
   $('#create-title').textContent = parent ? 'Add session' : 'New session';
-  $('#create-help').textContent = parent ? `Under ${parent.tmux_name}. Choose a role and a bounded task. This leaves the parent’s permissions unchanged.` : 'One session can investigate, implement and check a simple task.';
+  $('#create-help').textContent = parent ? `Under ${parent.tmux_name}. Choose a task and tool. This opens a separate terminal without a review chain.` : 'One session can investigate, implement and check a simple task.';
   const available = state.me.tool_status.filter(x => !['disabled','error','setup-required'].includes(x.status));
   options(form.elements.tool, available.map(x => [x.name, x.name]), parent?.tool || 'codex-pro');
   options(form.elements.profile, state.me.profiles.filter(x => x.status !== 'deprecated').map(x => [x.name, x.display_name || x.name]), 'coder');
@@ -168,8 +178,12 @@ form.onsubmit = async event => {
   event.preventDefault(); const submit = $('button[type=submit]', form); if (submit.disabled) return; submit.disabled = true; $('#create-error').textContent = '';
   const fields=form.elements,parent=fields.parent.value,data=createRequest();
   try {
-    if(!parent&&form.dataset.review){await launches.reviewLaunch(data);return;}
-    if(parent){
+    if(!parent&&form.dataset.review){await launches.reviewLaunch(data,{start:true});return;}
+    if(parent&&!$('#schedule-step').checked){
+      const owner=state.sessions.find(s=>s.id===parent);if(!owner)throw new Error('Parent session is unavailable. Refresh and try again.');
+      const session=await api(`/api/sessions/${encodeURIComponent(owner.tmux_name)}/children`,data);
+      $('#create-dialog').close();if(state.loading)await state.loading;await refresh();location.hash=sessionLink(session);route();openTerminal();
+    }else if(parent){
       const existing=form.dataset.step?JSON.parse(form.dataset.step):null;
       const owner=existing?.owner_id||parent;
       const config={...data};delete config.task;delete config.name;

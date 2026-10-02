@@ -1,13 +1,15 @@
 # Console operating guides
 
+v0.20.2 simplifies routine work: manual child sessions are direct, scheduled work is optional, and recipe/continuation launch validation runs without a second approval screen. Workbench, Coding and Coordination reuse existing authorization and do not prescribe a review chain. New guide revisions apply to future sessions or explicit restarts.
+
 The seven guides are maintained in the canonical skills workspace on n100, `/home/fadekyun/codex/skills`, and mirrored into staging's `/home/agentpreview/codex/skills`. Edit the canonical packages, not generated session copies. These packages use portable YAML with namespaced Console metadata; they are not a new plugin system.
 
 | Package | Revision | Staging selection |
 | --- | --- | --- |
-| agent-console-workbench | 2026-10-02.5 | Shared session basics, navigation, configuration and continuation |
+| agent-console-workbench | 2026-10-02.6 | Shared session basics, navigation, configuration and continuation |
 | agent-console-results | 2026-10-02.3 | Shared ready/final results, selected artifacts, delivery and consumption |
-| agent-console-coding | 2026-10-02.1 | coder, bugfix |
-| agent-console-coordination | 2026-10-02.1 | orchestrator, planner |
+| agent-console-coding | 2026-10-02.2 | coder, bugfix |
+| agent-console-coordination | 2026-10-02.2 | orchestrator, planner |
 | agent-console-verification | 2026-10-02.1 | reviewer, verifier |
 | agent-console-release | 2026-10-02.1 | release |
 | agent-console-skills | 2026-10-02.3 | orchestrator; General remains compatible for an explicit assignment |
@@ -32,8 +34,8 @@ The four new file SHA-256 values, checked on canonical installation and on actua
 
 | Package suffix | SKILL.md SHA-256 |
 | --- | --- |
-| coding | c75134e562e2d85da375f9132fde71a7ef0f7641fd3cbc5f07c917fbcc29c32f |
-| coordination | 8bb699b36c30d5366a212888bf44477b0755b2b3cb76c1fecc47aa208a48247b |
+| coding | aae32a0c94cbd3211672e4ced8311a35ee169a3e3113c1446fba97ade22c3c47 |
+| coordination | 2c6ef117659c3f80f6a26ecef470c4403e4a64c3177bf1f5e345cafcc8878f62 |
 | verification | e1dd99cd019ce3d8b1d9341841ec1b525bd8c1b0c2eec5cf266be8c1b1db35e1 |
 | skills (.3) | 1fb7067118ec210d771289d305ad62b873151f92c48aca625feac5bec28a05bd |
 
