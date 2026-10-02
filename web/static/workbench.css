@@ -37,3 +37,26 @@
 body.terminal-open{overflow:hidden}
 #terminal-panel.expanded{top:var(--terminal-top,0px);height:var(--terminal-height,100dvh);bottom:auto}
 @media(max-width:760px){.terminal-panel{top:var(--terminal-top,0px);height:var(--terminal-height,100dvh);bottom:auto}.terminal-panel>header{padding:4px 8px}.terminal-panel>header>div{display:flex;gap:4px}.terminal-panel>header button{padding:5px 7px}#session-view>.heading .session-actions{display:flex;gap:8px}#session-view>.heading .session-actions button{flex:1}}
+
+/* Space belongs to the selected session; secondary controls expand on demand. */
+.workspace.tree-collapsed{grid-template-columns:104px minmax(0,1fr)}
+.tree-panel{padding:10px;max-height:75dvh;overflow:auto;overscroll-behavior:contain}
+.tree-panel>summary{font-weight:600;display:list-item;min-height:44px;padding:10px 0}
+.node{position:relative;margin-top:8px;margin-bottom:8px;padding-bottom:6px}
+.node-heading{display:flex;align-items:center;gap:4px}
+.node-heading>a{flex:1;min-width:0}
+.node .branch-toggle{min-width:32px;min-height:44px;padding:4px;text-align:center;flex:none}
+.node small{font-size:11px}
+.node:not(.active)>.add-session{display:none}
+.node:focus-within>.add-session,.node:hover>.add-session{display:block}
+#tree-drawer .node>.add-session{display:block}
+#sessions-dialog{width:min(460px,calc(100% - 20px))}
+#sessions-dialog .heading{position:sticky;top:-24px;background:var(--paper);padding:8px 0;z-index:1}
+#attention-controls{margin:14px 0}
+.settings-section{margin:20px 0}
+.settings-section>summary{font-weight:600}
+#session-view>.heading{margin-bottom:16px}
+#session-view>.back{margin-bottom:12px}
+#session-title{font-size:26px}
+.terminal-panel>header>div{display:flex;gap:4px}
+@media(max-width:760px){.tree-panel{max-height:45dvh}.workspace.tree-collapsed{display:flex}.terminal-panel>header{flex-wrap:wrap}.terminal-panel>header #terminal-status{flex:1}.terminal-panel>header>div{margin-left:auto}.node>.add-session{display:block}}

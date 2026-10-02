@@ -35,3 +35,6 @@ Sources inspected:
 - [ttyd input and resize wiring](https://github.com/tsl0922/ttyd/blob/main/html/src/components/terminal/xterm/index.ts)
 - [xterm terminal modes](https://xtermjs.org/docs/api/terminal/interfaces/imodes/)
 - [tmux copy-mode behavior](https://github.com/tmux/tmux/wiki/Getting-Started#copy-and-paste)
+
+The expanded seven-option comparison and implementation decision are in
+[CONSOLE_SIMPLIFICATION.md](CONSOLE_SIMPLIFICATION.md).

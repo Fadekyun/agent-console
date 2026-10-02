@@ -27,7 +27,7 @@ const reconnect = $('#reconnect');
 const composer = $('#composer');
 const newOutput = $('#new-output');
 let socket;
-let mode = new URLSearchParams(location.search).get('mode') || (coarsePointer ? 'scroll' : 'type');
+let mode = new URLSearchParams(location.search).get('mode') || 'type';
 let focusOnConnect = !coarsePointer && !isEmbedded;
 let resizeFrame;
 let alternateScreen = false;
@@ -47,7 +47,23 @@ const RECONNECT_MAX_MS = 30000;
 let autoReconnectEnabled = true;
 const draftKey = `agent-console:composer:${name}`;
 try { const draft = sessionStorage.getItem(draftKey); if (draft !== null) { composer.value = draft; briefLoaded = true; } } catch { /* storage may be disabled */ }
-function saveDraft() { try { sessionStorage.setItem(draftKey, composer.value); } catch { /* continue without persistence */ } }
+function saveDraft() { $('#toggle-composer').textContent = composer.value ? 'Input · draft' : 'Input'; try { sessionStorage.setItem(draftKey, composer.value); } catch { /* continue without persistence */ } }
+function showComposer(open, focus = false) {
+  $('#input-drawer').hidden = !open;
+  $('#toggle-composer').setAttribute('aria-expanded', String(open));
+  try { sessionStorage.setItem(`${draftKey}:open`, String(open)); } catch {}
+  autoSizeComposer();
+  if (focus) { if (open) composer.focus(); else if (mode === 'type') terminal.focus(); }
+}
+$('#resume-typing').onclick = () => setMode('type');
+$('#toggle-composer').onclick = () => showComposer($('#input-drawer').hidden, true);
+new MutationObserver(() => { reconnect.hidden = reconnect.disabled; }).observe(reconnect, {attributes:true, attributeFilter:['disabled']});
+$('#terminal-more').addEventListener('keydown', event => {
+  if (event.key === 'Escape') { $('#terminal-more').open = false; $('#terminal-more > summary').focus(); }
+});
+document.addEventListener('pointerdown', event => {
+  if (!$('#terminal-more').contains(event.target)) $('#terminal-more').open = false;
+});
 window.addEventListener('pagehide', saveDraft);
 
 function setStatus(message) {
@@ -190,6 +206,7 @@ function setMode(selected, focus = true) {
   mode = ['scroll', 'type', 'select'].includes(selected) ? selected : 'scroll';
   document.body.dataset.terminalMode = mode;
   terminal.options.disableStdin = mode !== 'type';
+  $('#resume-typing').hidden = mode === 'type';
   $$('[data-mode]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.mode === mode)));
   if (mode === 'type') { if (historyMode) leaveHistory(); if (focus) terminal.focus(); }
   else terminal.blur();
@@ -199,7 +216,7 @@ function insertComposer(text, focus = true) {
   const start = composer.selectionStart ?? composer.value.length;
   const end = composer.selectionEnd ?? start;
   composer.setRangeText(text, start, end, 'end');
-  saveDraft(); autoSizeComposer(); if (focus) composer.focus();
+  saveDraft(); if (focus) showComposer(true, true); else autoSizeComposer();
 }
 
 function autoSizeComposer() {
@@ -213,7 +230,7 @@ function submit(addEnter) {
     send(composer.value + (addEnter ? '\r' : ''));
     composer.value = ''; saveDraft(); autoSizeComposer();
     if (mode === 'type') terminal.focus();
-  } catch (error) { setStatus(error.message); }
+  } catch (error) { setStatus(error.message); showComposer(true); }
 }
 
 async function copyText(value) {
@@ -315,7 +332,7 @@ function makePeerRow(session) {
   ];
   for (const [label, handler] of choices) {
     const button = document.createElement('button'); button.textContent = label;
-    button.onclick = () => { handler(); if (label.startsWith('Insert')) $('#peers-dialog').close(); };
+    button.onclick = () => { handler(); if (label.startsWith('Insert')) { $('#peers-dialog').close(); showComposer(true, true); } };
     actions.append(button);
   }
   row.append(details, actions); return row;
@@ -336,7 +353,7 @@ async function openPeers() {
 
 // Mouse reports are terminal input, not typing. Do not cancel tmux copy mode
 // between wheel events; tmux routes them to the application that requested them.
-terminal.onData((value) => { if (mode === 'type') { try { send(value, /^\x1b\[(?:<|M)/.test(value)); } catch { /* status is visible */ } } });
+terminal.onData((value) => { if (mode === 'type') { try { send(value, /^\x1b\[(?:<|M)/.test(value)); } catch (error) { setStatus(error.message); showComposer(true); } } });
 terminal.onBinary((value) => {
   if (mode === 'type' && socket?.readyState === WebSocket.OPEN) {
     socket.send(Uint8Array.from(value, character => character.charCodeAt(0)));
@@ -418,7 +435,7 @@ window.visualViewport?.addEventListener('resize', syncVisualViewport);
 window.visualViewport?.addEventListener('scroll', syncVisualViewport);
 window.addEventListener('resize', syncVisualViewport);
 
-$$('[data-mode]').forEach((button) => button.onclick = () => setMode(button.dataset.mode));
+$$('[data-mode]').forEach((button) => button.onclick = () => { $('#terminal-more').open = false; setMode(button.dataset.mode); });
 $$('[data-key]').forEach((button) => button.onclick = () => {
   try { send(JSON.parse(`"${button.dataset.key}"`)); } catch (error) { setStatus(error.message); }
 });
@@ -432,7 +449,7 @@ $('#detach').onclick = () => {
 };
 $('#fullscreen').onclick = async () => { try { await document.documentElement.requestFullscreen?.(); } catch (error) { setStatus(`Fullscreen unavailable: ${error.message}`); } };
 $('#text-view').onclick = () => refreshTextView();
-$('#load-brief').onclick = () => loadBrief(false);
+$('#load-brief').onclick = () => { $('#terminal-more').open = false; loadBrief(false); };
 $('#text-refresh').onclick = () => refreshTextView();
 $('#text-page-up').onclick = () => refreshTextView('up');
 $('#text-page-down').onclick = () => refreshTextView('down');
@@ -457,6 +474,8 @@ composer.addEventListener('keydown', (event) => {
 });
 
 initTheme($('#terminal-theme'), () => { terminal.options.theme = xtermTheme(); resize(); });
+saveDraft();
+try { showComposer(sessionStorage.getItem(`${draftKey}:open`) === 'true'); } catch {}
 setMode(mode, false); syncVisualViewport(); autoSizeComposer(); autoReconnectEnabled = true; cancelReconnect(); connect(); loadBrief(true);
 fetch(`/api/sessions/${encodeURIComponent(name)}/review?lines=1`, { cache: 'no-store' })
   .then((response) => response.ok ? response.json() : null)

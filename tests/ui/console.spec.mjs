@@ -1,4 +1,7 @@
 import { expect, test } from '@playwright/test';
+async function openInput(target){if(await target.locator('#input-drawer').isHidden())await target.locator('#toggle-composer').click();}
+async function openMore(target){if(!await target.locator('#terminal-more').evaluate(e=>e.open))await target.locator('#terminal-more > summary').click();}
+
 
 const SKILLS_RESPONSE = {
   entries: [
@@ -179,22 +182,22 @@ test('managed kill remains confirmed and state-aware', async ({ page }) => {
   await expect(page.locator('#session-history')).toContainText('codex-root');
 });
 
-test('terminal is scroll-first on mobile and peer insertion never auto-sends', async ({ page }, testInfo) => {
+test('terminal supports direct typing on mobile and peer insertion never auto-sends', async ({ page }, testInfo) => {
   await installFakeWebSocket(page);
   await mockApi(page);
   await page.goto('/terminal?session=codex-root');
   const mobile = testInfo.project.name !== 'desktop';
-  await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', mobile ? 'scroll' : 'type');
+  await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'type');
   if (mobile) {
-    expect(await page.locator('.xterm-viewport').evaluate((node) => getComputedStyle(node).touchAction)).toBe('pan-y');
-    await page.locator('[data-mode="type"]').click();
-    await page.locator('#composer').fill('line one');
+    expect(await page.locator('.xterm-viewport').evaluate((node) => getComputedStyle(node).touchAction)).toBe('none');
+    await openMore(page);await page.locator('[data-mode="type"]').click();
+    await openInput(page);await page.locator('#composer').fill('line one');
     await page.locator('#composer').press('Enter');
     await expect(page.locator('#composer')).toHaveValue('line one\n');
   }
-  await page.locator('#composer').fill('');
+  await openInput(page);await page.locator('#composer').fill('');
   const before = await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length);
-  await page.locator('#peers').click();
+  await openMore(page);await page.locator('#peers').click();
   await page.getByRole('button', { name: 'Insert review command' }).first().click();
   await expect(page.locator('#composer')).toHaveValue('agentctl session review opencode-scout');
   expect(await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length)).toBe(before);
@@ -208,7 +211,7 @@ test('terminal detach and reconnect remain explicit', async ({ page }) => {
   await installFakeWebSocket(page);
   await mockApi(page);
   await page.goto('/terminal?session=codex-root');
-  await page.locator('#detach').click();
+  await openMore(page);await page.locator('#detach').click();
   await expect.poll(async () => page.evaluate(() => window.__wsSent.some((value) => value.includes('detach')))).toBeTruthy();
 });
 
@@ -265,7 +268,7 @@ test('terminal native clipboard permission copies text and pastes only into the 
   await page.locator('#copy-visible').click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('PEER_OUTPUT');
   await page.locator('[data-close="text-dialog"]').click();
-  await page.locator('#composer').fill('');
+  await openInput(page);await page.locator('#composer').fill('');
   await page.evaluate(() => navigator.clipboard.writeText('review this pasted text'));
   const sent = await page.evaluate(() => window.__wsSent.filter(x => x === 'terminal-bytes').length);
   await page.locator('#paste-device').click();
@@ -288,6 +291,7 @@ test('brief preload, alternate-screen paging, and Text View never auto-send the 
   if (testInfo.project.name !== 'desktop') {
     const before = await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length);
     await page.locator('#text-dialog').evaluate((dialog) => dialog.close());
+    await openMore(page);await page.locator('[data-mode=scroll]').click();
     await page.locator('#terminal').dispatchEvent('touchstart', { touches: [{ identifier: 1, clientX: 100, clientY: 500 }] });
     await page.locator('#terminal').dispatchEvent('touchend', { changedTouches: [{ identifier: 1, clientX: 100, clientY: 300 }] });
     await expect.poll(() => page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length)).toBeGreaterThan(before);
@@ -661,9 +665,9 @@ test('structured attention is explicit, filterable, and separate from mechanical
   const row = page.locator('#active-sessions .session-row').filter({ hasText: 'codex-root' });
   await row.click();
   await expect(page.locator('#session-inspector')).toBeVisible();
-  await page.locator('#attention-form select[name="state"]').selectOption('blocked');
-  await page.locator('#attention-form textarea[name="note"]').fill('Waiting for reviewed deployment choice');
-  await page.locator('#attention-form button[type="submit"]').click();
+  await page.locator('#attention-controls').evaluate(e=>{e.open=true;});await page.locator('#attention-form select[name="state"]').selectOption('blocked');
+  await page.locator('#attention-controls').evaluate(e=>{e.open=true;});await page.locator('#attention-form textarea[name="note"]').fill('Waiting for reviewed deployment choice');
+  await page.locator('#attention-controls').evaluate(e=>{e.open=true;});await page.locator('#attention-form button[type="submit"]').click();
   await expect(page.locator('#session-inspector')).toContainText('Waiting for reviewed deployment choice');
   await expect(row).toContainText('Blocked');
   await page.locator('[data-attention-filter="blocked"]').click();
@@ -1114,8 +1118,8 @@ function xtermFocus() {
 async function switchToType(page) {
   const body = page.locator('body');
   const current = await body.getAttribute('data-terminal-mode');
-  if (current !== 'type') {
-    await page.locator('[data-mode="type"]').click();
+  if (current !== 'type' || await page.evaluate(()=>matchMedia('(pointer: coarse)').matches)) {
+    await openMore(page);await page.locator('[data-mode="type"]').click();
     await expect(body).toHaveAttribute('data-terminal-mode', 'type');
   }
 }
@@ -1166,21 +1170,21 @@ test('composer submission restores xterm focus in Type mode', async ({ page }) =
   await page.goto('/terminal?session=codex-root');
   await switchToType(page);
   await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
-  await page.locator('#composer').focus();
-  await page.locator('#composer').fill('printf hello');
+  await openInput(page);await page.locator('#composer').focus();
+  await openInput(page);await page.locator('#composer').fill('printf hello');
   await page.locator('#send-enter').click();
   await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
 });
 test('Scroll and Select modes remain intentionally non-focus', async ({ page }) => {
   await installFakeWebSocket(page); await mockApi(page);
   await page.goto('/terminal?session=codex-root');
-  await page.locator('[data-mode="scroll"]').click();
+  await openMore(page);await page.locator('[data-mode="scroll"]').click();
   await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'scroll');
   expect(await page.evaluate(xtermFocus)).toBeFalsy();
-  await page.locator('[data-mode="select"]').click();
+  await openMore(page);await page.locator('[data-mode="select"]').click();
   await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'select');
   expect(await page.evaluate(xtermFocus)).toBeFalsy();
-  await page.locator('[data-mode="type"]').click();
+  await openMore(page);await page.locator('[data-mode="type"]').click();
   await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'type');
   await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
 });
@@ -1237,7 +1241,7 @@ test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Sele
   })).toBeFalsy();
 
   // Switch to Scroll mode in first terminal — focus must NOT be forced
-  await iframe1.locator('[data-mode="scroll"]').click();
+  await openMore(iframe1);await iframe1.locator('[data-mode="scroll"]').click();
   await expect(iframe1.locator('body')).toHaveAttribute('data-terminal-mode', 'scroll');
   // Tab-switch to second and back — postMessage must not force focus on Scroll mode
   await page.locator('.terminal-tab').nth(1).click();
@@ -1254,7 +1258,7 @@ test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Sele
   })).toBeNull();
 
   // Switch back to Type mode — focus should be restored on tab switch
-  await iframe1.locator('[data-mode="type"]').click();
+  await openMore(iframe1);await iframe1.locator('[data-mode="type"]').click();
   await page.locator('.terminal-tab').nth(1).click();
   await page.locator('.terminal-tab').first().click();
   await expect.poll(async () => iframe1.evaluate(() => {

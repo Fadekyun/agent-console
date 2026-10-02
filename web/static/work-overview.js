@@ -73,27 +73,46 @@ export function setupOverview({state,el,openCreate}) {
       appendCard(node,group);
     }
     if(!root.childElementCount)root.append(el('p',nodes.length?'No work matches these filters.':'Your staging workspace is ready. Start a session to begin.','empty'));
+    const warningsKey=JSON.stringify(readiness.warnings),readinessPanel=$('#readiness-summary').parentElement;
+    if(readiness.warnings.length&&readinessPanel.dataset.warnings!==warningsKey)readinessPanel.open=true;
+    readinessPanel.dataset.warnings=warningsKey;
     $('#readiness-summary').textContent=readiness.ready?'System ready':`${readiness.warnings.length} readiness warning${readiness.warnings.length===1?'':'s'}`;
     $('#readiness-details').replaceChildren(...readiness.warnings.map(w=>el('p',w)));
     restoreFocus();
   }
+  let collapsedBranches=new Set(),lastSelection=null;
+  try{const saved=JSON.parse(localStorage.getItem('workbench-collapsed-branches')||'[]');if(Array.isArray(saved))collapsedBranches=new Set(saved.filter(x=>typeof x==='string'));}catch{}
   function renderTree(session,selectedId){
     const node=nodeFor(session);if(!node)return;
     const tree=$('#session-tree'),restoreFocus=keepFocus(tree),expanded=new Set([...tree.querySelectorAll('details[open]')].map(d=>d.dataset.node));
     const members=state.work.nodes.filter(n=>n.root_id===node.root_id),root=members.find(n=>n.id===node.root_id),items=[],visited=new Set();
+    const selection=selectedId||node.id;
+    if(lastSelection!==selection){
+      const seen=new Set();let ancestor=members.find(n=>n.id===selection);
+      while(ancestor&&!seen.has(ancestor.id)){seen.add(ancestor.id);collapsedBranches.delete(ancestor.owner_id);ancestor=members.find(n=>n.id===ancestor.owner_id);}
+      lastSelection=selection;
+    }
     function visit(current,depth){
       if(visited.has(current.id))return;visited.add(current.id);
       const item=el('div',null,`node${current.id===(selectedId||node.id)?' active':''}`);item.style.setProperty('--depth',depth);item.dataset.node=current.id;
       const a=el('a',current.title.length>80?current.title.slice(0,77)+'…':current.title);a.href=link(current);if(current.id===(selectedId||node.id))a.setAttribute('aria-current','page');
-      item.append(a,el('small',`${current.profile||'Session'} · ${current.attempt_state||current.mechanical} · result ${current.result_state}`));
+      const children=members.filter(n=>n.owner_id===current.id),heading=el('div',null,'node-heading');
+      heading.append(a);
+      if(children.length){
+        const toggle=el('button',collapsedBranches.has(current.id)?'▸':'▾','branch-toggle');
+        toggle.setAttribute('aria-label',`Toggle children of ${current.title}`);toggle.setAttribute('aria-expanded',String(!collapsedBranches.has(current.id)));
+        toggle.onclick=()=>{if(collapsedBranches.has(current.id))collapsedBranches.delete(current.id);else collapsedBranches.add(current.id);try{localStorage.setItem('workbench-collapsed-branches',JSON.stringify([...collapsedBranches].slice(-500)));}catch{}renderTree(session,selectedId);[...tree.querySelectorAll('.branch-toggle')].find(b=>b.closest('[data-node]').dataset.node===current.id)?.focus({preventScroll:true});};
+        heading.append(toggle);
+      }
+      item.append(heading,el('small',`${current.profile||'Session'} · ${current.attempt_state||current.mechanical} · result ${current.result_state}`));
       const native=state.sessions.find(s=>s.id===current.native_id);
       if(!native||native.managed&&native.execution_kind!=='integration-plan'){
-        const add=el('button','+ Add session');add.onclick=()=>openCreate(native||{id:current.id,tmux_name:current.title,tool:current.tool,profile:current.profile,repository:current.repository});item.append(add);
+        const add=el('button','+ Add session','add-session');add.onclick=()=>openCreate(native||{id:current.id,tmux_name:current.title,tool:current.tool,profile:current.profile,repository:current.repository});item.append(add);
       }
       if(current.attempts.length>1){const history=el('details');history.dataset.node=current.id;history.open=expanded.has(current.id);history.append(el('summary',`${current.attempts.length} attempts`));for(const attempt of [...current.attempts].reverse()){
         const link=el('a',`Attempt ${attempt.generation} · ${attempt.state}${attempt.result?' · '+attempt.result.outcome:''}`);link.href=`#session/${encodeURIComponent(attempt.name)}`;history.append(link);
       }item.append(history);}
-      items.push(item);members.filter(n=>n.owner_id===current.id).forEach(child=>visit(child,depth+1));
+      items.push(item);if(!collapsedBranches.has(current.id))children.forEach(child=>visit(child,depth+1));
     }
     visit(root,0);tree.replaceChildren(...items);restoreFocus();
   }

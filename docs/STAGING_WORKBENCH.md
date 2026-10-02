@@ -16,16 +16,19 @@ The existing `deploy canary` health-check command stops its canary process after
 
 - Root-session work cards, search, active/history/attention filters, compact parent tree and explicit Add session beneath managed nodes.
 - One session can complete a simple task. A human can explicitly create a child with a different role without changing its parent's role. Child admission uses the existing cross-process capacity lock. Agent delegation keeps its original role restrictions.
-- Child creation starts a session immediately. Task text remains an unsent composer draft. Parent links describe ownership, not dependency readiness.
+- Child creation starts a session immediately. Task text remains unsent under **Input · draft**; open it to review and send. Parent links describe ownership, not dependency readiness.
 - Desktop resizable terminal beside the tree; phone full-screen terminal; bounded cached iframes preserve output position while switching views. Browser drafts survive reload in sessionStorage.
 - Terminal reconnect no longer forces the reader to the bottom or leaves obsolete sockets scheduling reconnects. On the staging backend, Scroll-mode wheel/touch reads tmux pane history through bounded control messages; Latest output returns to live view. This is shared tmux copy mode, so other attached clients see the same history position. Typing or sending input exits history first. A standalone terminal against an older backend retains xterm scrollback and application paging.
 - Current role skill assignments and provider readiness are visible. Existing projects, skill assignment controls, profiles, plans and diagnostics remain in the full control panel.
 
 The trial workflow skill `agent-console-workbench` is maintained in the canonical skills workspace on n100 and copied into the staging skills root. It explains proportional workflows and handoffs. Staging profiles can refer to it without rewriting the current-console profiles or unrelated domain skills.
 
-## Remaining program work
+## Current program status
 
-The integrated design program remains in issue #140 and the design branch's `v2/revamp.md`. This first running slice does not implement automatic recommendations/scheduling, dependencies, durable results/inbox, launch-time skill provenance UI, or a migration/cutover tool. Do not present those as working controls. Validate this mobile/terminal workflow before expanding the scheduler.
+Optional scheduling/dependencies, durable results/inbox and launch-time skill provenance
+are now implemented; see FINAL_STAGING_ACCEPTANCE.md and WORKBENCH_LAUNCHES.md.
+Normal Add session remains direct. The 0.23.0 controls and architecture decision are
+in CONSOLE_SIMPLIFICATION.md. No additional terminal service is required.
 
 ## Verification and rollback
 

@@ -70,6 +70,8 @@ function route() {
     sessionName=showingStep?(state.work?.nodes.find(n=>n.id===step?.root_id)?.native_name||'missing-step'):(hash.startsWith('#session/')||showingResults)?decodeURIComponent(hash.slice(9)):null;
   } catch { message('Invalid session link. Return to Work.'); }
   const previous = state.selected?.tmux_name;
+  const switchingFromDrawer = $('#sessions-dialog').open && previous !== sessionName;
+  if(switchingFromDrawer)$('#sessions-dialog').close();
   state.selected = state.sessions.find(s => s.tmux_name === sessionName) || null;
   $('#work-view').hidden = Boolean(sessionName) || ['#settings', '#skills'].includes(hash);
   $('#skills-view').hidden = hash !== '#skills';
@@ -98,7 +100,7 @@ function route() {
     } else frame.hidden = name !== state.selected?.tmux_name;
   }
   if (!state.selected || !state.frames.has(state.selected.tmux_name)) $('#terminal-panel').hidden = true;
-  if (!showingResults && state.selected?.running && previous !== state.selected.tmux_name && !matchMedia('(max-width:760px)').matches) openTerminal();
+  if (!showingResults && state.selected?.running && previous !== state.selected.tmux_name && (!matchMedia('(max-width:760px)').matches || switchingFromDrawer)) openTerminal();
   syncTerminalVisibility();
 }
 async function refresh() {
@@ -122,7 +124,8 @@ function openTerminal() {
     state.frames.set(s.tmux_name, frame); $('#terminal-frames').append(frame);
   }
   state.frames.forEach(f => { f.hidden = f !== frame; }); $('#terminal-panel').hidden = false;
-  $('#terminal-status').textContent = frame.dataset.status || 'Connecting…';
+  $('#terminal-status').textContent = `${s.tmux_name} · ${frame.dataset.status || 'Connecting…'}`;
+  $('#terminal-status').title = s.tmux_name;
   syncTerminalVisibility();
 }
 function syncTerminalVisibility() {
@@ -160,10 +163,11 @@ function configureSessionFlow() {
   form.elements.reason.required=scheduled;form.elements.expected_output.required=scheduled;
   form.elements.name.disabled=scheduled;form.elements.name.closest('label').hidden=scheduled;
   $('button[type=submit]',form).textContent=scheduled?'Review scheduled step':parent?'Add session':'Create session';
-  $('#create-start-help').textContent=scheduled?'This scheduled task needs one review before it can run automatically.':'The task opens as a draft. Send it from the terminal when you are ready.';
+  $('#create-start-help').textContent=scheduled?'This scheduled task needs one review before it can run automatically.':'Open Input · draft in the terminal to review and send the task when you are ready.';
 }
 $('#schedule-step').onchange=configureSessionFlow;
 function openCreate(parent = null, step = null) {
+  if ($('#sessions-dialog').open) $('#sessions-dialog').close();
   if (!state.me) { message('Tool information is still loading. Try again shortly.'); return; }
   form.reset(); launches.reset(parent); form.elements.parent.value = parent?.id || '';
   form.dataset.step = step ? JSON.stringify(step) : '';
@@ -291,6 +295,24 @@ form.elements.profile.addEventListener('change', previewSkills);
 form.elements.tool.addEventListener('change', previewSkills);
 $('#new-session').onclick = () => openCreate(); $('#cancel-create').onclick = () => $('#create-dialog').close();
 form.elements.profile.onchange = configureRole; form.elements.tool.onchange = configureTool;
+const treePanel=$('#tree-panel');
+try { treePanel.open=localStorage.getItem('workbench-tree-open') !== 'false'; } catch {}
+function syncTreePanel(){
+  $('.workspace').classList.toggle('tree-collapsed',!treePanel.open);
+  try{localStorage.setItem('workbench-tree-open',String(treePanel.open));}catch{}
+}
+treePanel.addEventListener('toggle',syncTreePanel);syncTreePanel();
+$('#terminal-sessions').onclick=()=>{
+  $('#tree-drawer').append($('#session-tree'));
+  $('#sessions-dialog').showModal();
+  $('#session-tree [aria-current="page"]')?.focus();
+};
+$('#sessions-dialog').addEventListener('click',event=>{
+  const link=event.target.closest('a');
+  if(link?.hash===location.hash)$('#sessions-dialog').close();
+});
+$('#close-sessions').onclick=()=>$('#sessions-dialog').close();
+$('#sessions-dialog').addEventListener('close',()=>$('#tree-home').append($('#session-tree')));
 $('#open-terminal').onclick = openTerminal;
 $('#close-terminal').onclick = () => { $('#terminal-panel').hidden = true; $('#terminal-panel').classList.remove('expanded'); $('#expand-terminal').textContent = 'Full screen'; syncTerminalVisibility(); };
 $('#expand-terminal').onclick = () => { const expanded = $('#terminal-panel').classList.toggle('expanded'); $('#expand-terminal').textContent = expanded ? 'Restore' : 'Full screen'; syncTerminalVisibility(); };
@@ -310,6 +332,6 @@ window.addEventListener('message', event => {
   if (event.origin !== location.origin || event.data?.type !== 'agent-console:terminal-status' || typeof event.data.status !== 'string') return;
   for (const [name, frame] of state.frames) if (event.source === frame.contentWindow) {
     frame.dataset.status = event.data.status;
-    if (name === state.selected?.tmux_name) $('#terminal-status').textContent = event.data.status;
+    if (name === state.selected?.tmux_name) $('#terminal-status').textContent = `${name} · ${event.data.status}`;
   }
 });

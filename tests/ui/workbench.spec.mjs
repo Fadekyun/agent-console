@@ -1,4 +1,7 @@
 import { test, expect } from '@playwright/test';
+async function openInput(target){if(await target.locator('#input-drawer').isHidden())await target.locator('#toggle-composer').click();}
+async function openMore(target){if(!await target.locator('#terminal-more').evaluate(e=>e.open))await target.locator('#terminal-more > summary').click();}
+
 function workbenchData(sessions,steps=[]) {
   const aliases=Object.fromEntries(steps.flatMap(step=>step.attempts.map(a=>[a.session_id,step.id])));
   const nodes=sessions.filter(s=>!aliases[s.id]).map(s=>({id:s.id,owner_id:aliases[s.parent_session_id]||s.parent_session_id||null,native_id:s.id,native_name:s.tmux_name,title:s.tmux_name,task:s.initial_task||'',repository:s.repository,profile:s.profile,tool:s.tool,model:s.model,project_id:s.project_id,project_name:s.project_name,mechanical:s.running?'running':'stopped',attention:s.attention_state||'normal',result_state:s.result?.outcome==='pass'?'completed':s.result?.outcome==='fail'?'failed':'unknown',result:s.result||null,waiting:false,needs_attention:!!s.attention_state&&s.attention_state!=='normal'||s.result?.outcome==='fail',last_activity:s.last_activity||'2026-10-02T00:00:00Z',attempts:[],readiness:{}}));
@@ -94,9 +97,10 @@ test('pending status updates deduplicate through refresh and errors remain attri
   });
   await page.goto('/work#session/session-one');
   await page.locator('#session-detail > summary').click();
+  await page.locator('#attention-controls > summary').click();
   const submit=page.locator('#attention-form button[type=submit]');
   await submit.click();await expect(submit).toBeDisabled();
-  await page.locator('#attention-form').dispatchEvent('submit');
+  await page.locator('#attention-controls').evaluate(e=>{e.open=true;});await page.locator('#attention-form').dispatchEvent('submit');
   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await expect(submit).toBeDisabled();expect(count).toBe(1);
   await page.evaluate(()=>{location.hash='#session/other-session';});
@@ -172,7 +176,7 @@ test('work, manual child, drafts and mobile terminal use the real components',as
   expect(requests).toHaveLength(1);expect(requests[0].profile).toBe('reviewer');expect(requests[0].worktree).toBe(false);
   const frame=page.frameLocator('iframe:not([hidden])');
   await expect(frame.locator('#connection')).toHaveText('Connected');
-  await frame.locator('#composer').fill('unsent draft');
+  await openInput(frame);await frame.locator('#composer').fill('unsent draft');
   const iframe=page.frames().find(f=>f.url().includes('/terminal?session=session-two'));
   await iframe.evaluate(()=>{for(let i=0;i<400;i++)window.__terminal.writeln(`SCROLL LINE ${i}`);});
   await expect.poll(()=>iframe.evaluate(()=>window.__terminal.buffer.active.baseY)).toBeGreaterThan(200);
@@ -194,7 +198,7 @@ test('work, manual child, drafts and mobile terminal use the real components',as
   expect(await iframe.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.getByRole('button',{name:'Close terminal',exact:true}).click();
   await page.locator('#session-detail > summary').click();
-  await page.locator('#attention-form [name=note]').fill('draft status note');
+  await page.locator('#attention-controls').evaluate(e=>{e.open=true;});await page.locator('#attention-form [name=note]').fill('draft status note');
   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await expect(page.locator('#attention-form [name=note]')).toHaveValue('draft status note');
   expect(errors).toEqual([]);
@@ -202,7 +206,7 @@ test('work, manual child, drafts and mobile terminal use the real components',as
 test('terminal reconnect preserves reading position and composer survives reload',async({page})=>{
   await fixture(page);await page.goto('/terminal?session=session-one');
   await expect(page.locator('#connection')).toHaveText('Connected');
-  await page.locator('#composer').fill('keep this draft');
+  await openInput(page);await page.locator('#composer').fill('keep this draft');
   await page.evaluate(()=>{for(let i=0;i<350;i++)window.__terminal.writeln(`LINE ${i}`);});
   await expect.poll(()=>page.evaluate(()=>window.__terminal.buffer.active.baseY)).toBeGreaterThan(200);
   await page.evaluate(()=>window.__terminal.scrollLines(-80));
@@ -219,7 +223,7 @@ test('nested terminal owns wheel and touch scrolling without moving the work pag
   await expect.poll(()=>frame.evaluate(()=>Boolean(window.__terminal))).toBe(true);
   await frame.evaluate(()=>{for(let i=0;i<400;i++)window.__terminal.writeln(`SCROLL ${i}`);});
   await expect.poll(()=>frame.evaluate(()=>window.__terminal.buffer.active.baseY)).toBeGreaterThan(250);
-  await frame.getByRole('button',{name:'Type & scroll',exact:true}).click();
+  await openMore(frame);await frame.getByRole('button',{name:'Type & scroll',exact:true}).click();
   const start=await frame.evaluate(()=>window.__terminal.buffer.active.viewportY), pageY=await page.evaluate(()=>scrollY);
   const box=await page.frameLocator('iframe').locator('.xterm-screen').boundingBox();
   if(info.project.name==='desktop'){
@@ -415,7 +419,7 @@ test('empty work and keyboard tree focus survive refresh without touching the te
   await expect(page.locator('#session-tree button').first()).toBeFocused();
   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await expect(page.locator('#session-tree button').first()).toBeFocused();
   if(info.project.name!=='desktop')await page.getByRole('button',{name:'Open terminal',exact:true}).click();
-  const frame=page.frameLocator('iframe:not([hidden])');await frame.locator('#composer').fill('Preserved during work updates');await frame.locator('#composer').focus();
+  const frame=page.frameLocator('iframe:not([hidden])');await openInput(frame);await frame.locator('#composer').fill('Preserved during work updates');await openInput(frame);await frame.locator('#composer').focus();
   const frameHandle=page.frames().find(f=>f.url().includes('/terminal?'));
   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await expect(frame.locator('#composer')).toBeFocused();await expect(frame.locator('#composer')).toHaveValue('Preserved during work updates');
@@ -464,7 +468,7 @@ test('closing and switching terminals detaches hidden clients and stop stays acc
   await page.route('**/api/sessions/session-one/kill',async route=>{kills++;sessions[0].running=false;sessions[0].actions=[];await route.fulfill({json:sessions[0]});});
   await page.goto('/work#session/session-one');await page.locator('#open-terminal').click();
   await expect.poll(()=>opened).toBe(1);
-  await page.frameLocator('iframe:not([hidden])').locator('#composer').fill('keep this draft');
+  await openInput(page.frameLocator('iframe:not([hidden])'));await page.frameLocator('iframe:not([hidden])').locator('#composer').fill('keep this draft');
   await expect(page.locator('#stop-terminal-session')).toBeVisible();
   await page.locator('#close-terminal').click();await expect.poll(()=>closed).toBe(1);expect(kills).toBe(0);
   await expect(page.locator('#stop-session')).toBeVisible();
@@ -550,4 +554,81 @@ test('legacy binary mouse reports preserve bytes instead of UTF-8 encoding',asyn
   await expect.poll(()=>native.evaluate(()=>window.__terminal?.modes.mouseTrackingMode)).toBe('vt200');
   await native.evaluate(()=>{const screen=document.querySelector('.xterm-screen'),box=screen.getBoundingClientRect();screen.dispatchEvent(new WheelEvent('wheel',{deltaY:-80,clientX:box.x+box.width-20,clientY:box.y+30,bubbles:true,cancelable:true}));});
   await expect.poll(()=>binary.some(bytes=>bytes[0]===27&&bytes[1]===91&&bytes[2]===77)).toBe(true);
+});
+
+
+test('optional input reclaims output space and retains an unsent task across collapse and reload',async({page})=>{
+  await fixture(page);const sent=[];
+  await page.route('**/api/sessions/session-one/brief',route=>route.fulfill({json:{brief:'Review this task before sending'}}));
+  await page.routeWebSocket('**/ws/sessions/**',ws=>ws.onMessage(value=>sent.push(value)));
+  await page.goto('/terminal?session=session-one');
+  await expect(page.locator('#connection')).toHaveText('Connected');
+  await expect(page.locator('#toggle-composer')).toHaveText('Input · draft');
+  await expect(page.locator('#input-drawer')).toBeHidden();
+  await expect(page.locator('#paste-device')).toBeHidden();
+  await expect(page.locator('#send-enter')).toBeHidden();
+  const closedHeight=(await page.locator('.terminal-frame').boundingBox()).height;
+  await openInput(page);await expect(page.locator('#composer')).toHaveValue('Review this task before sending');
+  const openHeight=(await page.locator('.terminal-frame').boundingBox()).height;
+  expect(closedHeight-openHeight).toBeGreaterThan(55);
+  await page.locator('#composer').fill('Keep this unsent draft');
+  await page.locator('#toggle-composer').click();
+  await expect(page.locator('#input-drawer')).toBeHidden();
+  await page.reload();await expect(page.locator('#input-drawer')).toBeHidden();
+  await expect(page.locator('#toggle-composer')).toHaveText('Input · draft');
+  await openInput(page);await expect(page.locator('#composer')).toHaveValue('Keep this unsent draft');
+  expect(sent.some(value=>typeof value!=='string'||!value.startsWith('{'))).toBe(false);
+  await page.locator('#toggle-composer').click();
+  const beforeMenu=(await page.locator('.terminal-frame').boundingBox()).height;
+  await openMore(page);expect((await page.locator('.terminal-frame').boundingBox()).height).toBe(beforeMenu);
+  await page.keyboard.press('Escape');await expect(page.locator('#terminal-more')).not.toHaveAttribute('open','');
+});
+
+test('collapsible branches and full-screen tree navigate every layer without losing drafts',async({page},info)=>{
+  const {sessions}=await fixture(page);
+  sessions.push({...sessions[0],id:'child',tmux_name:'session-child',parent_session_id:'root'});
+  sessions.push({...sessions[0],id:'leaf',tmux_name:'session-leaf',parent_session_id:'child'});
+  await page.goto('/work#session/session-one');
+  const branch=page.getByRole('button',{name:'Toggle children of session-one',exact:true});
+  await branch.click();await expect(page.locator('#session-tree')).not.toContainText('session-child');
+  await expect(branch).toBeFocused();
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('#session-tree')).not.toContainText('session-child');
+  const before=(await page.locator('.session-main').boundingBox()).width;
+  await page.locator('#tree-panel > summary').click();
+  if(info.project.name==='desktop')expect((await page.locator('.session-main').boundingBox()).width-before).toBeGreaterThan(100);
+  await page.getByRole('button',{name:'Open terminal',exact:true}).click();
+  const frame=page.frameLocator('iframe:not([hidden])');await openInput(frame);await frame.locator('#composer').fill('Root draft');
+  await frame.locator('#toggle-composer').click();
+  if(info.project.name==='desktop')await page.locator('#expand-terminal').click();
+  await page.locator('#terminal-sessions').click();await expect(page.locator('#sessions-dialog')).toBeVisible();
+  await branch.click();await page.locator('#sessions-dialog').getByRole('link',{name:'session-leaf',exact:true}).click();
+  await expect(page.locator('#sessions-dialog')).toBeHidden();
+  await expect(page.locator('#session-title')).toHaveText('session-leaf');
+  await expect(page.frameLocator('iframe:not([hidden])').locator('#connection')).toHaveText('Connected');
+  await page.locator('#terminal-sessions').click();
+  await page.locator('#sessions-dialog .node.active .add-session').click();
+  await expect(page.locator('#create-dialog')).toBeVisible();
+  await expect(page.locator('#create-form [name=parent]')).toHaveValue('leaf');
+  await expect(page.locator('#schedule-step')).not.toBeChecked();await page.locator('#cancel-create').click();
+  await page.locator('#terminal-sessions').click();
+  await page.locator('#sessions-dialog').getByRole('link',{name:'session-one',exact:true}).click();
+  await expect(page.locator('#session-title')).toHaveText('session-one');
+  await openInput(page.frameLocator('iframe:not([hidden])'));
+  await expect(page.frameLocator('iframe:not([hidden])').locator('#composer')).toHaveValue('Root draft');
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
+
+test('failed direct input exposes the fallback without erasing its saved draft',async({page})=>{
+  await fixture(page);let socket;
+  await page.routeWebSocket('**/ws/sessions/**',ws=>{socket=ws;});
+  await page.goto('/terminal?session=session-one');await expect(page.locator('#connection')).toHaveText('Connected');
+  await openInput(page);await page.locator('#composer').fill('Recoverable draft');await page.locator('#toggle-composer').click();
+  socket.close({code:4000,reason:'Detached'});
+  await expect(page.locator('#reconnect')).toBeVisible();
+  await page.locator('.xterm-helper-textarea').focus();await page.keyboard.type('x');
+  await expect(page.locator('#input-drawer')).toBeVisible();
+  await expect(page.locator('#composer')).toHaveValue('Recoverable draft');
+  await expect(page.locator('#connection')).toHaveText('Terminal is disconnected');
 });

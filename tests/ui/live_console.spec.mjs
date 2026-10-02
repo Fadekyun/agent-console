@@ -1,4 +1,7 @@
 import { expect, test } from '@playwright/test';
+async function openInput(target){if(await target.locator('#input-drawer').isHidden())await target.locator('#toggle-composer').click();}
+async function openMore(target){if(!await target.locator('#terminal-more').evaluate(e=>e.open))await target.locator('#terminal-more > summary').click();}
+
 
 const liveURL = process.env.LIVE_AGENT_CONSOLE_URL;
 
@@ -56,7 +59,7 @@ test.describe('live Agent Console dogfood', () => {
 
       await page.goto(`/terminal?session=${encodeURIComponent(name)}`);
       await expect(page.locator('#connection')).toContainText('Connected');
-      await page.locator('#composer').fill(`printf 'LIVE_REVIEW_${suffix}\\n'`);
+      await openInput(page);await page.locator('#composer').fill(`printf 'LIVE_REVIEW_${suffix}\\n'`);
       await page.locator('#send-enter').click();
 
       await expect.poll(async () => {
@@ -65,7 +68,7 @@ test.describe('live Agent Console dogfood', () => {
         return (await response.json()).content.includes(`LIVE_REVIEW_${suffix}`);
       }).toBeTruthy();
 
-      await page.locator('#peers').click();
+      await openMore(page);await page.locator('#peers').click();
       await expect(page.locator('#peers-dialog')).toBeVisible();
       await page.getByRole('button', { name: 'Insert review command' }).first().click();
       await expect(page.locator('#composer')).not.toHaveValue('');

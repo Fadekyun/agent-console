@@ -1,3 +1,10 @@
+## 0.23.0 — 2026-10-02 (#90)
+
+- Impact: direct input is the terminal default on every viewport. Input/paste/send controls are optional, preserve drafts when collapsed, and show a draft indicator. Extra terminal keys/modes move into More; Reconnect appears when available. Session sidebar and tree branches collapse; a full-screen Sessions dialog supports navigation and adding children at any layer. Attention editing and Settings diagnostics use disclosures.
+- Configuration/migration: none. No added terminal service or dependency. Refresh browser pages to load the interface. Existing session awareness, scheduled workflows and permission boundaries are unchanged.
+- Verification: desktop/360px/390px Chromium coverage for optional controls, drafts, branch navigation, focus, lifecycle, native mouse scrolling and scheduled handoffs. See CONSOLE_SIMPLIFICATION.md for the architecture comparison and remaining hardware checks.
+- Rollback: select 0.22.1 with all state retained. Browser-only disclosure preferences can be ignored by the older interface.
+
 ## 0.22.1 — 2026-10-02 (#90)
 
 - Impact: mouse-enabled terminals use xterm's native wheel handling instead of forcing tmux copy mode. This lets full-screen agents receive their own scrolling input, including high-resolution trackpad deltas. Binary mouse reports are preserved. Typing exits tmux history after scrolling, and reconnect clears a previously stuck copy view. Touch gestures use the same native path when mouse reporting is active.

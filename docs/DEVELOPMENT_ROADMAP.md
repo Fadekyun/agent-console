@@ -1,3 +1,8 @@
+## Progressive console controls — 2026-10-02 (#90)
+
+- Implemented the next UI pass: optional composer, compact terminal menu, collapsible sidebar/branches and full-screen session navigation, plus secondary attention/settings disclosures.
+- Compared seven terminal architectures in CONSOLE_SIMPLIFICATION.md. Retain one xterm/PTY/tmux stack and the existing multi-layer session and scheduling model.
+
 ## Native terminal scrolling — 2026-10-02 (#90)
 
 - Corrected the full-screen/trackpad gap in prior shell-only verification: preserve xterm native mouse input instead of unconditionally entering tmux copy mode.
@@ -7,7 +12,7 @@
 
 - Combined typing/history scrolling, hidden-view PTY detachment, focus and viewport handling, visible stop action, and saved recent output address functional friction.
 - Main cap is configurable and raised to 24; Settings reports the active value.
-- Further UI simplification is proposed in UI_REVIEW_20261002.md: compact tree, progressive terminal controls and a consolidated details drawer. This broader redesign is not implemented by this repair.
+- Further UI simplification is proposed in UI_REVIEW_20261002.md: compact tree, progressive terminal controls and a consolidated details drawer. Implemented in the subsequent 0.23.0 interface pass.
 
 ## Native session-tree awareness — 2026-10-02 (#90)
 
