@@ -1192,7 +1192,10 @@ class SessionManager:
         wait_proto = (
             "Tree links organize related conversations; they do not assign reviews or require waiting. "
             "Only when you actually delegate work needed for your task, wait for those specific children "
-            "and check their results before completing the dependent task."
+            "and check their results before completing the dependent task. "
+            "Use `agentctl session wait-for-children PARENT --child CHILD_ID` (repeat --child for a batch) "
+            "to wait for assigned direct children without including historical work. "
+            "Without --child the command retains its existing whole-tree behavior."
         )
         nav_items = [
             "Agent Console session context:",

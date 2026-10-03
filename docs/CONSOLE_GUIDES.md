@@ -4,12 +4,12 @@ v0.21.0 adds live tree awareness (`session relatives --current`, relative output
 
 The seven guides are maintained in the canonical skills workspace on n100, `/home/fadekyun/codex/skills`, and mirrored into the configured Console skills library (current `/home/agentstage/codex/skills`; the separate staging mirror is `/home/agentpreview/codex/skills`). Edit the canonical packages, not generated session copies. These packages use portable YAML with namespaced Console metadata; they are not a new plugin system.
 
-| Package | Verified revision | Introduced in | Selection |
+| Package | Current release revision | Introduced in | Selection |
 | --- | --- | --- | --- |
-| agent-console-workbench | 2026-10-03.2 | 0.27.0 | Shared session basics, navigation, configuration and continuation |
+| agent-console-workbench | 2026-10-03.3 | 0.28.0 | Shared session basics, navigation, configuration and continuation |
 | agent-console-results | 2026-10-03.1 | 0.26.0 | Shared ready/final results, selected artifacts, delivery and consumption |
-| agent-console-coding | 2026-10-03.1 | 0.26.0 | coder, bugfix |
-| agent-console-coordination | 2026-10-03.2 | 0.27.0 | orchestrator, planner |
+| agent-console-coding | 2026-10-03.2 | 0.28.0 | coder, bugfix |
+| agent-console-coordination | 2026-10-03.3 | 0.28.0 | orchestrator, planner |
 | agent-console-verification | 2026-10-03.1 | 0.26.0 | reviewer, verifier |
 | agent-console-release | 2026-10-03.2 | 0.27.0 | release |
 | agent-console-skills | 2026-10-03.1 | 0.26.0 | orchestrator; General remains compatible for an explicit assignment |
@@ -91,3 +91,14 @@ workspace. Canonical and mirror rollback copies are under
 for exact commands and request schemas. Future updates must preserve operator
 changes, validate packages, refresh content-bound reviews and check actual new
 session delivery. Never rewrite active session snapshots.
+
+## Selected-child guidance — v0.28.0
+
+Workbench and Coordination `.3`, plus Coding `.2`, document repeatable
+`wait-for-children --child` for assigned direct-child batches. Historical child
+outcomes are not rewritten to make a new batch pass. The remaining four guide
+revisions stay unchanged. Draft packages passed the skill validator; deployment
+uses canonical/mirror drift checks, backups and content-bound reviews, then
+verifies actual copied hashes in new sessions. Rollout receipts belong to
+`handoffs/console-followup-20261003/` in the parent workspace. Existing session
+snapshots change only on explicit restart.

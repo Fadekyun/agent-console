@@ -245,3 +245,19 @@ workflow attempts; it does not itself retry. See [release behavior](WORKFLOW_REL
 and [dispatch recovery](WORKFLOW_DISPATCH.md). Durable request keys deduplicate
 supported operations; reuse the same key for the same uncertain request and do
 not invent a new key merely to bypass its receipt.
+
+
+### Waiting for an assigned child batch
+
+```sh
+agentctl session wait-for-children PARENT_NAME --child CHILD_ID --child OTHER_CHILD_ID   --timeout 300 --poll-interval 5
+```
+
+Each selector must identify a direct child of the requested parent. Names resolve
+to durable IDs once; renaming during a wait does not change its selection.
+Duplicates are removed, while unknown, ambiguous, outside-parent or disappeared
+selections fail explicitly. Only the chosen children determine success, timeout,
+intervention or stopped-without-completion failure. Without `--child`, historical
+whole-tree behavior remains unchanged. Completion notes and attention states are
+never rewritten by a wait. Managed requests use the capability endpoint; the
+owner HTTP request accepts `child_selectors` with the same contract.

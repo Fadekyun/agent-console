@@ -1,3 +1,11 @@
+## Verified follow-up fixes — 2026-10-03 (#141)
+
+- Implemented: consistent detection of incomplete managed CLI contexts before local workflow writers or session readers; actionable recovery without removing session identity markers.
+- Implemented: managed Pi wrapper preserves resolved project environment and native MCP config; standalone compatibility remains separate. Rollout must update the installed wrapper as well as the selected Console release.
+- Implemented: repeatable `session wait-for-children --child ID_OR_NAME` resolves a direct-child batch to durable IDs, preserving historical outcomes and unscoped behavior.
+- Verification: independent verifier confirmation, synthetic actual-wrapper execution, scoped-wait regressions, integrated CLI/session checks and live rollout evidence in FOLLOWUP_VERIFICATION_20261003.md.
+- Remaining external verification: physical iOS/Android keyboards/selection/orientation; remote CI requires published source.
+
 ## Exact session targeting — 2026-10-03 (#141)
 
 - Implemented: exact tmux session/pane targets across controls, reads, launchers and browser terminal attachment; prefix-related child sessions cannot substitute for a stopped parent.
@@ -10,7 +18,7 @@
 - Implemented: environment scope race protection, profile/attention/plan request guards, mobile duplicate-submit prevention and group navigation, recovered bootstrap, paginated release candidates, and truthful skill-sync diagnostics.
 - Implemented: local owner `workflow manage` policy/review/control/reconciliation, connection attachment/dependencies/delivery, and exact-candidate release commands share the web request schemas. Structured input uses bounded JSON files/stdin; managed sessions cannot open these local writer routes.
 - Implemented: local owner `session create --parent` accepts a name or durable ID and inherits project/repository like human Add session, while managed callers retain delegation restrictions.
-- Guide rollout: all seven `.1` revisions are verified; Workbench, Coordination and Release `.2` owner-CLI drafts are validated release candidates, with canonical/mirror rollout and delivery still pending.
+- Guide rollout: all seven guides are verified; Workbench, Coordination and Release `.2` owner-CLI updates were applied to canonical/mirror libraries and verified through fresh delivery receipts.
 - Verification: OVERHAUL_VERIFICATION_20261003.md; physical mobile keyboards and native non-Linux adapters require suitable devices/runners.
 
 ## Console usability, role/skill delivery, environment and maintenance — 2026-10-03 (#141)

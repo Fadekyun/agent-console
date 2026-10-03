@@ -1,3 +1,10 @@
+## 0.28.0 — unreleased, 2026-10-03 (#141)
+
+- Impact: managed workflow and peer-read CLI routing rejects incomplete contexts before local workflow writers/session readers. Managed Pi launches retain Console's resolved overrides, empty/suppressed variables and native disabled MCP entries. Repeatable `wait-for-children --child ID_OR_NAME` waits for a selected direct-child batch instead of historical work; omitted selectors keep existing behavior.
+- Configuration/migration: no schema change. Older managed sessions need the configured reporting URL plus their existing ID/capability, or an explicit restart to refresh context. Never clear managed identity markers as recovery. Install the reviewed `scripts/pi-wrapper` at the configured Pi launcher path with a drift check and backup; changing Console source alone cannot replace custom host wrappers. Existing running harnesses are not restarted automatically.
+- Verification: independent confirmation and final implementation review; 315 tests and 825 subtests passed, including real wrapper execution under temporary HOME with synthetic secrets, local/API/managed scoped waits, and integrated checks are recorded in FOLLOWUP_VERIFICATION_20261003.md.
+- Rollback: retain v0.27.1 and the private pre-cutover backup; select the prior release through its schema guard and restart web only. Preserve databases and tmux sessions. The Pi wrapper and canonical guides have separate backups; restoring the old wrapper reintroduces its managed environment override behavior.
+
 ## 0.27.1 — unreleased, 2026-10-03 (#141)
 
 - Impact: tmux operations target exact session names. A stopped parent can no longer match a similarly named child during existence checks, capture, controls or terminal attachment. Stopping a parent leaves its child running and reports the correct result.

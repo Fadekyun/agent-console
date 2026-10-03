@@ -16,7 +16,11 @@ Hermes already accepted any catalogue model id, so this only changed Pi.
 Install pi under `~/.local` with the pinned `pi-runtime` Node (22.22.2). The
 verified native MCP harness is `@earendil-works/pi-coding-agent` **0.99.2**.
 `scripts/pi-wrapper` names this scope and passes through arguments without
-rewriting generated configuration. Install it as
+rewriting generated MCP configuration. Managed contexts do not source host
+credential files or invoke a legacy MCP normalizer after Console resolves the
+environment. Empty and suppressed project variables remain empty/absent. It
+preserves an explicit theme and supplies a readable dark default only when no
+theme is set. Standalone invocation retains its host compatibility path. Install it as
 `~/.local/bin/pi-agent-console` and set `AGCONSOLE_PI_BIN` to that absolute path
 in Console's runtime.env.
 Pi resolves an `api_key` entry through its config-value expansion: from pi 0.74
@@ -44,7 +48,8 @@ timestamp, never the key. Rerun to refresh the catalogue or rotate the key.
 
 ## Launch behavior and limitations
 
-Session launchers source the selected secret file at runtime. Pi gets a private
+The private launch bootstrap passes the resolved environment literally, including
+selected credential-file defaults and global/project overrides. Pi gets a private
 models.json with the `$CMD_API_KEY` environment reference and
 `--append-system-prompt` pointing to Console's context file; its `auth.json` is
 (re)written to the same reference so a previously stored literal is never kept
@@ -94,3 +99,15 @@ Before activation, snapshot runtime.env, auth-contexts.json, the existing
 credential (if any), wrappers, runner and selected-release target. Retain the
 previous release. Restore those files and the selected symlink, then restart
 only the web service to roll back; do not terminate existing tmux sessions.
+
+## Updating an existing host wrapper
+
+A custom installed launcher does not change when Console selects a new release.
+Before deploying this fix, compare its current hash with the reviewed preimage,
+back it up privately, and atomically install the reviewed `scripts/pi-wrapper`
+bytes at the existing `AGCONSOLE_PI_BIN` path. Keep standalone `pi` and unrelated
+host customizations intact. Verify the installed wrapper with dummy credential
+files, an inert native CLI and temporary HOME; never use real credential values
+in test output. Confirm override, empty/suppressed values, disabled native MCP
+entries, explicit theme and selected skill links survive. Future Pi launches and
+explicit restarts receive the change; existing processes keep their environment.
