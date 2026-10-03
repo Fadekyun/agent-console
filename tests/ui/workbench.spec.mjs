@@ -632,7 +632,7 @@ test('collapsible branches and full-screen tree navigate every layer without los
   await expect(page.locator('#create-dialog')).toBeVisible();
   await expect(page.locator('#create-form [name=parent]')).toHaveValue('leaf');
   await expect(page.locator('#schedule-step')).not.toBeChecked();await page.locator('#cancel-create').click();
-  await page.locator('#terminal-sessions').click();
+  await expect(page.locator('#sessions-dialog')).toBeVisible();
   await page.locator('#sessions-dialog').getByRole('link',{name:'session-one',exact:true}).click();
   await expect(page.locator('#session-title')).toHaveText('session-one');
   await openInput(page.frameLocator('iframe:not([hidden])'));
