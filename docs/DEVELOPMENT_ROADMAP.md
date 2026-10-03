@@ -1,3 +1,11 @@
+## Frontend audit and CLI parity follow-up — 2026-10-03 (#141)
+
+- Implemented: compact accessible SVG controls, named dialogs, keyboard terminal close, HTTP-IP clipboard fallback, and project editing/deletion in full desktop/mobile controls.
+- Implemented: default unlimited per-parent children, active-only capacity accounting, and owner project/environment CLI commands with safe secret input and managed-session authority checks.
+- Implemented: environment scope race protection, profile/attention/plan request guards, mobile duplicate-submit prevention and group navigation, recovered bootstrap, paginated release candidates, and truthful skill-sync diagnostics.
+- Retained web controls: advanced workflow policy/control, connection editing/delivery and release operations. Their complete CLI parity is a future addition, not a claim of this release.
+- Verification: OVERHAUL_VERIFICATION_20261003.md; physical mobile keyboards and native non-Linux adapters require suitable devices/runners.
+
 ## Console usability, role/skill delivery, environment and maintenance — 2026-10-03 (#141)
 
 - Implemented: stable session cards/tree nodes, root-first opening, pointer-safe Add session, preserved focus/scroll, and simple shared palettes.
