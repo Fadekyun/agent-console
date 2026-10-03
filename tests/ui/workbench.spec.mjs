@@ -9,8 +9,8 @@ async function ensureTerminal(page){
 
 function workbenchData(sessions,steps=[]) {
   const aliases=Object.fromEntries(steps.flatMap(step=>step.attempts.map(a=>[a.session_id,step.id])));
-  const nodes=sessions.filter(s=>!aliases[s.id]).map(s=>({id:s.id,owner_id:aliases[s.parent_session_id]||s.parent_session_id||null,native_id:s.id,native_name:s.tmux_name,title:s.tmux_name,task:s.initial_task||'',repository:s.repository,profile:s.profile,tool:s.tool,model:s.model,project_id:s.project_id,project_name:s.project_name,hidden:!!s.hidden&&!s.running,reviewable:s.attention_state==='ready_for_review'||(!s.reviewed&&s.result?.outcome==='fail'&&s.attention_state==='normal'),mechanical:s.running?'running':'stopped',attention:s.attention_state||'normal',result_state:s.result?.outcome==='pass'?'completed':s.result?.outcome==='fail'?'failed':'unknown',result:s.result||null,waiting:false,needs_attention:!!s.attention_state&&s.attention_state!=='normal'||s.result?.outcome==='fail'&&!s.reviewed,last_activity:s.last_activity||'2026-10-02T00:00:00Z',attempts:[],readiness:{}}));
-  for(const step of steps){const attempt=step.attempts.at(-1),native=sessions.find(s=>s.id===attempt?.session_id);nodes.push({id:step.id,owner_id:step.owner_id,native_id:native?.id||null,native_name:native?.tmux_name||null,title:step.task,task:step.task,...step.config,mechanical:native?.running?'running':'stopped',attention:'normal',result_state:'unknown',waiting:!attempt,needs_attention:false,last_activity:'2026-10-02T00:00:00Z',decision:step.decision,attempt_state:attempt?.state,attempts:step.attempts,readiness:{}});}
+  const nodes=sessions.filter(s=>!aliases[s.id]).map(s=>({id:s.id,owner_id:aliases[s.parent_session_id]||s.parent_session_id||null,native_id:s.id,native_name:s.tmux_name,title:s.tmux_name,task:s.initial_task||'',repository:s.repository,profile:s.profile,tool:s.tool,model:s.model,project_id:s.project_id,project_name:s.project_name,hidden:!!s.hidden&&!s.running,reviewable:s.attention_state==='ready_for_review'||(!s.reviewed&&s.result?.outcome==='fail'&&s.attention_state==='normal'),mechanical:s.running?'running':'stopped',attention:s.attention_state||'normal',result_state:s.result?.outcome==='pass'?'completed':s.result?.outcome==='fail'?'failed':'unknown',result:s.result||null,waiting:false,needs_attention:!!s.attention_state&&s.attention_state!=='normal'||s.result?.outcome==='fail'&&!s.reviewed,created_at:s.created_at||'',last_activity:s.last_activity||'2026-10-02T00:00:00Z',attempts:[],readiness:{}}));
+  for(const step of steps){const attempt=step.attempts.at(-1),native=sessions.find(s=>s.id===attempt?.session_id);nodes.push({id:step.id,owner_id:step.owner_id,native_id:native?.id||null,native_name:native?.tmux_name||null,title:step.task,task:step.task,...step.config,mechanical:native?.running?'running':'stopped',attention:'normal',result_state:'unknown',waiting:!attempt,needs_attention:false,created_at:step.created_at||'',last_activity:'2026-10-02T00:00:00Z',decision:step.decision,attempt_state:attempt?.state,attempts:step.attempts,readiness:{}});}
   for(const node of nodes){let root=node;while(root.owner_id)root=nodes.find(n=>n.id===root.owner_id);node.root_id=root.id;}
   const groups=nodes.filter(n=>!n.owner_id).map(n=>{const members=nodes.filter(m=>m.root_id===n.id),children=members.filter(m=>m.id!==n.id);return{root_id:n.id,member_ids:members.map(m=>m.id),priority:members.some(m=>m.needs_attention)?0:members.some(m=>m.mechanical==='running')?1:members.some(m=>m.waiting)?2:3,last_activity:n.last_activity,children_total:children.length,children_complete:children.filter(c=>c.result_state==='completed').length};}).sort((a,b)=>a.priority-b.priority);
   return {sessions,nodes,groups,aliases,readiness:{ready:true,warnings:[]}};
@@ -852,7 +852,7 @@ test('stopped history is bounded and hide restore preserves a running child',asy
   await page.locator('[data-node=root]').getByRole('button',{name:'Hide',exact:true}).click();
   await expect(page.locator('[data-node=root]')).toContainText('Hidden session');
   await expect(page.locator('[data-node=root]')).toContainText('child running');
-  await expect(page.locator('[data-node=root]').getByRole('link',{name:'Open work',exact:true})).toHaveAttribute('href','#session/live-child');
+  await expect(page.locator('[data-node=root]').getByRole('link',{name:'Open work',exact:true})).toHaveAttribute('href','#session/session-one');
   await page.locator('#work-history > summary').click();
   await expect(page.locator('#work-history .card')).toHaveCount(20);
   await page.getByRole('button',{name:/Show more history/}).click();
@@ -877,8 +877,9 @@ test('child task search has direct links and unchanged refresh keeps cards',asyn
   await expect(page.locator('#work-list [data-node=root]')).toBeVisible();
   await page.evaluate(()=>{window.savedCard=document.querySelector('#work-list [data-node=root]');});
   sessions.find(s=>s.id==='unrelated').initial_task='Changed unrelated task';
+  await expect(page.locator('#refresh')).toBeEnabled();
   const response=page.waitForResponse(r=>r.url().includes('/api/workbench?')&&r.ok());
-  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await response;
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await response;await expect(page.locator('#refresh')).toBeEnabled();
   await expect.poll(()=>page.evaluate(()=>window.savedCard===document.querySelector('#work-list [data-node=root]'))).toBe(true);
   await page.locator('#search').fill('UniqueTailKeyword');
   await expect(page.locator('.matched-children')).toContainText('1 matching child session');
@@ -920,4 +921,99 @@ test('Add session stays visible without shifting the tree on hover or focus',asy
   await page.keyboard.press('Enter');
   await expect(page.locator('#create-dialog')).toBeVisible();
   await expect(page.locator('#create-dialog')).toContainText('session-child');
+});
+
+
+test('default order ignores polling activity and attention, and Open work selects the root',async({page})=>{
+  const {sessions}=await fixture(page);
+  sessions[0].created_at='2026-10-01T00:00:00Z';
+  sessions.push({...sessions[0],id:'older',tmux_name:'older-work',created_at:'2026-09-01T00:00:00Z'},
+    {...sessions[0],id:'child',tmux_name:'attention-child',parent_session_id:'root',attention_state:'blocked'});
+  await page.goto('/work');
+  const cards=page.locator('#work-list .card');
+  await expect(cards).toHaveCount(2);
+  const order=await cards.evaluateAll(nodes=>nodes.map(n=>n.dataset.node));
+  sessions.find(s=>s.id==='older').last_activity='2099-01-01T00:00:00Z';
+  sessions.find(s=>s.id==='older').attention_state='needs_input';sessions.reverse();
+  await expect(page.locator('#refresh')).toBeEnabled();
+  const response=page.waitForResponse(r=>r.url().includes('/api/workbench?')&&r.ok());
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await response;await expect(page.locator('#refresh')).toBeEnabled();
+  await expect.poll(()=>cards.evaluateAll(nodes=>nodes.map(n=>n.dataset.node))).toEqual(order);
+  await page.locator('#work-list [data-node=root]').getByRole('link',{name:'Open work',exact:true}).click();
+  await expect(page.locator('#session-title')).toHaveText('session-one');
+  await page.locator('#session-tree [data-node=child] a').click();
+  await expect(page.locator('#session-title')).toHaveText('attention-child');
+});
+
+test('tree polling retains Add session identity, focus, position and scroll',async({page},info)=>{
+  const {sessions}=await fixture(page);
+  for(let i=0;i<18;i++)sessions.push({...sessions[0],id:'child-'+String(i).padStart(2,'0'),tmux_name:'session-child-'+i,parent_session_id:'root',created_at:'2026-10-02T00:00:00Z'});
+  await page.goto('/work#session/session-one');
+  if(info.project.name!=='desktop'){
+    await page.locator('#open-terminal').click();await page.locator('#terminal-sessions').click();
+  }
+  const add=page.locator('#session-tree [data-node=child-08] .add-session');
+  await add.focus();await expect(add).toBeFocused();
+  const before=await add.boundingBox();
+  const scroll=await page.evaluate(()=>{window.savedAdd=document.querySelector('#session-tree [data-node=child-08] .add-session');return [window.scrollY,...['tree-panel','session-tree','sessions-dialog','tree-drawer'].map(id=>document.getElementById(id).scrollTop)];});
+  await page.mouse.move(before.x+before.width/2,before.y+before.height/2);await page.mouse.down();
+  sessions.reverse();sessions.find(s=>s.id==='child-08').attention_state='blocked';
+  sessions.find(s=>s.id==='child-17').last_activity='2099-01-01T00:00:00Z';
+  await expect(page.locator('#refresh')).toBeEnabled();
+  const response=page.waitForResponse(r=>r.url().includes('/api/workbench?')&&r.ok());
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await response;await expect(page.locator('#refresh')).toBeEnabled();
+  await expect(page.locator('#session-state')).toHaveText('Working');
+  await expect(add).toBeFocused();
+  expect(await page.evaluate(()=>window.savedAdd===document.querySelector('#session-tree [data-node=child-08] .add-session'))).toBe(true);
+  expect(await add.boundingBox()).toEqual(before);
+  expect(await page.evaluate(()=>[window.scrollY,...['tree-panel','session-tree','sessions-dialog','tree-drawer'].map(id=>document.getElementById(id).scrollTop)])).toEqual(scroll);
+  await page.mouse.up();await expect(page.locator('#create-help')).toContainText('session-child-8');
+  await page.locator('#cancel-create').click();await expect(add).toBeFocused();
+  if(info.project.name!=='desktop')await expect(page.locator('#sessions-dialog')).toBeVisible();
+  expect(await add.boundingBox()).toEqual(before);
+});
+
+
+test('explicit terminal open focuses Type without polling stealing focus or overriding Scroll and Select',async({page})=>{
+  const {sessions}=await fixture(page);sessions.push({...sessions[0],id:'child',tmux_name:'focus-child',parent_session_id:'root'});
+  await page.goto('/work#session/session-one');await ensureTerminal(page);
+  const frame=page.frameLocator('iframe:not([hidden])');
+  await expect(frame.locator('.xterm-helper-textarea')).toBeFocused();
+  await openMore(frame);
+  await frame.locator('[data-mode=scroll]').click();
+  await page.locator('#close-terminal').click();await page.locator('#open-terminal').click();
+  await expect(frame.locator('[data-mode=scroll]')).toHaveAttribute('aria-pressed','true');
+  await expect(frame.locator('.xterm-helper-textarea')).not.toBeFocused();
+  await openMore(frame);await frame.locator('[data-mode=select]').click();
+  await page.locator('#close-terminal').click();await page.locator('#open-terminal').click();
+  await expect(frame.locator('[data-mode=select]')).toHaveAttribute('aria-pressed','true');
+  await expect(frame.locator('.xterm-helper-textarea')).not.toBeFocused();
+  await page.locator('#terminal-sessions').click();
+  const add=page.locator('#session-tree [data-node=root] .add-session');await add.focus();
+  await expect(page.locator('#refresh')).toBeEnabled();
+  const response=page.waitForResponse(r=>r.url().includes('/api/workbench?')&&r.ok());
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await response;await expect(page.locator('#refresh')).toBeEnabled();
+  await expect(add).toBeFocused();
+});
+
+
+test('root entry and explicit historical attempt links retain logical aliases',async({page})=>{
+  const {sessions}=await fixture(page);
+  sessions[0].running=false;sessions[0].actions=[];
+  sessions.push({...sessions[0],id:'old-attempt',tmux_name:'old-attempt',parent_session_id:'root'},
+    {...sessions[0],id:'current-attempt',tmux_name:'current-attempt',parent_session_id:'root',running:true,attention_state:'needs_input'});
+  const step={id:'logical-step',owner_id:'root',root_id:'root',task:'Logical task',config:{tool:'shell',profile:'coder'},decision:'accepted',attempts:[
+    {id:'attempt-1',session_id:'old-attempt',name:'old-attempt',generation:1,state:'completed'},
+    {id:'attempt-2',session_id:'current-attempt',name:'current-attempt',generation:2,state:'running'}]};
+  await page.route('**/api/workbench?*',route=>route.fulfill({json:workbenchData(sessions,[step])}));
+  await page.goto('/work');
+  await page.locator('#work-list [data-node=root]').getByRole('link',{name:'Open work',exact:true}).click();
+  await expect(page.locator('#session-title')).toHaveText('session-one');
+  const row=page.locator('#session-tree [data-node=logical-step]');
+  await expect(row.locator('.node-heading a')).toHaveAttribute('href','#session/current-attempt');
+  await row.locator('summary').click();await row.getByRole('link',{name:'Attempt 1 · completed',exact:true}).click();
+  await expect(page.locator('#session-title')).toHaveText('old-attempt');
+  await expect(page.locator('#session-statuses')).toContainText('Historical attempt 1');
+  await expect(row.locator('.node-heading a')).toHaveAttribute('aria-current','page');
+  await row.locator('.node-heading a').click();await expect(page.locator('#session-title')).toHaveText('current-attempt');
 });

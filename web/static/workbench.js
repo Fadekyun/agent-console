@@ -120,11 +120,24 @@ async function refresh() {
       state.work=work;state.sessions=work.sessions;
       // Only clear the refresh failure notice on recovery; unrelated notices survive.
       if($('#notice').dataset.kind==='refresh')message('');
+      // Capture immediately before rendering: scrolling while the request is in flight
+      // must not be undone by a stale pre-request position.
+      const scrollX=window.scrollX,scrollY=window.scrollY;
+      const scrollContainers=[...document.querySelectorAll('#tree-panel,#session-tree,#sessions-dialog,#tree-drawer')].map(node=>[node,node.scrollTop,node.scrollLeft]);
       route();
+      for(const [node,top,left] of scrollContainers){node.scrollTop=top;node.scrollLeft=left;}
+      window.scrollTo(scrollX,scrollY);
     } catch (error) { message(`Could not refresh sessions: ${error.message}`, 'refresh'); }
     finally { state.loading = null;$('#refresh').disabled=false;$('#work-list').setAttribute('aria-busy','false'); }
   })();
   return state.loading;
+}
+function requestTerminalFocus(frame){
+  if(!frame.dataset.focusRequested||!frame.dataset.loaded)return;
+  delete frame.dataset.focusRequested;
+  if(state.frames.get(state.selected?.tmux_name)!==frame||frame.hidden||$('#terminal-panel').hidden||document.querySelector('dialog[open]'))return;
+  if(document.activeElement!==frame.focusOrigin&&document.activeElement!==document.body&&document.activeElement!==frame)return;
+  frame.contentWindow?.postMessage({type:'agent-console:focus-terminal'},location.origin);
 }
 function openTerminal() {
   const s = state.selected; if (!s?.running) return;
@@ -133,12 +146,14 @@ function openTerminal() {
     // Bound browser PTYs; drafts survive eviction in the terminal's sessionStorage.
     if (state.frames.size >= 3) { const [name, old] = state.frames.entries().next().value; old.remove(); state.frames.delete(name); }
     frame = el('iframe'); frame.title = `Terminal: ${s.tmux_name}`; frame.src = `/terminal?session=${encodeURIComponent(s.tmux_name)}&embed=1&mode=type&lifecycle=managed`;
-    frame.addEventListener('load', syncTerminalVisibility);
+    frame.addEventListener('load',()=>{frame.dataset.loaded='true';syncTerminalVisibility();requestTerminalFocus(frame);});
     state.frames.set(s.tmux_name, frame); $('#terminal-frames').append(frame);
   }
+  frame.dataset.focusRequested='true';frame.focusOrigin=document.activeElement;
   state.frames.forEach(f => { f.hidden = f !== frame; }); $('#terminal-panel').hidden = false;
   setTerminalStatus(`${s.tmux_name} · ${frame.dataset.status || 'Connecting…'}`);
   syncTerminalVisibility();
+  requestAnimationFrame(()=>requestTerminalFocus(frame));
 }
 function setTerminalStatus(text) {
   $('#terminal-status').textContent = text;
@@ -197,7 +212,16 @@ function configureSessionFlow() {
   $('#create-start-help').textContent=scheduled?'This scheduled task needs one review before it can run automatically.':'Open Input · draft in the terminal to review and send the task when you are ready.';
 }
 $('#schedule-step').onchange=configureSessionFlow;
+let createOrigin=null;
+function restoreCreateOrigin(){
+  const origin=createOrigin;createOrigin=null;
+  if(!origin||origin.hash!==location.hash)return;
+  if(origin.drawer){$('#tree-drawer').append($('#session-tree'));$('#sessions-dialog').showModal();}
+  origin.control?.focus({preventScroll:true});
+  for(const [node,top,left] of origin.scroll){node.scrollTop=top;node.scrollLeft=left;}
+}
 function openCreate(parent = null, step = null) {
+  createOrigin={hash:location.hash,control:document.activeElement,drawer:$('#sessions-dialog').open,scroll:[$('#sessions-dialog'),$('#session-tree'),$('#tree-panel')].map(node=>[node,node.scrollTop,node.scrollLeft])};
   if ($('#sessions-dialog').open) $('#sessions-dialog').close();
   if (!state.me) { message('Tool information is still loading. Try again shortly.'); return; }
   form.reset(); launches.reset(parent); form.elements.parent.value = parent?.id || '';
@@ -341,7 +365,8 @@ $('#preview-skills').onclick = previewSkills;
 form.elements.repository.addEventListener('change', previewSkills);
 form.elements.profile.addEventListener('change', previewSkills);
 form.elements.tool.addEventListener('change', previewSkills);
-$('#new-session').onclick = () => openCreate(); $('#cancel-create').onclick = () => $('#create-dialog').close();
+$('#new-session').onclick = () => openCreate(); $('#cancel-create').onclick = () => {$('#create-dialog').close();restoreCreateOrigin();};
+$('#create-dialog').addEventListener('cancel',()=>setTimeout(restoreCreateOrigin,0));
 form.elements.profile.onchange = configureRole; form.elements.tool.onchange = configureTool;
 const treePanel=$('#tree-panel');
 try { treePanel.open=localStorage.getItem('workbench-tree-open') !== 'false'; } catch {}

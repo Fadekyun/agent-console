@@ -109,6 +109,7 @@ class WorkbenchState:
                 'model':config.get('model') or (session or {}).get('model'),
                 'mechanical':mechanical,'attention':attention,'result_state':result_state,'result':result,
                 'waiting':waiting,'needs_attention':needs_attention,'last_activity':activity,
+                'created_at':(step or {}).get('created_at') or (session or {}).get('created_at') or (ownership.get(identity) or {}).get('created_at') or '',
                 'hidden':bool(session and session.get('hidden') and not waiting),
                 'reviewable':attention=='ready_for_review' or (attention=='normal' and unresolved_failure),
                 'decision':step['decision'] if step else None,'attempt_state':state,'attempts':history,
@@ -131,9 +132,13 @@ class WorkbenchState:
             priority=0 if any(n['needs_attention'] for n in members) else 1 if any(n['mechanical']=='running' for n in members) else 2 if any(n['waiting'] for n in members) else 3
             children=[n for n in members if n['id']!=node['id']]
             groups.append({'root_id':node['id'],'priority':priority,'last_activity':max(n['last_activity'] for n in members),
-                           'children_total':len(children),'children_complete':sum(n['result_state']=='completed' and not n['readiness'].get('stale') for n in children),
+                           'created_at':node['created_at'],'children_total':len(children),'children_complete':sum(n['result_state']=='completed' and not n['readiness'].get('stale') for n in children),
                            'member_ids':[n['id'] for n in members]})
-        groups.sort(key=lambda g:g['last_activity'],reverse=True);groups.sort(key=lambda g:g['priority'])
+        # Creation order is immutable; activity and attention are display/filter data.
+        groups.sort(key=lambda g:g['root_id'])
+        groups.sort(key=lambda g:g['created_at'],reverse=True)
+        for group in groups:
+            group['member_ids'].sort(key=lambda identity:(nodes[identity]['created_at'],identity))
         if compact:
             # Keep searchable tasks once on ordinary nodes; historical native attempts
             # retain their own briefs instead of borrowing the current logical task.

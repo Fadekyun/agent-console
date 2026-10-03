@@ -3,6 +3,25 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
   const $=selector=>document.querySelector(selector),keys=['project','profile','tool','mechanical','attention','result','scope'];
   let preferences={};try{const stored=JSON.parse(localStorage.getItem('workbench-filters')||'{}');if(stored&&typeof stored==='object'&&!Array.isArray(stored))preferences=stored;}catch{}
   function keepFocus(root){const active=document.activeElement;if(!root.contains(active))return()=>{};const href=active.getAttribute('href'),text=active.textContent,node=active.closest('[data-node]')?.dataset.node;return()=>{if(document.activeElement===document.body)[...root.querySelectorAll('a,button,summary')].find(n=>n.getAttribute('href')===href&&n.textContent===text&&n.closest('[data-node]')?.dataset.node===node)?.focus({preventScroll:true});};}
+  function creation(node){return node.created_at||sessionsById.get(node.native_id)?.created_at||'';}
+  function stableOrder(a,b){return creation(a).localeCompare(creation(b))||a.id.localeCompare(b.id);}
+  // Reconcile tree rows in place so focused Add controls and drawer scroll survive polling.
+  function reconcile(old,next){
+    for(const attr of [...old.attributes])if(!next.hasAttribute(attr.name))old.removeAttribute(attr.name);
+    for(const attr of next.attributes)if(old.getAttribute(attr.name)!==attr.value)old.setAttribute(attr.name,attr.value);
+    old.onclick=next.onclick;
+    if(!next.children.length){if(old.textContent!==next.textContent)old.textContent=next.textContent;return old;}
+    const available=[...old.children];let cursor=old.firstElementChild;
+    for(const child of [...next.children]){
+      const match=available.find(n=>n.tagName===child.tagName&&n.className===child.className);
+      const updated=match?reconcile(match,child):child;
+      if(match)available.splice(available.indexOf(match),1);
+      if(updated!==cursor)old.insertBefore(updated,cursor);
+      cursor=updated.nextElementSibling;
+    }
+    for(const child of available)child.remove();
+    return old;
+  }
   function save(){const values={search:$('#search').value,show:$('#state-filter').value,includeHidden:$('#include-hidden')?.checked||false};for(const key of keys)values[key]=$('#filter-'+key).value;try{localStorage.setItem('workbench-filters',JSON.stringify(values));}catch{}}
   let indexed=null,nodesById=new Map(),sessionsById=new Map(),membersByRoot=new Map(),childrenByParent=new Map();
   function indexWork(){
@@ -13,6 +32,8 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
       if(!membersByRoot.has(node.root_id))membersByRoot.set(node.root_id,[]);membersByRoot.get(node.root_id).push(node);
       if(!childrenByParent.has(node.owner_id))childrenByParent.set(node.owner_id,[]);childrenByParent.get(node.owner_id).push(node);
     }
+    for(const children of childrenByParent.values())children.sort(stableOrder);
+    for(const members of membersByRoot.values())members.sort(stableOrder);
   }
   function nodeFor(session){indexWork();return nodesById.get(state.work?.aliases?.[session.id]||session.id);}
   let renderKey='',historyOpen=null,historyLimit=20,activeLimit=20,searchTimer;
@@ -90,7 +111,7 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
         entries.push({node,group,members:visibleMembers,eligible,active,priority});
       }
     }
-    entries.sort((a,b)=>a.priority-b.priority||b.group.last_activity.localeCompare(a.group.last_activity));
+    entries.sort((a,b)=>creation(nodesById.get(b.group.root_id)).localeCompare(creation(nodesById.get(a.group.root_id)))||a.group.root_id.localeCompare(b.group.root_id)||stableOrder(a.node,b.node));
     const current=entries.filter(e=>e.active),history=entries.filter(e=>!e.active),sections=new Map(),usedCards=new Set();
     function appendCard(entry,target){
       const {node,group,members,eligible}=entry,cardKey=JSON.stringify([node,group,members,eligible.map(n=>n.id),query,allNodes,[...pending]]);
@@ -110,8 +131,8 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
       }
       const recent=allNodes?node:members.filter(n=>n.result).sort((a,b)=>b.result.created_at.localeCompare(a.result.created_at))[0];
       if(recent?.result){const result=el('div',null,'recent-result');result.append(el('strong',`${recent.result.kind==='final'?'Final':'Ready'} · ${recent.result.outcome}`),el('p',recent.result.summary.slice(0,300),'brief'));card.append(result);}
-      const focus=allNodes?node:members.find(n=>n.needs_attention)||members.find(n=>n.mechanical==='running')||members.find(n=>n.waiting)||matched[0]||members.find(n=>n.id===node.id)||members[0]||node;
-      const actions=el('div',null,'work-card-actions'),open=el('a','Open work','button');open.href=link(focus);actions.append(open);
+      const focus=allNodes?node:members.find(n=>n.needs_attention)||members.find(n=>n.mechanical==='running')||members.find(n=>n.waiting)||matched[0]||node;
+      const actions=el('div',null,'work-card-actions'),open=el('a','Open work','button');open.href=link(node);actions.append(open);
       if(focus.result||focus.decision){const resultLink=el('a',focus.result_state==='failed'?'Review failure':focus.decision==='proposed'?'Review next step':'Results','button');resultLink.href=link(focus,true);actions.append(resultLink);}
       const native=sessionsById.get(node.native_id);
       if(native&&!native.running){const button=el('button',node.hidden?'Restore':'Hide');button.disabled=pending.has(`${native.id}:visibility`);button.onclick=()=>mutate(node,'visibility');button.title='Keep all history and files; only change list visibility';actions.append(button);}
@@ -122,8 +143,8 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
       card.append(actions);target.append(card);cardCache.set(node.id,{key:cardKey,card});
     }
     for(const entry of current.slice(0,activeLimit)){
-      if(!sections.has(entry.priority)){const section=el('section',null,'work-section'),cards=el('div',null,'cards');section.append(el('h2',['Needs attention','Running','Waiting','Recent'][entry.priority]),cards);root.append(section);sections.set(entry.priority,cards);}
-      appendCard(entry,sections.get(entry.priority));
+      if(!sections.has('active')){const section=el('section',null,'work-section'),cards=el('div',null,'cards');section.append(el('h2','Active work'),cards);root.append(section);sections.set('active',cards);}
+      appendCard(entry,sections.get('active'));
     }
     if(current.length>activeLimit){const more=el('button',`Show more active work (${current.length-activeLimit} remaining)`);more.onclick=()=>{activeLimit+=20;renderWork();};root.append(more);}
     if(history.length){
@@ -182,7 +203,12 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
       }item.append(history);}
       items.push(item);if(!collapsedBranches.has(current.id))children.forEach(child=>visit(child,depth+1));
     }
-    visit(root,0);tree.replaceChildren(...items);restoreFocus();
+    visit(root,0);
+    const scrollTop=tree.scrollTop,scrollLeft=tree.scrollLeft,existing=new Map([...tree.children].map(item=>[item.dataset.node,item]));
+    const retained=new Set();let cursor=tree.firstElementChild;
+    for(const item of items){const old=existing.get(item.dataset.node);const row=old?reconcile(old,item):item;retained.add(row);if(row!==cursor)tree.insertBefore(row,cursor);cursor=row.nextElementSibling;}
+    for(const old of existing.values())if(!retained.has(old))old.remove();
+    tree.scrollTop=scrollTop;tree.scrollLeft=scrollLeft;restoreFocus();
   }
   $('#search').value=preferences.search||'';$('#state-filter').value=preferences.show||'active';
   for(const key of keys){const select=$('#filter-'+key);if(!['project','profile','tool'].includes(key))select.value=preferences[key]||'';select.onchange=changedFilters;}

@@ -43,6 +43,20 @@ class WorkbenchTests(unittest.TestCase):
         self.publish(stopped);node=next(n for n in self.state.snapshot()['nodes'] if n['id']==stopped['id'])
         self.assertEqual((node['mechanical'],node['attention'],node['result_state']),('stopped','normal','completed'))
 
+    def test_creation_order_survives_activity_attention_and_input_order_changes(self):
+        older=self.session('older');newer=self.session('newer');tie=self.session('same-time')
+        older['created_at']='2026-09-01T00:00:00+00:00'
+        first=self.state.snapshot()
+        expected=[newer['id'],tie['id'],older['id']]
+        self.assertEqual([g['root_id'] for g in first['groups']],expected)
+        older.update(last_activity='2099-01-01T00:00:00+00:00',attention_state='blocked',running=True)
+        newer.update(attention_state='ready_for_review',last_activity='2098-01-01T00:00:00+00:00')
+        self.sessions.reverse()
+        refreshed=self.state.snapshot(compact=True)
+        self.assertEqual([g['root_id'] for g in refreshed['groups']],expected)
+        self.assertEqual(next(n for n in refreshed['nodes'] if n['id']==older['id'])['created_at'],older['created_at'])
+        self.assertEqual(next(g for g in refreshed['groups'] if g['root_id']==older['id'])['priority'],0)
+
     def test_connected_owner_replaces_launch_parent_without_restarting(self):
         a=self.session('original');b=self.session('new-owner');child=self.session('child',parent=a['id'],running=True)
         self.engine.svc.attach(b['id'],child['id'],purpose='Related work',dependencies=[],expected_version=0,actor='test')
