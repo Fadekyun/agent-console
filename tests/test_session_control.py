@@ -82,6 +82,9 @@ class SessionControlTests(unittest.TestCase):
             self.assertEqual(result.status_code,200,result.text)
             self.assertNotIn('PRIVATE-',result.text)
             self.assertNotIn('evidence_capability_hash',result.text)
+        self.assertEqual(self.request('attention',{'name':'child','state':'ready_for_review'}).status_code,403)
+        self.manager.set_attention.assert_not_called()
+        self.assertEqual(self.request('delegate',{'profile':'verifier','task':'x'},identity='child').status_code,403)
 
     def test_malformed_payload_types_do_not_produce_server_errors(self):
         for payload in [{'route':1},{'route':['session','review'],'name':'parent','lines':'bad'}]:
@@ -96,6 +99,21 @@ class SessionControlTests(unittest.TestCase):
         self.assertEqual(result.status_code,200,result.text)
         self.assertEqual(result.json()['source'],'archived-transcript')
         self.assertEqual(result.json()['content'],'saved peer output\n')
+
+    def test_capture_race_falls_back_to_saved_output_and_unknown_live_state(self):
+        transcript = self.settings.state_dir / 'saved.txt'
+        transcript.write_text('saved before capture failed\n')
+        with self.db.connect() as db:
+            db.execute("UPDATE sessions SET archived_transcript=? WHERE id='parent'", (str(transcript),))
+        observation = SimpleNamespace(sessions={'parent':{'socket_scope':'canonical',
+            'current_command':'codex','attached_clients':0}}, observed_at='now',
+            capture=Mock(side_effect=InspectionUnavailable('observation-unavailable')))
+        with patch('agent_console.inspection_views.TmuxObservation',return_value=observation):
+            result = self.request('read',{'route':['session','review'],'name':'parent'})
+        self.assertEqual(result.status_code,200,result.text)
+        self.assertEqual(result.json()['source'],'archived-transcript')
+        self.assertEqual(result.json()['session']['live_state'],'unknown')
+        self.assertIn('saved before capture failed',result.json()['content'])
 
     def test_attention_own_identity_and_descendant_control(self):
         self.assertEqual(self.request('attention',{'state':'ready_for_review'},identity='peer').status_code,200)

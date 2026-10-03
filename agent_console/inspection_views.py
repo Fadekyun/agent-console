@@ -314,8 +314,14 @@ class InspectionViews:
         content, truncated, alternate, source = "", False, False, "unavailable"
         if session["execution_kind"] == "interactive":
             if session["running"]:
-                content, alternate = self.observation.capture(name, session["socket_scope"], lines); source = "live-pane"
-            elif session.get("archived_transcript"):
+                try:
+                    content, alternate = self.observation.capture(name, session["socket_scope"], lines)
+                    source = "live-pane"
+                except InspectionUnavailable:
+                    # The pane may disappear after list-sessions. Preserve saved
+                    # output and report uncertainty rather than a false stop.
+                    session = {**session, "running": None, "live_state": "unknown"}
+            if source == "unavailable" and session.get("archived_transcript"):
                 text, truncated = _read_file(Path(session["archived_transcript"]), self.settings.state_dir, tail=True)
                 if text is not None:
                     content = "\n".join(text.splitlines()[-lines:])

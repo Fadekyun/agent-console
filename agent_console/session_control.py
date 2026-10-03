@@ -66,7 +66,10 @@ class SessionControl:
                 if row['id'] in ids:
                     sessions.append(dict(row))
             selected = ','.join(PROJECTIONS['delegations'])
-            delegations = [dict(row) for row in db.execute(f'SELECT {selected} FROM delegations ORDER BY id LIMIT ?', (MAX_ROWS+1,))
+            delegation_rows = db.execute(f'SELECT {selected} FROM delegations ORDER BY id LIMIT ?', (MAX_ROWS+1,)).fetchall()
+            if len(delegation_rows) > MAX_ROWS:
+                raise InspectionUnavailable('snapshot-too-large')
+            delegations = [dict(row) for row in delegation_rows
                            if row['parent_session_id'] in ids and row['child_session_id'] in ids]
             private = {row['id'] for row in rows if row['execution_kind'] != 'interactive'}
             for row in delegations:
