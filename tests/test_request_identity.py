@@ -66,7 +66,7 @@ class IdentityRouteTests(unittest.TestCase):
         self.manager = Mock()
         self.manager.settings = SimpleNamespace(workspace_root=Path('/tmp'), state_dir=Path('/tmp'), database_path=Path('/tmp/unopened-auth-test-db'))
         self.manager.tmux_for_name.return_value.exists.return_value = False
-        self.manager.inspect.return_value = {'execution_kind':'interactive'}
+        self.manager.inspect.return_value = {'id':'fixture-id','execution_kind':'interactive'}
         self.app = web.create_app(self.manager)
         self.headers = {'Tailscale-User-Login':'owner@example.com'}
 
@@ -109,6 +109,13 @@ class IdentityRouteTests(unittest.TestCase):
         for origin in [None,'https://console.example:443']:
             headers = self.headers if origin is None else {**self.headers,'Origin':origin}
             self.assert_ws_denied(client,headers,4404)  # Auth passes; fixture session is absent.
+
+    def test_session_observation_failure_closes_websocket_without_allocating_pty(self):
+        client = self.client('192.168.1.64')
+        self.manager.inspect.side_effect = RuntimeError('tmux observation timed out')
+        with patch.object(self.web.pty, 'openpty') as allocate:
+            self.assert_ws_denied(client, self.headers, 1011)
+            allocate.assert_not_called()
 
     def test_missing_login_configuration_fails_closed_on_all_surfaces(self):
         from agent_console.device_presence import GET

@@ -928,19 +928,24 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         except ValueError:
             await websocket.close(code=4400, reason="invalid session name")
             return
-        tmux = session_manager.tmux_for_name(name)
         try:
+            tmux = session_manager.tmux_for_name(name)
             inspected = session_manager.inspect(name)
+            session_id = inspected["id"]
+            running = tmux.exists(name)
         except KeyError:
             await websocket.close(code=4404, reason="session is not running")
             return
-        session_id = inspected["id"]
+        except (OSError, RuntimeError, sqlite3.Error) as exc:
+            log.warning("ws session=%s inspection error=%s", name, exc)
+            await websocket.close(code=1011, reason="session inspection unavailable; retry")
+            return
         expected_session_id = websocket.query_params.get("session_id")
         if expected_session_id is not None and expected_session_id != session_id:
             await websocket.close(code=4409, reason="session identity changed")
             return
         view_only = inspected.get("execution_kind") == "integration-plan"
-        if not tmux.exists(name):
+        if not running:
             await websocket.close(code=4404, reason="session is not running")
             return
         client_key = f"{tmux.scope}:{session_id}"
