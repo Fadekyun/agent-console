@@ -8,6 +8,9 @@ import os
 import re
 import shutil
 import subprocess
+import socket
+import tempfile
+import secrets
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -33,7 +36,7 @@ class DeploymentMode(enum.Enum):
     STAGING = "staging"
 
 EXCLUDED_DIRS = frozenset({
-    ".git", "__pycache__", ".venv", "venv", "node_modules",
+    ".git", "__pycache__", ".venv", "venv", ".runtime", "node_modules",
     ".mypy_cache", ".pytest_cache", ".ruff_cache",
 })
 EXCLUDED_FILE_SUFFIXES = frozenset({".pyc", ".pyo", ".egg-info"})
@@ -69,7 +72,7 @@ def _is_excluded(rel: str) -> bool:
 def _build_manifest(release_path: Path, *, source_sha: str | None = None) -> dict[str, Any]:
     files: dict[str, str] = {}
     for entry in sorted(release_path.rglob("*")):
-        if entry.is_file() and entry.name != MANIFEST_NAME:
+        if entry.is_file() and entry.name != MANIFEST_NAME and ".runtime" not in entry.relative_to(release_path).parts:
             rel = str(entry.relative_to(release_path))
             files[rel] = _hash_file(entry)
     manifest: dict[str, Any] = {
@@ -213,6 +216,10 @@ class ProductionServiceRunner(ServiceRunner):
         self.config = config
         self._deployment_mode = config.deployment_mode
         self._canary_process: subprocess.Popen | None = None
+        self._canary_directory = None
+        self._canary_identity = None
+        self._canary_address = None
+        self.expected_release = None
 
     def _check_mode(self) -> None:
         if self._deployment_mode != DeploymentMode.STAGING:
@@ -222,50 +229,106 @@ class ProductionServiceRunner(ServiceRunner):
 
     def start_canary(self, release_path: Path, bind: str, port: int) -> bool:
         self._check_mode()
-        log.info("canary start release=%s bind=%s port=%d", release_path.name, bind, port)
+        if self._canary_process is not None:
+            raise RuntimeError("a canary is already running")
+        # A canary never listens on a public interface or shares a live socket.
+        import ipaddress
+        if not ipaddress.ip_address(bind).is_loopback:
+            raise ValueError("canary bind must be a loopback address")
+        try:
+            with socket.socket(socket.AF_INET6 if ':' in bind else socket.AF_INET) as probe:
+                probe.bind((bind, port))
+        except OSError:
+            return False
+        self._canary_directory = tempfile.TemporaryDirectory(prefix='agent-console-canary-')
+        isolated = Path(self._canary_directory.name)
+        self._canary_identity = secrets.token_hex(24)
+        self._canary_address = (bind, port)
+        # Allow only process essentials. No production credentials, DB references,
+        # native harness homes, proxy configuration or workflow destinations.
+        env = {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL', 'SYSTEMROOT') if key in os.environ}
+        env.update({
+            'HOME': str(isolated), 'TMPDIR': str(isolated),
+            'PYTHONPATH': str(release_path),
+            'AGENT_CONSOLE_STATE_DIR': str(isolated / 'state'),
+            'AGENT_CONSOLE_CONFIG_DIR': str(isolated / 'config'),
+            'AGENT_CONSOLE_DB': str(isolated / 'state/console.sqlite3'),
+            'AGENT_CONSOLE_WORKSPACE_ROOT': str(isolated / 'workspace'),
+            'AGENT_CONSOLE_WORKTREE_ROOT': str(isolated / 'worktrees'),
+            'AGENT_CONSOLE_HANDOFF_DIR': str(isolated / 'handoffs'),
+            'AGENT_CONSOLE_PROFILE_DIR': str(release_path / 'agent-profiles'),
+            'AGENT_CONSOLE_TMUX_SOCKET_PATH': str(isolated / 'tmux.sock'),
+            'AGENT_CONSOLE_LEGACY_TMUX_SOCKET_PATH': str(isolated / 'legacy.sock'),
+            'AGENT_CONSOLE_DEPLOYMENT_MODE': 'disabled',
+            'AGENT_CONSOLE_CANARY': '1',
+            'AGENT_CONSOLE_HEALTH_IDENTITY': self._canary_identity,
+            'AGENT_CONSOLE_TRUSTED_HOSTS': 'localhost,127.0.0.1,::1',
+            'AGENT_CONSOLE_LOG_DIR': str(isolated / 'logs'),
+        })
+        executable = release_path / '.runtime/bin/uvicorn'
+        if not executable.is_file():
+            executable = Path(self.config.uvicorn_bin)
         try:
             self._canary_process = subprocess.Popen(
-                [self.config.uvicorn_bin, "agent_console.web:app",
-                 "--host", bind, "--port", str(port),
-                 "--app-dir", str(release_path)],
-                cwd=str(release_path),
+                [str(executable), 'agent_console.web:app', '--host', bind,
+                 '--port', str(port), '--app-dir', str(release_path), '--no-proxy-headers'],
+                cwd=str(release_path), env=env,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             for _ in range(30):
+                if self._canary_process.poll() is not None:
+                    break
                 if self.check_health(port=port):
                     return True
-                if self._canary_process.poll() is not None:
-                    return False
                 time.sleep(1)
-            return False
         except OSError:
-            return False
+            pass
+        self.stop_canary()
+        return False
 
     def stop_canary(self) -> bool:
         self._check_mode()
         if self._canary_process:
-            self._canary_process.terminate()
-            try:
-                self._canary_process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self._canary_process.kill()
+            if self._canary_process.poll() is None:
+                self._canary_process.terminate()
+                try:
+                    self._canary_process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self._canary_process.kill()
+                    self._canary_process.wait(timeout=10)
             self._canary_process = None
+        if self._canary_directory:
+            self._canary_directory.cleanup()
+            self._canary_directory = None
+        self._canary_identity = None
+        self._canary_address = None
         return True
 
     def check_health(self, *, port: int | None = None) -> bool:
         self._check_mode()
         target_port = port or self.config.service_port
-        target_host = (
-            self.config.canary_bind
-            if target_port == self.config.canary_port
-            else self.config.service_bind
-        )
-        if target_host in {"0.0.0.0", "::"}:
-            target_host = "127.0.0.1"
+        is_canary = self._canary_address is not None and target_port == self._canary_address[1]
+        if is_canary and (self._canary_process is None or self._canary_process.poll() is not None):
+            return False
+        target_host = self._canary_address[0] if is_canary else self.config.service_bind
+        if target_host in {'0.0.0.0', '::'}:
+            target_host = '127.0.0.1'
+        authority = f'[{target_host}]' if ':' in target_host else target_host
         try:
             import httpx
-            resp = httpx.get(f"http://{target_host}:{target_port}/healthz", timeout=5)
-            return resp.status_code == 200
+            resp = httpx.get(f'http://{authority}:{target_port}/healthz', timeout=5, trust_env=False)
+            if resp.status_code != 200 or resp.text.strip() != 'ok':
+                return False
+            if is_canary:
+                return (resp.headers.get('X-Agent-Console-Identity') == self._canary_identity
+                        and resp.headers.get('X-Agent-Console-Pid') == str(self._canary_process.pid)
+                        and self._canary_process.poll() is None)
+            if self.expected_release:
+                from .maintenance import service_pid, process_belongs_to_service
+                pid = service_pid(self.config.user_service_name)
+                return (process_belongs_to_service(resp.headers.get('X-Agent-Console-Pid'), pid)
+                        and resp.headers.get('X-Agent-Console-Release') == self.expected_release)
+            return True
         except Exception:
             return False
 
@@ -274,18 +337,14 @@ class ProductionServiceRunner(ServiceRunner):
         name = service_name or self.config.user_service_name
         log.info("service restart name=%s", name)
         try:
-            result = subprocess.run(
-                ["systemctl", "--user", "restart", name],
-                capture_output=True, timeout=30,
-            )
-            if result.returncode != 0:
-                return False
+            from .maintenance import service_action
+            service_action('restart', name=name)
             for _ in range(30):
                 if self.check_health(port=self.config.service_port):
                     return True
                 time.sleep(1)
             return False
-        except (subprocess.TimeoutExpired, OSError):
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError, ValueError):
             return False
 
 
@@ -301,7 +360,9 @@ class Deployer:
         database_path: Path | None = None,
         config_dir: Path | None = None,
         state_dir: Path | None = None,
+        prepare_runtime: bool = False,
     ):
+        self.prepare_runtime = prepare_runtime
         self.database_path = database_path
         self.config_dir = config_dir
         self.state_dir = state_dir or (database_path.parent if database_path else None)
@@ -366,6 +427,8 @@ class Deployer:
             tmp = self.releases_root / f".{link_name}.tmp"
             tmp.symlink_to(release_name)
             tmp.rename(link)
+            if link_name == CURRENT_LINK and isinstance(self.runner, ProductionServiceRunner):
+                self.runner.expected_release = release_name
 
     def _clear_link(self, link_name: str) -> None:
         with entrypoint_lock(self.state_dir or self.releases_root.parent) if link_name == CURRENT_LINK else nullcontext():
@@ -424,6 +487,9 @@ class Deployer:
                     asset_dest.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(asset_src, asset_dest)
 
+            if self.prepare_runtime and has_app_dir:
+                from .maintenance import prepare_runtime
+                prepare_runtime(release_path)
             manifest = _write_manifest(release_path, source_sha=sha[:12])
             log.info(
                 "release=%s files=%d source=%s sha=%s",

@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+if [ "$(uname -s)" = Darwin ]; then
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}/agent-console-$(id -u)}"
+else
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+fi
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 
 _resolve_bin() {
@@ -30,12 +34,20 @@ _resolve_bin() {
   command -v "$name" || true
 }
 
-root="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+config_dir="${AGENT_CONSOLE_CONFIG_DIR:-$HOME/.config/agent-console}"
+# Literal parsing preserves unknown keys and never executes file contents.
+runtime_exports="$(python3 -B "$root/scripts/maintenance.py" environment "$config_dir/runtime.env")"
+eval "$runtime_exports"
 state="${AGENT_CONSOLE_STATE_DIR:-$HOME/.local/share/agent-console}"
 mkdir -p "$state" "$HOME/bin" "$HOME/.local/bin" "$HOME/.config/systemd/user"
 chmod 700 "$state"
-python3 -m venv "$state/venv"
-"$state/venv/bin/pip" install -r "$root/web/requirements.txt"
+# This is a legacy maintenance interpreter, never upgrade its dependencies:
+# older releases may still need it for rollback.
+if [ ! -x "$state/venv/bin/python" ]; then
+  python3 -m venv "$state/venv"
+  "$state/venv/bin/pip" install -r "$root/web/requirements.txt"
+fi
 npm_cmd="$(command -v npm || echo "$HOME/.local/bin/npm")"
 codex_bin=$(_resolve_bin AGCONSOLE_CODEX_BIN codex)
 claude_bin=$(_resolve_bin AGCONSOLE_CLAUDE_BIN claude 0)
@@ -127,11 +139,13 @@ if [ ! -d "$profile_dir" ] || [ ${#profile_files[@]} -eq 0 ]; then
   exit 1
 fi
 
+proposed_runtime="$(mktemp "$config_dir/.runtime-defaults.XXXXXX")"
+trap 'rm -f "$proposed_runtime"' EXIT
 {
   echo "AGENT_CONSOLE_TAILSCALE_LOGIN=$tailscale_login"
-  echo "AGENT_CONSOLE_MAX_PTY_CLIENTS=2"
-  echo "AGENT_CONSOLE_TMUX_SOCKET_PATH=/run/user/$(id -u)/agent-console/tmux.sock"
-  echo "AGENT_CONSOLE_LEGACY_TMUX_SOCKET_PATH=/tmp/tmux-$(id -u)/default"
+  echo "AGENT_CONSOLE_MAX_PTY_CLIENTS=${AGENT_CONSOLE_MAX_PTY_CLIENTS:-2}"
+  echo "AGENT_CONSOLE_TMUX_SOCKET_PATH=${AGENT_CONSOLE_TMUX_SOCKET_PATH:-${XDG_RUNTIME_DIR}/agent-console/tmux.sock}"
+  echo "AGENT_CONSOLE_LEGACY_TMUX_SOCKET_PATH=${AGENT_CONSOLE_LEGACY_TMUX_SOCKET_PATH:-/tmp/tmux-$(id -u)/default}"
   echo "AGENT_CONSOLE_LAN_CIDR=$lan_cidr"
   echo "AGENT_CONSOLE_TRUSTED_HOSTS=$trusted_hosts"
   echo "AGENT_CONSOLE_WORKSPACE_ROOT=$workspace_root"
@@ -156,20 +170,31 @@ fi
   echo "AGCONSOLE_SKILLS_ROOT=$skills_root"
   echo "AGCONSOLE_RETAINED_SKILLS=$retained_skills"
   echo "AGCONSOLE_SHARED_SKILLS=$shared_skills"
-} > "$config_dir/runtime.env"
-chmod 600 "$config_dir/runtime.env"
+} > "$proposed_runtime"
+printf '%s\n' "$proposed_runtime" | python3 -B "$root/scripts/maintenance.py" merge-environment "$config_dir/runtime.env"
+rm -f "$proposed_runtime"
+trap - EXIT
 
+maintenance_temporary="$(mktemp "$state/.maintenance.XXXXXX")"
+cp "$root/agent_console/maintenance.py" "$maintenance_temporary"
+chmod 700 "$maintenance_temporary"
+mv -f "$maintenance_temporary" "$state/maintenance.py"
 runner_path="$state/runner.sh"
-cat > "$runner_path" <<RUNNEREOF
+runner_temporary="$(mktemp "$state/.runner.XXXXXX")"
+printf -v runner_state_literal '%q' "$state"
+printf -v runner_config_literal '%q' "$config_dir/runtime.env"
+printf -v runner_bind_literal '%q' "$bind_host"
+cat > "$runner_temporary" <<RUNNEREOF
 #!/usr/bin/env bash
 set -euo pipefail
-runner_state="$state"
-runner_bind="$bind_host"
+runner_state=$runner_state_literal
+runner_config=$runner_config_literal
+runner_bind=$runner_bind_literal
 runner_port="$port"
 runner_releases="\$runner_state/releases"
 runner_current="\$runner_state/releases/current"
 if [ -L "\$runner_current" ]; then
-  target="\$(readlink -f "\$runner_current")"
+  target="\$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "\$runner_current")"
   case "\$target" in
     "\$runner_releases"/release-*)
       if [ "\$(dirname "\$target")" = "\$runner_releases" ]; then release_contained=true; else release_contained=false; fi ;;
@@ -182,15 +207,30 @@ if [ -L "\$runner_current" ]; then
     done
     if \$has_xterm; then
       cd "\$target"
-      PYTHONPATH="\$target" exec "\$runner_state/venv/bin/uvicorn" agent_console.web:app --host "\$runner_bind" --port "\$runner_port" --no-proxy-headers
+      # Load literal runtime configuration for every service adapter.
+      runtime_exports="\$(python3 -B "\$runner_state/maintenance.py" environment "\$runner_config")"
+      eval "\$runtime_exports"
+      runner_python="\$target/.runtime/bin/python"
+      if [ ! -x "\$runner_python" ]; then runner_python="\$runner_state/venv/bin/python"; fi
+      if [ "\${AGCONSOLE_DEVICE_PRESENCE:-0}" = "1" ]; then
+        if [ ! -f "\$target/agent_console/presence_server.py" ] || [ -L "\$target/agent_console/presence_server.py" ]; then
+          printf 'Selected Console release lacks the presence master; refusing startup.\n' >&2
+          exit 2
+        fi
+        PYTHONPATH="\$target" exec "\$runner_python" -m agent_console.presence_server --host "\$runner_bind" --port "\$runner_port" --workers 1
+      fi
+      PYTHONPATH="\$target" exec "\$runner_python" -m uvicorn agent_console.web:app --host "\$runner_bind" --port "\$runner_port" --no-proxy-headers
     fi
   fi
 fi
 printf 'Selected Console release unavailable; refusing startup.\n' >&2
 exit 2
 RUNNEREOF
-chmod 700 "$runner_path"
+chmod 700 "$runner_temporary"
+mv -f "$runner_temporary" "$runner_path"
 
+if [ "$(uname -s)" != Darwin ] && [ "${AGENT_CONSOLE_SERVICE_BACKEND:-}" != foreground ]; then
+if [ ! -e "$HOME/.config/systemd/user/agent-console-web.service" ]; then
 cat > "$HOME/.config/systemd/user/agent-console-web.service" <<EOF
 [Unit]
 Description=Agent Console web terminal
@@ -211,6 +251,8 @@ UMask=0077
 WantedBy=default.target
 EOF
 
+fi
+if [ ! -e "$HOME/.config/systemd/user/agent-console-tailscale-tunnel.service" ]; then
 cat > "$HOME/.config/systemd/user/agent-console-tailscale-tunnel.service" <<EOF
 [Unit]
 Description=Agent Console reverse tunnel
@@ -228,6 +270,12 @@ NoNewPrivileges=true
 WantedBy=default.target
 EOF
 
+fi
+fi
+if [ "$(uname -s)" = Darwin ] && [ ! -e "$HOME/Library/LaunchAgents/com.agent-console.web.plist" ]; then
+  python3 -B "$root/scripts/maintenance.py" launch-agent "$runner_path" "$state"
+fi
+
 # Bootstrap owns fresh initialization; upgrades retain the selected release.
 # Missing current with an existing DB is refused, never a checkout fallback.
 python3 -B "$root/scripts/install-entrypoints.py" \
@@ -235,11 +283,15 @@ python3 -B "$root/scripts/install-entrypoints.py" \
   --bootstrap-source "$root" --database "${AGENT_CONSOLE_DB:-$state_dir/agent-console.sqlite3}" \
   --config "$config_dir"
 
-systemctl --user daemon-reload
-systemctl --user enable agent-console-web.service
-systemctl --user restart agent-console-web.service
+selected="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$state_dir/releases/current")"
+python3 -B "$root/scripts/maintenance.py" prepare-runtime "$selected"
+python3 -B "$root/scripts/maintenance.py" service daemon-reload
+python3 -B "$root/scripts/maintenance.py" service enable
+if [ "${AGENT_CONSOLE_SERVICE_BACKEND:-}" != foreground ]; then
+  python3 -B "$root/scripts/maintenance.py" service restart
+fi
 
-PYTHONPATH="$state_dir/releases/current" python3 -B -m agent_console.cli doctor
+PYTHONPATH="$selected" "$selected/.runtime/bin/python" -B -m agent_console.cli doctor
 
 printf '\nSkills setup (optional):\n'
 printf '  export AGCONSOLE_SKILLS_ROOT=%s\n' "$skills_root"

@@ -823,7 +823,10 @@ class DeployerModeFailClosedTests(unittest.TestCase):
         mock_proc.poll.return_value = None
         mock_resp = mock.MagicMock()
         mock_resp.status_code = 200
-        with mock.patch.object(subprocess, "Popen", return_value=mock_proc):
+        mock_resp.text = 'ok\n'
+        mock_resp.headers.get.side_effect = lambda name: {'X-Agent-Console-Identity': runner._canary_identity, 'X-Agent-Console-Pid': str(mock_proc.pid)}.get(name)
+        with mock.patch.object(subprocess, "Popen", return_value=mock_proc), mock.patch('agent_console.deployer.socket.socket'):
+
             with mock.patch("httpx.get", return_value=mock_resp):
                 canary = d.promote_canary(rel["release_name"])
         self.assertEqual(canary["release_name"], rel["release_name"])

@@ -62,6 +62,9 @@ async def lifespan(app: FastAPI):
     with ExitStack() as stack:
         if s.database_path.is_file():
             stack.enter_context(Database(s.database_path).keepalive())
+        if os.getenv('AGENT_CONSOLE_CANARY') == '1':
+            yield
+            return
         from .workflow_engine import WorkflowEngine
         engine=WorkflowEngine(app.state.session_manager)
         async def dispatch_loop():
@@ -222,6 +225,9 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     session_manager = manager or SessionManager()
     pty_clients: dict[str, int] = defaultdict(int)
     app = FastAPI(title="Agent Console", docs_url=None, redoc_url=None, lifespan=lifespan)
+    if os.getenv('AGENT_CONSOLE_CANARY') == '1':
+        from .maintenance import CanaryOnlyMiddleware
+        app.add_middleware(CanaryOnlyMiddleware)
     app.state.session_manager=session_manager
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
     app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
@@ -285,7 +291,12 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     install_jev_ghost(app, require_identity)
 
     @app.get("/healthz", response_class=PlainTextResponse)
-    async def healthz() -> str:
+    async def healthz(response: Response) -> str:
+        response.headers['X-Agent-Console-Pid'] = str(os.getpid())
+        response.headers['X-Agent-Console-Release'] = PROJECT_ROOT.name
+        identity = os.getenv('AGENT_CONSOLE_HEALTH_IDENTITY')
+        if identity:
+            response.headers['X-Agent-Console-Identity'] = identity
         return "ok\n"
 
     @app.get("/")

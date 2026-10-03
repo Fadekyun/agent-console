@@ -24,6 +24,7 @@ RUN mkdir -p /app/agent-profiles && \
 COPY docker-entrypoint.sh /usr/local/bin/agent-console-entrypoint
 RUN chmod 0755 /usr/local/bin/agent-console-entrypoint
 
+ENV AGENT_CONSOLE_SERVICE_BACKEND=foreground
 ENV AGENT_CONSOLE_STATE_DIR=/data
 ENV AGENT_CONSOLE_CONFIG_DIR=/config
 ENV AGENT_CONSOLE_WORKSPACE_ROOT=/workspace

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -94,7 +96,7 @@ class Settings:
             tmux_socket_path=Path(
                 os.getenv(
                     "AGENT_CONSOLE_TMUX_SOCKET_PATH",
-                    f"/run/user/{os.getuid()}/agent-console/tmux.sock",
+                    str(Path(os.getenv("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}" if sys.platform != "darwin" else tempfile.gettempdir())) / "agent-console" / "tmux.sock"),
                 )
             ).expanduser(),
             legacy_tmux_socket_path=Path(

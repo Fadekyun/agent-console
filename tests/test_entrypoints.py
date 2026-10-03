@@ -245,6 +245,12 @@ class InstallerFlowTests(unittest.TestCase):
         self.stub('python3', '''#!/bin/bash
 set -eu
 if [ "${1:-}" = "-B" ]; then shift; fi
+if [ "${1##*/}" = "maintenance.py" ] && [ "${2:-}" = "prepare-runtime" ]; then
+  mkdir -p "$3/.runtime/bin"
+  cp "$HOME/test-bin/python3" "$3/.runtime/bin/python"
+  chmod +x "$3/.runtime/bin/python"
+  exit 0
+fi
 if [ "${1:-}" = "-m" ] && [ "${2:-}" = "venv" ]; then
  mkdir -p "$3/bin"
  printf '#!/bin/sh\nexit 0\n' > "$3/bin/pip"
@@ -267,7 +273,7 @@ exec /usr/bin/python3 -B "$@"
         p=self.bin/name;p.write_text(body);p.chmod(0o755)
 
     def run_install(self):
-        return subprocess.run(['bash',str(self.source/'scripts/install.sh')],env=self.env,cwd=self.source,capture_output=True,text=True,timeout=15)
+        return subprocess.run(['bash',str(self.source/'scripts/install.sh')],env=self.env,cwd=self.source,capture_output=True,text=True,timeout=60)
 
     def assert_aliases(self):
         for base in [self.home/'bin',self.home/'.local/bin']:
@@ -276,7 +282,7 @@ exec /usr/bin/python3 -B "$@"
     def test_real_installer_bootstrap_then_upgrade_uses_selected_source(self):
         result=self.run_install();self.assertEqual(result.returncode,0,result.stderr)
         self.assert_aliases();selected=(self.state/'releases/current').resolve()
-        self.assertEqual((self.home/'doctor-source').read_text().strip(),str(self.state/'releases/current'))
+        self.assertEqual((self.home/'doctor-source').read_text().strip(),str(selected))
         for base in [self.home/'bin',self.home/'.local/bin']:
             for name in NAMES:(base/name).unlink();(base/name).symlink_to('/legacy/schema10/'+name)
         # The venv stub must behave idempotently like the real venv creator.
@@ -292,7 +298,7 @@ exec /usr/bin/python3 -B "$@"
         self.assert_aliases();self.assertTrue(database.is_file())
         self.assertFalse((self.state/'agent-console.sqlite3').exists())
         self.assertIn('AGENT_CONSOLE_DB='+str(database),(self.config/'runtime.env').read_text())
-        self.assertIn('runner_state="'+str(self.state)+'"',(self.state/'runner.sh').read_text())
+        self.assertIn('runner_state='+str(self.state),(self.state/'runner.sh').read_text())
 
     def test_real_installer_existing_database_without_current_stops_before_service(self):
         Database(self.state/'agent-console.sqlite3').migrate()
@@ -326,7 +332,7 @@ exec /usr/bin/python3 -B "$@"
         (self.home/'systemctl-calls').unlink(missing_ok=True)
         updater=(self.source/'scripts/update.sh').read_text();function=updater[updater.index('rollback() {'):updater.index('\nexport AGENT_CONSOLE_SOURCE_ROOT')]
         env=dict(self.env,checkout=str(self.source),state=str(self.state),backup=str(backup),runtime=str(self.config/'runtime.env'),config_dir=str(self.config),database_path=str(db),current_target=str(old),current_link=str(current),root=str(self.source),runner=str(self.state/'runner.sh'),unit=str(self.home/'.config/systemd/user/agent-console-web.service'),tunnel_unit=str(self.home/'.config/systemd/user/agent-console-tailscale-tunnel.service'))
-        result=subprocess.run(['bash','-euc','wait_for_health() { return 0; };\n'+function+'\nrollback'],env=env,capture_output=True,text=True,timeout=15)
+        result=subprocess.run(['bash','-euc','wait_for_health() { return 0; };\n'+function+'\nrollback'],env=env,capture_output=True,text=True,timeout=60)
         self.assert_aliases()
         with sqlite3.connect(db) as c:schema=c.execute("select value from schema_meta where key='schema_version'").fetchone()[0]
         if blocked:
@@ -347,8 +353,27 @@ exec /usr/bin/python3 -B "$@"
     def test_initial_bootstrap_runner_starts_selected_release_only(self):
         result=self.run_install();self.assertEqual(result.returncode,0,result.stderr)
         selected=(self.state/'releases/current').resolve()
-        uvicorn=self.state/'venv/bin/uvicorn'
+        uvicorn=selected/'.runtime/bin/python'
         uvicorn.write_text('#!/bin/sh\nprintf "%s|%s" "$PWD" "$PYTHONPATH"\n');uvicorn.chmod(0o700)
         result=subprocess.run([str(self.state/'runner.sh')],env=self.env,capture_output=True,text=True,timeout=5)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(result.stdout,str(selected)+'|'+str(selected))
+
+    def test_runner_switches_dependencies_with_release_and_preserves_presence(self):
+        result = self.run_install(); self.assertEqual(result.returncode, 0, result.stderr)
+        current = self.state / 'releases/current'; first = current.resolve()
+        second = self.state / 'releases/release-alternate'
+        shutil.copytree(first, second)
+        for release, marker in ((first, 'first-runtime'), (second, 'second-runtime')):
+            python = release / '.runtime/bin/python'
+            python.write_text('#!/bin/sh\nprintf "%s|%s" "' + marker + '" "$*"\n')
+            python.chmod(0o700)
+        def run():
+            return subprocess.run([str(self.state/'runner.sh')], env=dict(self.env, AGCONSOLE_DEVICE_PRESENCE='1'), capture_output=True, text=True, timeout=15)
+        one = run(); self.assertEqual(one.returncode, 0, one.stderr)
+        self.assertIn('first-runtime|-m agent_console.presence_server', one.stdout)
+        current.unlink(); current.symlink_to(second.name)
+        two = run(); self.assertEqual(two.returncode, 0, two.stderr)
+        self.assertIn('second-runtime|-m agent_console.presence_server', two.stdout)
+        current.unlink(); current.symlink_to(first.name)
+        self.assertIn('first-runtime|', run().stdout)

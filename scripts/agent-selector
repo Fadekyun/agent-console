@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-SOURCE="$(readlink -f "${BASH_SOURCE[0]}")"
+SOURCE="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")"
 ROOT="$(cd "$(dirname "$SOURCE")/.." && pwd)"
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 if [[ "${TERM:-dumb}" == "dumb" ]]; then
@@ -8,9 +8,9 @@ if [[ "${TERM:-dumb}" == "dumb" ]]; then
 fi
 AGENT_CONSOLE_ENV_FILE="${AGENT_CONSOLE_ENV_FILE:-$HOME/.config/agent-console/runtime.env}"
 if [[ -r "$AGENT_CONSOLE_ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$AGENT_CONSOLE_ENV_FILE"
-  set +a
+  runtime_exports="$(python3 -B "$ROOT/scripts/maintenance.py" environment "$AGENT_CONSOLE_ENV_FILE")"
+  eval "$runtime_exports"
 fi
-exec python3 -m agent_console.selector "$@"
+runtime_python="$ROOT/.runtime/bin/python"
+if [ ! -x "$runtime_python" ]; then runtime_python=python3; fi
+exec "$runtime_python" -m agent_console.selector "$@"
