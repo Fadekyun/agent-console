@@ -103,7 +103,11 @@ function route() {
     }
     if(showingStep)resultsReady.then(()=>{const next=$('#workflow-next-steps');if(next)next.open=true;});
   } else resultsSession = null;
-  document.querySelectorAll('.mobile-nav a').forEach(a => a.setAttribute('aria-current', a.hash === (['#settings','#skills'].includes(hash) ? '#settings' : '#work') ? 'page' : 'false'));
+  const activeNavigation = ['#settings','#skills'].includes(hash) ? hash : '#work';
+  document.querySelectorAll('.top nav a[href^="#"], .mobile-nav a').forEach(link => {
+    if (link.hash === activeNavigation) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
   if (sessionName && !state.selected) message('This session is no longer available. Return to Work.', 'route');
   else if ($('#notice').dataset.kind === 'route') message('');
   renderWork(); renderSession();
@@ -123,7 +127,11 @@ async function loadSettings() {
     const limits=me.session_limits;
     $('#session-capacity').textContent=`Up to ${limits.managed} running or reserved sessions in total. ${limits.children>0?`Up to ${limits.children} active children per parent.`:'No per-parent child limit.'} Stopped and archived sessions do not use a slot.`;
   }
-  $('#instance').textContent = instance.label;
+  const instanceLabel = typeof instance.label === 'string' ? instance.label.trim() : '';
+  const distinctLabel = instanceLabel && instanceLabel.replace(/\s+/g, ' ').toLowerCase() !== 'agent console';
+  $('#instance').textContent = distinctLabel ? instanceLabel : '';
+  $('#instance').hidden = !distinctLabel;
+  $('#instance').title = distinctLabel ? instanceLabel : '';
   for (const id of ['#current-version','#settings-current']) if (instance.current_url) { $(id).href = instance.current_url; $(id).hidden = false; }
   $('#tools').replaceChildren(...me.tool_status.map(x => el('p', `${x.name} · ${x.status}${x.reason ? ` — ${x.reason}` : ''}`, 'tool')));
   if ($('#notice').dataset.kind === 'settings') message('');
@@ -442,6 +450,7 @@ $('#open-terminal').onclick = openTerminal;
 $('#close-terminal').onclick = () => { $('#terminal-panel').hidden = true; $('#terminal-panel').classList.remove('expanded'); $('#expand-terminal').textContent = 'Full screen'; syncTerminalVisibility(); };
 $('#expand-terminal').onclick = () => { const expanded = $('#terminal-panel').classList.toggle('expanded'); $('#expand-terminal').textContent = expanded ? 'Restore' : 'Full screen'; syncTerminalVisibility(); };
 $('#refresh').onclick = refresh;
+$('.skip').onclick = event => { event.preventDefault(); $('#main').focus(); };
 window.addEventListener('hashchange', route); window.addEventListener('focus', refresh);
 initTheme($('#theme'));
 await refresh(); setInterval(() => { if (!document.hidden && !['#settings','#skills'].includes(location.hash) && !document.activeElement?.matches('#search,.filter-grid select')) refresh(); }, 10000);

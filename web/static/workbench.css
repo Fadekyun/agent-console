@@ -105,3 +105,16 @@ a.button{display:inline-flex;align-items:center;justify-content:center;max-width
 }
 /* The Sessions label must not shrink underneath a long terminal status. */
 #terminal-sessions{flex-shrink:0}
+
+/* A single brand with an optional distinct instance label; routes share one nav model. */
+.top>.brand{flex-direction:column;align-items:flex-start;justify-content:center;flex:0 1 auto;gap:2px;min-height:44px;overflow:hidden}
+.top .brand-name{font-size:inherit;font-weight:650;color:var(--ink);white-space:nowrap}
+.top #instance{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.top nav{gap:4px;flex-shrink:0}
+.top nav a{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:10px 12px;border-radius:7px}
+.top nav a[aria-current="page"]{background:var(--tint);color:var(--ink);font-weight:600}
+.mobile-nav a{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px}
+@media(max-width:760px){
+  .mobile-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding-inline:10px}
+  .mobile-nav a{padding:10px 8px}
+}
