@@ -28,13 +28,14 @@ export function setupResults({api,el,message,sessions,editStep,openSession}) {
     }
     return card;
   }
-  async function load(session){
+  async function load(session,draft=null){
     const token=++generation;
+    const isCurrent=()=>selected===session.id&&token===generation;
     selected=session.id;root.hidden=false;root.replaceChildren(el('p','Loading results and inputs…'));
     let results,inbox;
     try { [results,inbox]=await Promise.all([api(`/api/sessions/${session.id}/results`),api(`/api/sessions/${session.id}/inbox`)]); }
     catch(error){
-      if(selected===session.id&&token===generation)root.replaceChildren(el('p',error.message),action('Retry loading results',()=>load(session)));
+      if(selected===session.id&&token===generation)root.replaceChildren(el('p',error.message),action('Retry loading results',()=>load(session,draft)));
       return;
     }
     if(selected!==session.id||token!==generation)return;
@@ -44,15 +45,26 @@ export function setupResults({api,el,message,sessions,editStep,openSession}) {
     summary.input.required=true;summary.input.maxLength=32000;summary.input.rows=3;
     form.append(el('p','A small task can finish here. Publish only the checks and artifacts this session actually produced.','small muted'),kind.wrapper,outcome.wrapper,summary.wrapper);
     const details=el('details');details.append(el('summary','Checks & selected artifacts'),checks.wrapper,files.wrapper,commit.wrapper);form.append(details);
-    const submit=el('button','Publish result','primary');submit.type='submit';form.append(submit);
-    let key=requestKey();form.onsubmit=async event=>{event.preventDefault();if(submit.disabled)return;submit.disabled=true;try{
+    const submit=el('button','Publish result','primary');submit.type='submit';
+    const status=el('p');status.setAttribute('role','alert');form.append(status,submit);
+    const draftFields={kind:kind.input,outcome:outcome.input,summary:summary.input,checks:checks.input,files:files.input,commit:commit.input};
+    if(draft)for(const [key,input] of Object.entries(draftFields))input.value=draft.values[key];
+    details.open=!!draft?.artifactsOpen;status.textContent=draft?.error||'';
+    let publishing=false,refreshDeferred=false;
+    function reloadCurrent(preserveDraft=false){
+      if(!isCurrent())return;
+      if(publishing){refreshDeferred=true;return;}
+      const saved=preserveDraft?{values:Object.fromEntries(Object.entries(draftFields).map(([key,input])=>[key,input.value])),open:publish.open,artifactsOpen:details.open,error:status.textContent,requestKey:key}:null;
+      return load(session,saved);
+    }
+    let key=draft?.requestKey||requestKey();form.onsubmit=async event=>{event.preventDefault();if(submit.disabled)return;publishing=true;const controls=[...form.elements].map(control=>[control,control.disabled]);for(const [control] of controls)control.disabled=true;status.textContent='';try{
       const lines=input=>input.value.split('\n').map(s=>s.trim()).filter(Boolean);
       const artifacts=lines(files.input).map(path=>({kind:'file',path}));if(commit.input.value.trim())artifacts.push({kind:'commit',sha:commit.input.value.trim()});
-      await api(`/api/sessions/${session.id}/results`,{kind:kind.input.value,outcome:outcome.input.value,summary:summary.input.value,checks:lines(checks.input),artifacts,request_key:key});key=requestKey();message('Result published. Its selected artifact snapshots are preserved.');await load(session);
-    }catch(error){message(error.message);}finally{submit.disabled=false;}};
-    const publish = el('details',null,'panel');publish.append(el('summary','Publish a result'),form);
+      await api(`/api/sessions/${session.id}/results`,{kind:kind.input.value,outcome:outcome.input.value,summary:summary.input.value,checks:lines(checks.input),artifacts,request_key:key});key=requestKey();publishing=false;refreshDeferred=false;message(`${session.tmux_name}: result published. Its selected artifact snapshots are preserved.`);await reloadCurrent();
+    }catch(error){if(isCurrent())status.textContent=error.message;else message(`${session.tmux_name}: ${error.message}`);}finally{publishing=false;for(const [control,disabled] of controls)control.disabled=disabled;if(refreshDeferred){refreshDeferred=false;await reloadCurrent(true);}}};
+    const publish = el('details',null,'panel');publish.append(el('summary','Publish a result'),form);publish.open=!!draft?.open;
     const connected=el('details',null,'panel'),connectionRoot=el('div');connected.append(el('summary','Connected inputs'),connectionRoot);
-    let loaded=false;connected.ontoggle=()=>{if(connected.open&&!loaded){loaded=true;connections.load(connectionRoot,session,()=>load(session));}};
+    let loaded=false;connected.ontoggle=()=>{if(connected.open&&!loaded){loaded=true;connections.load(connectionRoot,session,()=>reloadCurrent(true));}};
     const next=el('details',null,'panel'),nextRoot=el('div');next.id='workflow-next-steps';next.append(el('summary','Next steps'),nextRoot);
     let nextLoaded=false;next.ontoggle=()=>{if(next.open&&!nextLoaded){nextLoaded=true;workflow.load(nextRoot,session);}};
     const release=el('details',null,'panel'),releaseRoot=el('div');release.id='workflow-releases';release.append(el('summary','Release actions'),releaseRoot);
@@ -64,7 +76,7 @@ export function setupResults({api,el,message,sessions,editStep,openSession}) {
       const card=renderResult(item.result,[]);card.prepend(el('p',`Input ${item.sequence} · ${item.state} · from ${item.source_session_id}`,'badge'));
       if(item.note)card.append(el('p',item.note));
       if(item.state!=='consumed')card.append(action(item.state==='queued'?'Acknowledge delivery':'Mark consumed',async()=>{
-        await api(`/api/sessions/${session.id}/inbox/${item.id}/ack`,{state:item.state==='queued'?'delivered':'consumed'});await load(session);
+        await api(`/api/sessions/${session.id}/inbox/${item.id}/ack`,{state:item.state==='queued'?'delivered':'consumed'});await reloadCurrent(true);
       }));return card;
     }
     const inputList=el('div');root.append(inputList);

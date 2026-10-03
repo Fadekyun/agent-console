@@ -33,6 +33,9 @@ const terminalTabs = new Map();
 let activeTerminal = null;
 let profileEditorRequest = 0;
 let planRequest = 0;
+let delegateRequest = 0;
+let reviewRequest = 0;
+let viewRequest = 0;
 let refreshRequest = 0;
 let orchestrationRequest = 0;
 const attentionPending = new Set();
@@ -292,7 +295,9 @@ function closeInspector(restoreFocus = true) {
 
 function selectView(view, updateHash = true) {
   closeSessionMenu();
-  state.view = viewTitles[view] ? view : 'sessions';
+  const nextView = viewTitles[view] ? view : 'sessions';
+  if (nextView !== state.view) viewRequest++;
+  state.view = nextView;
   $$('[data-view-panel]').forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== state.view; });
   $$('[data-view]').forEach((button) => {
     if (button.dataset.view === state.view) button.setAttribute('aria-current', 'page');
@@ -349,14 +354,20 @@ async function lifecycle(session, operation, button) {
 }
 
 async function showReview(name) {
+  const request = ++reviewRequest;
+  const current = () => request === reviewRequest && reviewDialog.open;
+  const sessionId = state.sessions.find(session => session.tmux_name === name)?.id;
+  const query = new URLSearchParams({ lines: '200' });
+  if (sessionId) query.set('session_id', sessionId);
   $('#review-title').textContent = `Review · ${name}`;
   $('#review-notice').textContent = 'Loading bounded read-only terminal output…';
   $('#review-content').textContent = ''; reviewDialog.showModal();
   try {
-    const review = await api(`/api/sessions/${encodeURIComponent(name)}/review?lines=200`);
+    const review = await api(`/api/sessions/${encodeURIComponent(name)}/review?${query}`);
+    if (!current()) return;
     $('#review-notice').textContent = `${review.notice} Source: ${review.source}${review.truncated ? ' · byte limit applied' : ''}.`;
     $('#review-content').textContent = review.content || 'No captured output is available.';
-  } catch (error) { $('#review-notice').textContent = error.message || String(error); }
+  } catch (error) { if (current()) $('#review-notice').textContent = error.message || String(error); }
 }
 
 function updateContextSelect(toolSelect, contextSelect) {
@@ -365,12 +376,15 @@ function updateContextSelect(toolSelect, contextSelect) {
 }
 
 async function openDelegate(session) {
-  delegateForm.reset(); delegateForm.elements.parent.value = session.tmux_name;
+  const request = ++delegateRequest, view = viewRequest;
+  const current = () => request === delegateRequest && view === viewRequest;
+  delegateForm.reset(); $('button[type="submit"]', delegateForm).disabled = false; delegateForm.elements.parent.value = session.tmux_name;
   delegateForm.elements.repository.value = session.repository || '';
   const childLimit=state.tree.max_children_per_parent??0;
   $('#delegate-parent').textContent = `Parent: ${session.tmux_name} · ${session.child_count||0}${childLimit>0?'/'+childLimit:''} active children${childLimit>0?'':' · no per-parent limit'}`;
   try {
     const allProfiles = await api('/api/profiles');
+    if (!current()) return;
     const parentProfile = session.profile || 'general';
     const parentMeta = allProfiles.find((p) => p.name === parentProfile) || {};
     const allowed = (parentMeta.allowed_delegation_profiles || []).filter(name =>
@@ -380,6 +394,7 @@ async function openDelegate(session) {
       return new Option(p.display_name || name, name, false, name === 'planner');
     }));
   } catch {
+    if (!current()) return;
     delegateForm.elements.profile.replaceChildren(...state.identity.profiles.filter((p) => p.read_write_capability === 'read_only').map((p) => new Option(p.display_name || p.name, p.name, false, p.name === 'planner')));
   }
   const toolSelect = delegateForm.elements.tool;
@@ -1331,7 +1346,11 @@ window.addEventListener('keydown', (event) => {
 });
 
 newForm.onsubmit = async (event) => {
-  event.preventDefault(); formStatus.textContent = 'Creating…'; const submit = $('button[type="submit"]', newForm); submit.disabled = true;
+  event.preventDefault(); const submit = $('button[type="submit"]', newForm);
+  if (submit.disabled) return;
+  const view = viewRequest;
+  const current = () => view === viewRequest && state.view === 'new';
+  formStatus.textContent = 'Creating…'; submit.disabled = true;
   const data = Object.fromEntries(new FormData(newForm)); data.worktree = newForm.elements.worktree.checked;
   if (data.tool === 'codex' || data.tool === 'codex-pro') {
     data.model = data.codex_model || null;
@@ -1340,16 +1359,28 @@ newForm.onsubmit = async (event) => {
   }
   delete data.codex_model; delete data.codex_effort; delete data.codex_plan_effort;
   for (const key of ['name', 'task', 'agent_mode', 'provider', 'model', 'reasoning_effort', 'plan_reasoning_effort', 'project_id']) if (!data[key]) data[key] = null;
-  try { const session = await api('/api/sessions', { method: 'POST', body: JSON.stringify(data) }); await refresh(); selectView('sessions'); renderInspector(session); openTerminal(session.tmux_name); submit.disabled = false; }
-  catch (error) { formStatus.textContent = error.message; submit.disabled = false; }
+  try {
+    const session = await api('/api/sessions', { method: 'POST', body: JSON.stringify(data) });
+    await refresh(); formStatus.textContent = `Created ${session.tmux_name}`;
+    if (current()) { selectView('sessions'); renderInspector(session); openTerminal(session.tmux_name); }
+    else showNotice(`Created ${session.tmux_name}`);
+  } catch (error) {
+    formStatus.textContent = error.message;
+    if (!current()) showNotice(`Session creation: ${error.message}`, 'error');
+  } finally { submit.disabled = false; }
 };
 
 delegateForm.onsubmit = async (event) => {
-  event.preventDefault(); const submit = $('button[type="submit"]', delegateForm); submit.disabled = true; $('#delegate-status').textContent = 'Creating read-only child…';
+  event.preventDefault(); const submit = $('button[type="submit"]', delegateForm);
+  if (submit.disabled) return;
+  const request = delegateRequest;
+  const current = () => request === delegateRequest && delegateDialog.open;
+  submit.disabled = true; $('#delegate-status').textContent = 'Creating child…';
   const data = Object.fromEntries(new FormData(delegateForm)); const parent = data.parent; delete data.parent;
   for (const key of ['name', 'repository', 'agent_mode', 'auth_context']) if (!data[key]) data[key] = null;
-  try { const result = await api(`/api/sessions/${encodeURIComponent(parent)}/delegations`, { method: 'POST', body: JSON.stringify(data) }); delegateDialog.close(); await refresh(); showNotice(`Created ${result.session.tmux_name}`); }
-  catch (error) { $('#delegate-status').textContent = error.message; } finally { submit.disabled = false; }
+  try { const result = await api(`/api/sessions/${encodeURIComponent(parent)}/delegations`, { method: 'POST', body: JSON.stringify(data) }); if (current()) delegateDialog.close(); await refresh(); showNotice(`Created ${result.session.tmux_name}`); }
+  catch (error) { if (current()) $('#delegate-status').textContent = error.message; else showNotice(`${parent}: ${error.message}`, 'error'); }
+  finally { if (request === delegateRequest) submit.disabled = false; }
 };
 
 planForm.onsubmit = async (event) => {

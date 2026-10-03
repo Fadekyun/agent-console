@@ -36,8 +36,9 @@ export function setupConnections({api,el,message,sessions}) {
         for(const s of candidates){const option=el('option',`${s.tmux_name} · ${s.profile}`);option.value=s.id;target.append(option);}targetLabel.append(target);
         const purposeLabel=el('label','Purpose'),purpose=el('textarea');purpose.rows=2;purpose.required=true;purpose.maxLength=4000;purposeLabel.append(purpose);
         const readinessLabel=el('label','Use this session’s result'),readiness=readinessSelect();readiness.setAttribute('aria-label','Use this session’s result');readinessLabel.append(readiness);
-        const receipt=el('div');form.append(targetLabel,purposeLabel,readinessLabel,button('Inspect existing skill snapshot',async()=>{
-          const selected=all.find(s=>s.id===target.value);const data=await api(`/api/sessions/${encodeURIComponent(selected.tmux_name)}/skills`);
+        const receipt=el('div');target.onchange=()=>receipt.replaceChildren();form.append(targetLabel,purposeLabel,readinessLabel,button('Inspect existing skill snapshot',async()=>{
+          const selected=all.find(s=>s.id===target.value);const data=await api(`/api/sessions/${encodeURIComponent(selected.tmux_name)}/skills?session_id=${encodeURIComponent(selected.id)}`);
+          if(target.value!==selected.id||!receipt.isConnected)return;
           receipt.replaceChildren(el('p',data.latest?`${data.latest.skills.length} skills in this session’s recorded snapshot`:'No recorded skill snapshot; inspect this session before connecting.','small muted'));
           for(const skill of data.latest?.skills||[])receipt.append(el('p',`${skill.name} · ${skill.hash.slice(0,12)}`,'small'));
         }),receipt);
