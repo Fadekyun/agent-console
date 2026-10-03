@@ -23,6 +23,7 @@ const delegateForm = $('#delegate-form');
 const planDialog = $('#plan-dialog');
 const planForm = $('#plan-form');
 const reviewDialog = $('#review-dialog');
+const navigationDialog = $('#navigation-dialog');
 const inspector = $('#session-inspector');
 const attentionForm = $('#attention-form');
 const terminalDock = $('#terminal-dock');
@@ -295,6 +296,7 @@ function closeInspector(restoreFocus = true) {
 
 function selectView(view, updateHash = true) {
   closeSessionMenu();
+  if (navigationDialog.open) navigationDialog.close();
   const nextView = viewTitles[view] ? view : 'sessions';
   if (nextView !== state.view) viewRequest++;
   state.view = nextView;
@@ -1268,6 +1270,13 @@ async function start() {
 
 $$('[data-view]').forEach((button) => button.addEventListener('click', () => selectView(button.dataset.view)));
 window.addEventListener('hashchange', () => selectView(location.hash.slice(1), false));
+const phoneNavigation = matchMedia('(max-width:760px)');
+$('#open-navigation').onclick = () => { navigationDialog.showModal(); $('#open-navigation').setAttribute('aria-expanded', 'true'); };
+navigationDialog.addEventListener('close', () => {
+  $('#open-navigation').setAttribute('aria-expanded', 'false');
+  if (phoneNavigation.matches) $('#open-navigation').focus({preventScroll:true});
+});
+phoneNavigation.addEventListener('change', () => { if (!phoneNavigation.matches && navigationDialog.open) navigationDialog.close(); });
 $('#rail-toggle').onclick = () => { document.body.classList.toggle('rail-collapsed'); const collapsed = document.body.classList.contains('rail-collapsed'); $('#rail-toggle').setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation'); };
 $$('[data-close]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
 $$('#filter-search, #filter-tool, #filter-profile, #filter-state, #filter-attention').forEach((control) => control.addEventListener('input', renderSessions));

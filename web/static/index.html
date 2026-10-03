@@ -15,14 +15,14 @@
     <aside class="sidebar" aria-label="Primary navigation">
       <div class="brand"><span class="brand-mark">AC</span><span class="nav-label"><strong>Agent Console</strong><small>v0.28.7</small></span></div>
       <nav class="nav-list">
-        <button class="nav-button" data-view="sessions"><span data-icon="sessions" aria-hidden="true"></span><span class="nav-label">Sessions</span></button>
-        <button class="nav-button" data-view="projects"><span data-icon="projects" aria-hidden="true"></span><span class="nav-label">Projects</span></button>
-        <button class="nav-button" data-view="profiles"><span data-icon="profiles" aria-hidden="true"></span><span class="nav-label">Profiles</span></button>
-        <button class="nav-button" data-view="skills"><span data-icon="skills" aria-hidden="true"></span><span class="nav-label">Skills</span></button>
-        <button class="nav-button" data-view="jevghost"><span data-icon="probe" aria-hidden="true"></span><span class="nav-label">Jev Ghost</span></button>
-        <button class="nav-button" data-view="orchestration"><span data-icon="workflow" aria-hidden="true"></span><span class="nav-label">Orchestration</span></button>
-        <button class="nav-button" data-view="new"><span data-icon="plus" aria-hidden="true"></span><span class="nav-label">New session</span></button>
-        <a class="nav-button" href="/environment"><span data-icon="settings" aria-hidden="true"></span><span class="nav-label">Environment</span></a>
+        <button class="nav-button" data-view="sessions" aria-label="Sessions"><span data-icon="sessions" aria-hidden="true"></span><span class="nav-label">Sessions</span></button>
+        <button class="nav-button" data-view="projects" aria-label="Projects"><span data-icon="projects" aria-hidden="true"></span><span class="nav-label">Projects</span></button>
+        <button class="nav-button" data-view="profiles" aria-label="Profiles"><span data-icon="profiles" aria-hidden="true"></span><span class="nav-label">Profiles</span></button>
+        <button class="nav-button" data-view="skills" aria-label="Skills"><span data-icon="skills" aria-hidden="true"></span><span class="nav-label">Skills</span></button>
+        <button class="nav-button" data-view="jevghost" aria-label="Jev Ghost"><span data-icon="probe" aria-hidden="true"></span><span class="nav-label">Jev Ghost</span></button>
+        <button class="nav-button" data-view="orchestration" aria-label="Orchestration"><span data-icon="workflow" aria-hidden="true"></span><span class="nav-label">Orchestration</span></button>
+        <button class="nav-button" data-view="new" aria-label="New session"><span data-icon="plus" aria-hidden="true"></span><span class="nav-label">New session</span></button>
+        <a class="nav-button" href="/environment" aria-label="Environment"><span data-icon="settings" aria-hidden="true"></span><span class="nav-label">Environment</span></a>
       </nav>
       <div class="sidebar-footer">
         <label class="theme-field"><span class="nav-label">Theme</span><select id="theme-select" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
@@ -105,9 +105,20 @@
     </div>
 
     <nav class="bottom-nav" aria-label="Mobile navigation">
-      <button data-view="sessions">Sessions</button><button data-view="orchestration">Orchestration</button><button data-view="new">New</button>
+      <button data-view="sessions">Sessions</button><button data-view="orchestration">Orchestration</button><button data-view="new">New</button><button id="open-navigation" type="button" data-icon="chevron-down" data-icon-only aria-label="More navigation" aria-haspopup="dialog" aria-controls="navigation-dialog" aria-expanded="false">More</button>
     </nav>
   </div>
+
+  <dialog id="navigation-dialog" aria-labelledby="navigation-title">
+    <div class="panel-heading"><h2 id="navigation-title">More navigation</h2><button type="button" data-close="navigation-dialog" aria-label="Close navigation">Close</button></div>
+    <nav class="nav-list" aria-label="Additional navigation">
+      <button class="navigation-link" data-view="projects">Projects</button>
+      <button class="navigation-link" data-view="profiles">Profiles</button>
+      <button class="navigation-link" data-view="skills">Skills</button>
+      <button class="navigation-link" data-view="jevghost">Jev Ghost</button>
+      <a class="navigation-link" href="/environment">Environment</a>
+    </nav>
+  </dialog>
 
   <aside id="session-inspector" class="session-inspector" aria-label="Session inspector" hidden>
     <header><div><span class="eyebrow">Session inspector</span><h2 id="inspector-name">Session</h2></div><button id="inspector-close" aria-label="Close inspector">Close</button></header>
