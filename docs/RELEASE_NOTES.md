@@ -1,3 +1,10 @@
+## 0.28.3 — unreleased, 2026-10-03 (#141)
+
+- Impact: Workbench Refresh remains visible and touch accessible on narrow screens, including after a failed initial settings load.
+- Configuration/migration: none; refresh browser assets.
+- Verification: 12 focused browser checks passed for bootstrap failure/retry and 320/360/390px layout; the full public CI matrix checks existing features.
+- Rollback: select the retained v0.28.0 through its schema guard and restart web only, preserving state and running sessions. Older versions hide the narrow-screen Refresh control.
+
 ## 0.28.2 — unreleased, 2026-10-03 (#141)
 
 - Impact: narrow full-control pages open a usable standalone terminal instead of attaching an invisible desktop dock. Full CI runs independently of locally installed agent harnesses and includes browser assets required by release packaging tests; dock coverage uses the accessible sibling Close button and checks remaining terminals.

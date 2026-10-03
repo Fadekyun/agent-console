@@ -1018,6 +1018,25 @@ test('root entry and explicit historical attempt links retain logical aliases',a
   await row.locator('.node-heading a').click();await expect(page.locator('#session-title')).toHaveText('current-attempt');
 });
 
+test('mobile work filters keep Refresh visible and keyboard usable at narrow widths',async({page})=>{
+  await fixture(page);await page.goto('/work');
+  const refresh=page.getByRole('button',{name:'Refresh',exact:true});
+  for(const width of [320,360,390]){
+    await page.setViewportSize({width,height:844});
+    await expect(refresh).toBeVisible();
+    await expect(refresh).toHaveAttribute('data-icon','refresh');
+    const box=await refresh.boundingBox();
+    expect(box.width).toBeGreaterThanOrEqual(44);expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(width);
+    const filter=await page.locator('#state-filter').boundingBox();
+    expect(filter.x+filter.width).toBeLessThanOrEqual(box.x);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await refresh.focus();await expect(refresh).toBeFocused();
+    const reloaded=page.waitForResponse(response=>response.url().includes('/api/workbench?')&&response.ok());
+    await page.keyboard.press('Enter');await reloaded;await expect(refresh).toBeEnabled();
+  }
+});
+
 for(const endpoint of ['me','interface'])test(`audit recovery retries failed ${endpoint} bootstrap on Refresh`,async({page})=>{
   await fixture(page);let attempts=0;
   await page.route(`**/api/${endpoint}`,async route=>{
