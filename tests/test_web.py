@@ -671,7 +671,7 @@ class WebTests(unittest.TestCase):
         with patch.object(
             self.manager,
             "_launch_spec",
-            return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+            return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
         ):
             executed = self.client.post(
                 "/api/plans/web-plan/execute",

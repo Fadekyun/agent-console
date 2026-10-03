@@ -33,6 +33,13 @@ class LaunchTests(unittest.TestCase):
     def root(self, **changes):
         return self.manager.create(**(self.request | changes))
 
+    def test_missing_launcher_still_blocks_preview_without_creating_a_session(self):
+        missing = Path(self.temp.name) / 'missing-shell'
+        with patch.dict(TOOL_BINARIES, {'shell': missing}):
+            with self.assertRaisesRegex(ValueError, 'Tool launcher is unavailable'):
+                self.catalog.preview(self.request)
+        self.assertEqual(self.manager.list_sessions(), [])
+
     def test_recipe_preview_resolves_and_run_is_idempotent(self):
         recipe = self.catalog.save_recipe('Routine check', self.request, actor='operator')
         self.assertEqual(self.manager.list_sessions(), [])
@@ -65,7 +72,7 @@ class LaunchTests(unittest.TestCase):
 
     def test_receipt_retains_explicit_model_efforts_after_stop_without_secrets(self):
         home = self.manager.auth.codex_home('default'); (home/'auth.json').write_text('{"token":"not-to-be-returned"}')
-        with patch.dict(TOOL_BINARIES, {'codex':Path('/usr/bin/zsh')}), patch.object(self.manager, '_launch_spec', return_value=LaunchSpec(['/usr/bin/zsh','-l'], {}, [])):
+        with patch.dict(TOOL_BINARIES, {'codex':Path('/bin/bash')}), patch.object(self.manager, '_launch_spec', return_value=LaunchSpec(['/bin/bash','-l'], {}, [])):
             session = self.root(tool='codex', model='gpt-test', reasoning_effort='high', plan_reasoning_effort='medium')
             self.manager.kill(session['tmux_name'])
         configuration = self.catalog.configuration(session['id'])
@@ -115,7 +122,7 @@ class LaunchTests(unittest.TestCase):
         source_file = skill/'SKILL.md'
         source_file.write_text('---\nname: bounded-guide\ndescription: Bounded task guidance\nmetadata:\n  agent-console/version: "1"\n  agent-console/compatible_harnesses: [codex]\n  agent-console/approval: allow\n---\nInspect the selected files.\n')
         home = self.manager.auth.codex_home('default'); (home/'auth.json').write_text('{}')
-        with patch.dict(os.environ, {'AGCONSOLE_SKILLS_ROOT':str(root)}), patch.dict(TOOL_BINARIES, {'codex':Path('/usr/bin/zsh')}), patch.object(self.manager, '_launch_spec', return_value=LaunchSpec(['/usr/bin/zsh','-l'], {}, [])):
+        with patch.dict(os.environ, {'AGCONSOLE_SKILLS_ROOT':str(root)}), patch.dict(TOOL_BINARIES, {'codex':Path('/bin/bash')}), patch.object(self.manager, '_launch_spec', return_value=LaunchSpec(['/bin/bash','-l'], {}, [])):
             assign_skill(self.manager.database, 'general', 'bounded-guide', canonical_root=root)
             source = self.root(tool='codex', model='gpt-test', reasoning_effort='high')
             config = self.catalog.configuration(source['id'])['latest']['config']

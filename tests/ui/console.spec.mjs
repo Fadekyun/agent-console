@@ -692,8 +692,11 @@ test('desktop terminal dock keeps four tabs connected and rejects a fifth', asyn
   await page.locator('#active-sessions .session-row').filter({ hasText: 'dock-four' }).locator('[data-attach]').click();
   await expect(page.locator('#notice')).toContainText('Four terminal tabs are already open');
   await expect(page.locator('.terminal-tab')).toHaveCount(4);
-  await page.locator('.terminal-tab').last().locator('.terminal-tab-close').click();
+  await page.getByRole('button', { name: 'Close dock-three', exact: true }).click();
   await expect(page.locator('.terminal-tab')).toHaveCount(3);
+  await expect(page.getByRole('tab', { name: 'dock-three', exact: true })).toHaveCount(0);
+  await expect(page.locator('.terminal-embed')).toHaveCount(3);
+  expect(await page.locator('.terminal-embed').evaluateAll((frames) => frames.map((frame) => frame.src))).toEqual(sources.slice(0, 3));
   await page.locator('#terminal-dock-collapse').click();
   await expect(page.locator('#terminal-dock')).toHaveClass(/collapsed/);
 });

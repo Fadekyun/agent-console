@@ -151,6 +151,10 @@ function closeTerminal(name) {
 }
 
 function openTerminal(name) {
+  if (window.matchMedia('(max-width: 760px)').matches) {
+    location.href = `/terminal?session=${encodeURIComponent(name)}`;
+    return;
+  }
   if (terminalTabs.has(name)) { activateTerminal(name); return; }
   if (terminalTabs.size >= 4) {
     showNotice('Four terminal tabs are already open. Close one before attaching another.', 'error');
@@ -574,6 +578,10 @@ async function openGroupTerminals(groupId, groupName) {
     const result = await api(`/api/session-groups/${encodeURIComponent(groupId)}/open`, { method: 'POST' });
     const available = result.available || [];
     const unavailable = result.unavailable || [];
+    if (available.length && window.matchMedia('(max-width: 760px)').matches) {
+      openTerminal(available[0].tmux_name);
+      return;
+    }
     let opened = 0;
     for (const s of available) {
       if (terminalTabs.size >= 4) break;

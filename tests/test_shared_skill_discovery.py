@@ -497,7 +497,7 @@ class SharedSkillSessionTests(unittest.TestCase):
         }]
         with mock.patch.object(self.manager.models, "list", return_value={"models": models}):
             assign_skill(self.manager.database, 'general', 'unrelated-skill', canonical_root=self.skills_root)
-        self.manager.create(
+            self.manager.create(
                 tool="opencode", profile="general", name="opencode-shared",
                 repository=str(self.workspace),
             )

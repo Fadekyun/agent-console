@@ -1,3 +1,10 @@
+## 0.28.2 — unreleased, 2026-10-03 (#141)
+
+- Impact: narrow full-control pages open a usable standalone terminal instead of attaching an invisible desktop dock. Full CI runs independently of locally installed agent harnesses and includes browser assets required by release packaging tests; dock coverage uses the accessible sibling Close button and checks remaining terminals.
+- Configuration/migration: none for operators. Test-only harness fixtures are isolated from installed credentials and tools; production launcher validation is unchanged.
+- Verification: clean-runner Python matrix, browser suite, distribution build, whitespace and secret checks run in the public review PR.
+- Rollback: select retained v0.28.0 through its schema guard and restart web only; preserve state and running sessions. Test infrastructure changes have no runtime migration.
+
 ## 0.28.1 — unreleased, 2026-10-03 (#141)
 
 - Impact: failed environment saves and suppression requests retain the in-memory draft for retry. Successful mutations clear the draft even if the following refresh fails. Corrected trailing whitespace found by the first public CI run.

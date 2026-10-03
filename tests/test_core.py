@@ -593,7 +593,7 @@ class SessionIntegrationTests(unittest.TestCase):
         update the env-var value to point at the renamed context file."""
         from agent_console.providers import TOOL_BINARIES
         original_bin = TOOL_BINARIES.get("opencode")
-        TOOL_BINARIES["opencode"] = Path("/usr/bin/zsh")
+        TOOL_BINARIES["opencode"] = Path("/bin/bash")
         try:
             models = [{
                 "id": "test-model",
@@ -654,7 +654,7 @@ class SessionIntegrationTests(unittest.TestCase):
         from agent_console.providers import TOOL_BINARIES
         self.configure_commandcode()
         original_bin = TOOL_BINARIES.get("hermes")
-        TOOL_BINARIES["hermes"] = Path("/usr/bin/zsh")
+        TOOL_BINARIES["hermes"] = Path("/bin/bash")
         try:
             secret_path = self.manager.auth.secrets_dir / "openrouter-main.env"
             secret_path.parent.mkdir(parents=True, exist_ok=True)
@@ -815,7 +815,7 @@ class SessionIntegrationTests(unittest.TestCase):
         with patch.object(
             self.manager,
             "_launch_spec",
-            return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+            return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
         ):
             session = self.manager.execute_plan("test-plan", name="plan-implementation")
         inspected = self.manager.inspect_plan("test-plan")
@@ -842,7 +842,7 @@ class SessionIntegrationTests(unittest.TestCase):
             with patch.object(
                 self.manager,
                 "_launch_spec",
-                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+                return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
             ):
                 session = self.manager.create(
                     tool="codex",
@@ -883,7 +883,7 @@ class SessionIntegrationTests(unittest.TestCase):
             with patch.object(
                 self.manager,
                 "_launch_spec",
-                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+                return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
             ):
                 session = self.manager.create(
                     tool="codex",
@@ -918,7 +918,7 @@ class SessionIntegrationTests(unittest.TestCase):
             with patch.object(
                 self.manager,
                 "_launch_spec",
-                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+                return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
             ):
                 session = self.manager.create(
                     tool="codex",
@@ -1191,7 +1191,7 @@ class SessionIntegrationTests(unittest.TestCase):
         with patch.object(
             self.manager,
             "_launch_spec",
-            return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+            return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
         ):
             session = self.manager.create(
                 tool="codex",
@@ -1229,7 +1229,7 @@ class SessionIntegrationTests(unittest.TestCase):
                     with patch("agent_console.skills._default_version_probe", return_value="1.18.31"), patch("agent_console.providers.ProviderAdapter.can_isolate_skills", new_callable=PropertyMock, return_value=False), patch.object(
                         self.manager,
                         "_launch_spec",
-                        return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+                        return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
                     ):
                         self.manager.create(
                             tool=bad_tool,
@@ -1243,7 +1243,7 @@ class SessionIntegrationTests(unittest.TestCase):
             with patch.object(
                 self.manager,
                 "_launch_spec",
-                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+                return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
             ):
                 codex_session = self.manager.create(
                     tool="codex", profile="general",
@@ -1270,7 +1270,7 @@ class SessionIntegrationTests(unittest.TestCase):
             with patch.object(
                 self.manager,
                 "_launch_spec",
-                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+                return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
             ):
                 session = self.manager.create(
                     tool="opencode",

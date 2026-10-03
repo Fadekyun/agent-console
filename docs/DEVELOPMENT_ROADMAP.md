@@ -1,6 +1,7 @@
 ## Publication acceptance fixes — 2026-10-03 (#141)
 
 - Implemented: environment drafts survive failed writes and clear after successful writes, including refresh failures; corrected CI whitespace findings.
+- Implemented: isolated test harnesses and npm assets in Python CI; updated terminal dock regression for accessible sibling controls. Narrow full-control terminal actions now open the standalone terminal.
 - Confirmed follow-up opportunities: project selection for fresh roots in Workbench; confirmation before deleting write-only environment values; selected-child waits in the UI.
 - Optional future additions: installed-wrapper drift diagnostics and opt-in attention notifications.
 

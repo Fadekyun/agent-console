@@ -11,6 +11,24 @@ with tempfile.TemporaryDirectory(prefix='agent-console-tests-') as directory:
     scratch = Path(directory)
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(('AGENT_CONSOLE_', 'AGCONSOLE_'))}
+    # Exercise actual executable discovery/identity checks without requiring paid
+    # harness installations or accidentally starting an operator's real agent.
+    # Tests of native task protocols supply their own protocol-aware executables.
+    binaries = scratch / 'bin'
+    binaries.mkdir()
+    for tool in ('codex', 'codex-pro', 'claude', 'opencode', 'pi', 'hermes'):
+        launcher = binaries / tool
+        launcher.write_text(
+            '#!/bin/sh\n'
+            'case "$1" in\n'
+            '  --version) printf "Console test harness 0.0.0\\n"; exit 0 ;;\n'
+            '  exec|models|--help) exit 2 ;;\n'
+            'esac\n'
+            'exec /bin/bash --noprofile --norc\n', encoding='utf-8')
+        launcher.chmod(0o700)
+        env['AGCONSOLE_' + tool.upper().replace('-', '_') + '_BIN'] = str(launcher)
+    env['AGCONSOLE_SHELL_BIN'] = '/bin/bash'
+    env['PATH'] = str(binaries) + os.pathsep + env.get('PATH', os.defpath)
     env.update({
         'AGENT_CONSOLE_WORKSPACE_ROOT': str(scratch / 'workspace'),
         'AGENT_CONSOLE_STATE_DIR': str(scratch / 'state'),

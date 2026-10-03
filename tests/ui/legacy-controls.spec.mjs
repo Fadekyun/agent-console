@@ -26,7 +26,8 @@ async function fixture(page) {
   return {requests,errors};
 }
 async function openProfile(page, mobile, name) {
-  await page.locator(mobile?'[data-mobile-tab="profiles"]':'[data-view="profiles"]').first().click();
+  if(mobile)await page.locator('[data-mobile-tab="profiles"]').click();
+  else await page.evaluate(()=>{location.hash='profiles';});
   const list=page.locator(mobile?'#mobile-profiles-list':'#profiles-list');
   await list.locator(mobile?'.mobile-profile-card':'.profile-card').filter({has:page.getByText(name,{exact:true})}).getByRole('button',{name:mobile?'Edit':'Edit instructions',exact:true}).click();
 }
@@ -50,21 +51,25 @@ test('New group button opens its dialog on initial and subsequent renders',async
   await page.locator('#new-group-btn').click();
   await expect(page.locator('#group-dialog')).toBeVisible();
   await page.locator('[data-close="group-dialog"]').click();
-  await page.locator('[data-view="sessions"]').first().click();await page.locator('#refresh').click();
-  await page.locator('[data-view="orchestration"]').first().click();await page.locator('#new-group-btn').click();
+  await page.locator('[data-view="sessions"]:visible').first().click();await page.locator('#refresh').click();
+  await page.locator('[data-view="orchestration"]:visible').first().click();await page.locator('#new-group-btn').click();
   await expect(page.locator('#group-dialog')).toBeVisible();
 });
 
-test('plan execute is enabled for the next plan after a successful run',async({page})=>{
+test('plan execute is enabled for the next plan after a successful run',async({page},testInfo)=>{
   const {requests}=await fixture(page);await page.goto('/desktop#orchestration');
   for(const id of ['one','two']) {
-    await page.locator('[data-view="orchestration"]').first().click();
+    await page.locator('[data-view="orchestration"]:visible').first().click();
     await page.locator('.plan-row').filter({hasText:`Plan ${id}`}).getByRole('button').click();
     await expect(page.locator('#plan-title')).toHaveText(`Plan ${id}`);
     await expect(page.locator('#plan-form button[type=submit]')).toBeEnabled();
     await page.locator('#plan-form button[type=submit]').click();
     await expect(page.locator('#plan-dialog')).not.toBeVisible();
-    await expect(page.locator('#inspector-name')).toHaveText('implemented');
+    if(testInfo.project.name==='desktop')await expect(page.locator('#inspector-name')).toHaveText('implemented');
+    else {
+      await expect(page).toHaveURL(/\/terminal\?session=implemented$/);
+      await page.goto('/desktop#orchestration');
+    }
   }
   expect(requests.filter(r=>r.path.endsWith('/execute')).map(r=>r.path)).toEqual(['/api/plans/one/execute','/api/plans/two/execute']);
 });
@@ -121,12 +126,13 @@ test('late plan content cannot replace the next selected execution target',async
   await expect.poll(()=>requests.filter(r=>r.path.endsWith('/execute')).map(r=>r.path)).toEqual(['/api/plans/two/execute']);
 });
 
-test('late attention save updates the list without selecting the previous session again',async({page})=>{
+test('late attention save updates the list without selecting the previous session again',async({page},testInfo)=>{
   await fixture(page);let saved;
   await page.route('**/api/sessions/first/attention',route=>{saved=route;});
   await page.goto('/desktop');
   await page.locator('.session-row').filter({hasText:'first'}).click();
   await page.locator('#attention-form button[type=submit]').click();await expect.poll(()=>Boolean(saved)).toBe(true);
+  if(testInfo.project.name!=='desktop')await page.getByRole('button',{name:'Close inspector',exact:true}).click();
   await page.locator('.session-row').filter({hasText:'second'}).click();await expect(page.locator('#inspector-name')).toHaveText('second');
   await saved.fulfill({json:{...session('first'),attention_state:'ready_for_review'}});
   await expect(page.locator('.session-row').filter({hasText:'first'})).toContainText('Ready for review');
@@ -221,7 +227,8 @@ test('mobile Create ignores rapid duplicate submissions and recovers after failu
   await expect(page).toHaveURL(/\/terminal\?session=created$/);
 });
 
-test('terminal dock close is a separate keyboard operable button',async({page})=>{
+test('terminal dock close is a separate keyboard operable button',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='desktop','Narrow viewports use a dedicated terminal.');
   await fixture(page);
   await page.route('**/api/sessions?**',route=>route.fulfill({json:[{...session('first'),actions:['attach']}]}));
   await page.goto('/desktop');await page.locator('.session-row').filter({hasText:'first'}).click();
@@ -231,4 +238,32 @@ test('terminal dock close is a separate keyboard operable button',async({page})=
   await expect(page.locator('[role=tab] button')).toHaveCount(0);
   await close.focus();await page.keyboard.press('Enter');
   await expect(page.locator('#terminal-dock')).not.toBeVisible();
+});
+
+for(const entry of ['Attach','Open terminal dock']) test(`narrow desktop ${entry} opens the dedicated terminal`,async({page},testInfo)=>{
+  test.skip(testInfo.project.name==='desktop','Narrow viewport navigation coverage.');
+  await fixture(page);
+  const name='first+detail';
+  await page.route('**/api/sessions?**',route=>route.fulfill({json:[{...session(name),actions:['attach']}]}));
+  await page.goto('/desktop');
+  const row=page.locator('.session-row').filter({hasText:name});
+  if(entry==='Attach')await row.getByRole('button',{name:entry,exact:true}).click();
+  else {await row.click();await page.getByRole('button',{name:entry,exact:true}).click();}
+  await expect(page).toHaveURL(/\/terminal\?session=first%2Bdetail$/);
+  expect(new URL(page.url()).searchParams.get('session')).toBe(name);
+  expect(new URL(page.url()).searchParams.has('embed')).toBe(false);
+  await expect(page).toHaveTitle('Fixture terminal');
+});
+
+test('narrow desktop group Open navigates only to its first available terminal',async({page},testInfo)=>{
+  test.skip(testInfo.project.name==='desktop','Narrow viewport navigation coverage.');
+  await fixture(page);
+  await page.route('**/api/session-groups',route=>route.fulfill({json:[{id:'group-one',name:'Work group',member_count:2}]}));
+  await page.route('**/api/session-groups/group-one/open',route=>route.fulfill({json:{available:[session('first'),session('second')],unavailable:[]}}));
+  const terminals=[];
+  page.on('request',request=>{if(new URL(request.url()).pathname==='/terminal')terminals.push(new URL(request.url()).searchParams.get('session'));});
+  await page.goto('/desktop#orchestration');
+  await page.getByRole('button',{name:'Open terminals',exact:true}).click();
+  await expect(page).toHaveURL(/\/terminal\?session=first$/);
+  expect(terminals).toEqual(['first']);
 });
