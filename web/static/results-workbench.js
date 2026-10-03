@@ -6,7 +6,7 @@ export function setupResults({api,el,message,sessions,editStep,openSession}) {
   const workflow=setupWorkflow({api,el,message,editStep,openSession});
   const connections=setupConnections({api,el,message,sessions});
   const releases=setupReleases({api,el,message});
-  const root=document.querySelector('#session-results');let selected=null;
+  const root=document.querySelector('#session-results');let selected=null,generation=0;
   function action(label,fn){const button=el('button',label);button.type='button';button.onclick=async()=>{button.disabled=true;try{await fn();}catch(error){message(error.message);}finally{button.disabled=false;}};return button;}
   function field(label,tag='input'){const wrapper=el('label',label),input=el(tag);wrapper.append(input);return {wrapper,input};}
   function option(value,label=value){const node=el('option',label);node.value=value;return node;}
@@ -29,14 +29,15 @@ export function setupResults({api,el,message,sessions,editStep,openSession}) {
     return card;
   }
   async function load(session){
+    const token=++generation;
     selected=session.id;root.hidden=false;root.replaceChildren(el('p','Loading results and inputs…'));
     let results,inbox;
     try { [results,inbox]=await Promise.all([api(`/api/sessions/${session.id}/results`),api(`/api/sessions/${session.id}/inbox`)]); }
     catch(error){
-      if(selected===session.id)root.replaceChildren(el('p',error.message),action('Retry loading results',()=>load(session)));
+      if(selected===session.id&&token===generation)root.replaceChildren(el('p',error.message),action('Retry loading results',()=>load(session)));
       return;
     }
-    if(selected!==session.id)return;
+    if(selected!==session.id||token!==generation)return;
     root.replaceChildren();
     const form=el('form'),kind=field('Result type','select'),outcome=field('Outcome','select'),summary=field('Summary','textarea'),checks=field('Checks performed (one per line)','textarea'),files=field('Selected files (one repository-relative path per line)','textarea'),commit=field('Exact commit SHA (optional)');
     kind.input.append(option('final','Final result'),option('ready','Ready checkpoint'));outcome.input.append(option('pass','Passed'),option('fail','Failed'),option('blocked','Blocked'));
@@ -84,7 +85,15 @@ export function setupResults({api,el,message,sessions,editStep,openSession}) {
       let before=results.results.at(-1).version;
       const more=action('Older results',async()=>{
         const page=await api(`/api/sessions/${session.id}/results?before=${before}`);
-        for(const result of page.results)more.before(renderResult(result,targets));
+        if(selected!==session.id||token!==generation)return;
+        const known=new Set(results.results.map(result=>result.id));
+        for(const result of page.results)if(!known.has(result.id)){
+          known.add(result.id);results.results.push(result);more.before(renderResult(result,targets));
+        }
+        if(releaseLoaded){
+          releaseLoaded=false;
+          if(release.open){releaseLoaded=true;await releases.load(releaseRoot,session,results.results);}
+        }
         if(page.results.length)before=page.results.at(-1).version;
         if(page.results.length<5)more.remove();
       });root.append(more);

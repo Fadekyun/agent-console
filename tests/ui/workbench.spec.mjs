@@ -1017,3 +1017,43 @@ test('root entry and explicit historical attempt links retain logical aliases',a
   await expect(row.locator('.node-heading a')).toHaveAttribute('aria-current','page');
   await row.locator('.node-heading a').click();await expect(page.locator('#session-title')).toHaveText('current-attempt');
 });
+
+for(const endpoint of ['me','interface'])test(`audit recovery retries failed ${endpoint} bootstrap on Refresh`,async({page})=>{
+  await fixture(page);let attempts=0;
+  await page.route(`**/api/${endpoint}`,async route=>{
+    if(++attempts===1)return route.fulfill({status:503,json:{detail:'Bootstrap temporarily unavailable'}});
+    return route.fallback();
+  });
+  await page.goto('/work');await expect(page.locator('#notice')).toContainText('Could not load settings');
+  await page.locator('#new-session').click();await expect(page.locator('#create-dialog')).not.toBeVisible();
+  await page.locator('#refresh').click();await expect(page.locator('#notice')).toBeHidden();
+  await page.locator('#new-session').click();await expect(page.locator('#create-dialog')).toBeVisible();
+  await expect(page.locator('[name=profile]')).toHaveValue('coder');expect(attempts).toBe(2);
+});
+for(const opened of [false,true])test(`audit older result becomes release candidate with panel initially ${opened?'open':'closed'}`,async({page})=>{
+  await fixture(page);const evidence=[];
+  const base={session_id:'root',kind:'final',outcome:'pass',summary:'Recent result',checks:['Test passed'],artifacts:[],created_at:'2026-10-02'};
+  const older={...base,id:'older-candidate',version:1,summary:'Older deployable result',artifacts:[{kind:'commit',sha:'a'.repeat(40),hash:'b'.repeat(64),label:'Candidate'}]};
+  await page.route('**/api/sessions/root/results**',route=>route.fulfill({json:{results:new URL(route.request().url()).searchParams.has('before')?[older]:Array.from({length:5},(_,i)=>({...base,id:`recent-${i}`,version:6-i}))}}));
+  await page.route('**/api/workflow/release-targets',route=>route.fulfill({json:[{id:'stage',label:'Stage',actions:['deploy']}]}));
+  await page.route('**/api/sessions/root/releases',route=>route.fulfill({json:[]}));
+  await page.route('**/api/workflow/releases/evidence/*',route=>{evidence.push(route.request().url());return route.fulfill({json:[{...older,eligible:true}]});});
+  await page.goto('/work#results/session-one');
+  if(opened){await page.locator('#workflow-releases > summary').click();await expect(page.locator('#workflow-releases')).toContainText('Publish a passing final result');}
+  await page.getByRole('button',{name:'Older results',exact:true}).click();
+  if(!opened)await page.locator('#workflow-releases > summary').click();
+  await expect(page.getByRole('combobox',{name:'Candidate',exact:true})).toHaveValue('older-candidate');
+  await expect(page.locator('#workflow-releases')).toContainText('Older deployable result');
+  await expect.poll(()=>evidence.length).toBeGreaterThan(0);expect(evidence.at(-1)).toContain('/older-candidate');
+});
+test('audit skill actions report structured failure diagnostics',async({page})=>{
+  await fixture(page);
+  await page.route('**/api/skill-registry',route=>route.fulfill({json:{entries:[],imports:[]}}));
+  await page.route('**/api/skills/sync',route=>route.fulfill({json:{ok:false,problems:['Managed path collision'],skipped:[{tool:'shell',reason:'Unknown version'}],warnings:['Review discovery']}}));
+  await page.route('**/api/skills/doctor',route=>route.fulfill({json:{ok:false,problems:['Missing required skill'],skipped:[],warnings:[]}}));
+  await page.goto('/work#skills');await page.getByRole('button',{name:'Sync unrestricted skills'}).click();
+  await expect(page.locator('#notice')).toContainText('Sync needs attention: Managed path collision; shell: Unknown version; Review discovery');
+  await expect(page.locator('#notice')).not.toContainText('Skills updated');
+  await page.getByRole('button',{name:'Validate discovery'}).click();
+  await expect(page.locator('#notice')).toHaveText('Doctor: Missing required skill');
+});

@@ -108,11 +108,22 @@ function route() {
   if (!showingResults && state.selected?.running && previous !== state.selected.tmux_name && (!matchMedia('(max-width:760px)').matches || switchingFromDrawer)) openTerminal();
   syncTerminalVisibility();
 }
+async function loadSettings() {
+ try {
+  const [me, instance] = await Promise.all([api('/api/me'), api('/api/interface')]); state.me = me; state.workspace = instance.workspace;
+  if(me.session_limits)$('#session-capacity').textContent=`Up to ${me.session_limits.managed} running sessions. Stopped sessions do not use a slot.`;
+  $('#instance').textContent = instance.label;
+  for (const id of ['#current-version','#settings-current']) if (instance.current_url) { $(id).href = instance.current_url; $(id).hidden = false; }
+  $('#tools').replaceChildren(...me.tool_status.map(x => el('p', `${x.name} · ${x.status}${x.reason ? ` — ${x.reason}` : ''}`, 'tool')));
+  if ($('#notice').dataset.kind === 'settings') message('');
+ } catch (e) { message(`Could not load settings: ${e.message}`, 'settings'); }
+}
 async function refresh() {
   if (state.loading) return state.loading;
   $('#refresh').disabled=true;$('#work-list').setAttribute('aria-busy','true');
   state.loading = (async () => {
     try {
+      if (!state.me) await loadSettings();
       const work=await api('/api/workbench?compact=true');
       if(!Array.isArray(work.nodes)||!Array.isArray(work.sessions))throw new Error('Work summary unavailable');
       const tasks=new Map(work.nodes.map(node=>[node.native_id,node.task]));
@@ -223,7 +234,7 @@ function restoreCreateOrigin(){
 function openCreate(parent = null, step = null) {
   createOrigin={hash:location.hash,control:document.activeElement,drawer:$('#sessions-dialog').open,scroll:[$('#sessions-dialog'),$('#session-tree'),$('#tree-panel')].map(node=>[node,node.scrollTop,node.scrollLeft])};
   if ($('#sessions-dialog').open) $('#sessions-dialog').close();
-  if (!state.me) { message('Tool information is still loading. Try again shortly.'); return; }
+  if (!state.me) { message('Tool information is unavailable. Use Refresh to retry loading settings.', 'settings'); return; }
   form.reset(); launches.reset(parent); form.elements.parent.value = parent?.id || '';
   form.dataset.step = step ? JSON.stringify(step) : '';
   $('#next-step-options').hidden=!parent;
@@ -392,13 +403,7 @@ $('#expand-terminal').onclick = () => { const expanded = $('#terminal-panel').cl
 $('#refresh').onclick = refresh;
 window.addEventListener('hashchange', route); window.addEventListener('focus', refresh);
 initTheme($('#theme'));
-try {
-  const [me, instance] = await Promise.all([api('/api/me'), api('/api/interface')]); state.me = me; state.workspace = instance.workspace;
-  if(me.session_limits)$('#session-capacity').textContent=`Up to ${me.session_limits.managed} running sessions. Stopped sessions do not use a slot.`;
-  $('#instance').textContent = instance.label;
-  for (const id of ['#current-version','#settings-current']) if (instance.current_url) { $(id).href = instance.current_url; $(id).hidden = false; }
-  $('#tools').replaceChildren(...me.tool_status.map(x => el('p', `${x.name} · ${x.status}${x.reason ? ` — ${x.reason}` : ''}`, 'tool')));
-} catch (e) { message(`Could not load settings: ${e.message}`); }
+
 await refresh(); setInterval(() => { if (!document.hidden && !['#settings','#skills'].includes(location.hash) && !document.activeElement?.matches('#search,.filter-grid select')) refresh(); }, 10000);
 
 window.addEventListener('message', event => {

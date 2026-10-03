@@ -1,5 +1,5 @@
 // All library text uses textContent; imported packages are never rendered as HTML.
-import { skillToolDiagnostic } from './skill-diagnostics.js';
+import { skillToolDiagnostic, skillActionMessage } from './skill-diagnostics.js';
 
 export function setupSkills({ api, el, message, profiles }) {
   const root = document.querySelector('#skills-content');
@@ -79,7 +79,7 @@ export function setupSkills({ api, el, message, profiles }) {
     const revision = el('input'); revision.value = 'HEAD'; revision.setAttribute('aria-label', 'Git revision');
     const subdirectory = el('input'); subdirectory.placeholder = 'Package directory within repository'; subdirectory.setAttribute('aria-label', 'Git package directory');
     gitOptions.append(gitLabel, revision, subdirectory, el('p', 'Anonymous HTTPS fetch only. Import stages files for inspection; it does not activate or execute them.', 'small'));
-    toolbar.append(source, gitOptions, button('Stage import', () => api('/api/skill-registry/imports', { source: source.value, ... (source.value.includes('://') ? { revision: revision.value, subdirectory: subdirectory.value } : {}) })), button('Validate discovery', async () => { const result = await api('/api/skills/doctor', {}); return [...result.problems, ...result.warnings].join('\n') || 'Discovery checks passed.'; }), button('Sync unrestricted skills', () => api('/api/skills/sync', {})));
+    toolbar.append(source, gitOptions, button('Stage import', () => api('/api/skill-registry/imports', { source: source.value, ... (source.value.includes('://') ? { revision: revision.value, subdirectory: subdirectory.value } : {}) })), button('Validate discovery', async () => { return skillActionMessage('doctor', await api('/api/skills/doctor', {})); }), button('Sync unrestricted skills', async () => skillActionMessage('sync', await api('/api/skills/sync', {}))));
     root.append(toolbar);
     const cards = el('div', null, 'cards'), details = el('div');
     for (const packageInfo of catalog.entries) {
