@@ -99,6 +99,27 @@ class ScopedChildWaitTests(unittest.TestCase):
         self.assertEqual(report['children'][0]['wait_status'],'completed')
         self.assert_attention_unchanged()
 
+    def test_local_selected_running_child_times_out_ignoring_old_failure(self):
+        report=self.manager.wait_for_children('parent-name',child_selectors=['active-name'],
+            timeout=1,poll_interval=1)
+        self.assertEqual((report['outcome'],report['exit_code']),('timeout',1))
+        self.assertEqual(report['selected_child_ids'],['active'])
+        self.assertEqual([(child['child_id'],child['running'],child['wait_status'])
+            for child in report['children']],[('active',True,'timeout')])
+        self.assert_attention_unchanged()
+
+    def test_local_selected_intervention_ignores_old_failure(self):
+        for state in ('blocked','needs_input'):
+            with self.subTest(state=state):
+                with self.manager.database.connect() as db:
+                    db.execute("UPDATE sessions SET attention_state=? WHERE id='active'",(state,))
+                report=self.manager.wait_for_children('parent-name',child_selectors=['active-name'],
+                    timeout=5,poll_interval=1)
+                self.assertEqual((report['outcome'],report['exit_code']),('intervention',2))
+                self.assertEqual([(child['child_id'],child['attention_state'],child['wait_status'])
+                    for child in report['children']],[('active',state,'intervention')])
+                self.assert_attention_unchanged()
+
     def test_local_invalid_selectors_fail_before_creating_wait_record(self):
         self.insert('shadow','active',None)
         for selectors in (['missing'],['outside'],['grandchild'],['active'],[],['']):
@@ -142,6 +163,36 @@ class ScopedChildWaitTests(unittest.TestCase):
         self.assertEqual(report['outcome'],'success');self.assertEqual(report['selected_child_ids'],['active'])
         self.assertEqual([c['tmux_name'] for c in report['children']],['renamed-child'])
         self.assert_attention_unchanged()
+
+    def managed_wait(self,timeout):
+        args=SimpleNamespace(command='session',session_command='wait-for-children',name='parent-name',
+            timeout=timeout,poll_interval=1,child_selectors=['active-name'])
+        def transport(command,payload):
+            self.assertEqual(command,'children')
+            response=self.request(payload)
+            self.assertEqual(response.status_code,200,response.text)
+            return response.json()
+        with patch.object(session_client,'request',side_effect=transport):
+            return session_client.run(args)
+
+    def test_managed_selected_running_child_times_out_ignoring_old_failure(self):
+        report=self.managed_wait(timeout=1)
+        self.assertEqual((report['outcome'],report['exit_code']),('timeout',1))
+        self.assertEqual(report['selected_child_ids'],['active'])
+        self.assertEqual([(child['id'],child['running'],child['wait_status'])
+            for child in report['children']],[('active',True,'waiting')])
+        self.assert_attention_unchanged()
+
+    def test_managed_selected_intervention_ignores_old_failure(self):
+        for state in ('blocked','needs_input'):
+            with self.subTest(state=state):
+                with self.manager.database.connect() as db:
+                    db.execute("UPDATE sessions SET attention_state=? WHERE id='active'",(state,))
+                report=self.managed_wait(timeout=5)
+                self.assertEqual((report['outcome'],report['exit_code']),('intervention',2))
+                self.assertEqual([(child['id'],child['attention_state'],child['wait_status'])
+                    for child in report['children']],[('active',state,'intervention')])
+                self.assert_attention_unchanged()
 
     def test_managed_backend_denies_invalid_outside_nested_and_ambiguous_children(self):
         self.insert('shadow','active',None)
