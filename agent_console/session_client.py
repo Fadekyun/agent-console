@@ -84,8 +84,23 @@ def run(args):
     if timeout < 1 or interval < 1:
         raise ValueError('timeout and poll interval must be at least one second')
     deadline = time.monotonic() + timeout
+    selectors = getattr(args, 'child_selectors', None)
+    selected_ids = None
+    parent_id = None
     while True:
-        children = request('children',{'name':current_ref(args.name)})['children']
+        payload = {'name':parent_id or current_ref(args.name)}
+        if selectors is not None:
+            payload['child_ids' if selected_ids is not None else 'child_selectors'] = selected_ids if selected_ids is not None else selectors
+        observed = request('children', payload)
+        children = observed['children']
+        if selectors is not None:
+            from .child_waits import select_children
+            if not observed.get('parent_id') or not observed.get('selected_child_ids'):
+                raise RuntimeError('Console did not confirm the selected child batch; scoped waiting requires an updated server')
+            if parent_id is not None and (observed['parent_id'] != parent_id or observed['selected_child_ids'] != selected_ids):
+                raise RuntimeError('Console changed the selected wait batch; inspect the session tree')
+            parent_id, selected_ids = observed['parent_id'], observed['selected_child_ids']
+            children = select_children(children, parent_id, selected_ids, ids_only=True)
         for child in children:
             attention = child.get('attention_state')
             child['wait_status'] = ('success' if attention == 'ready_for_review' else
@@ -95,5 +110,8 @@ def run(args):
         outcome, code = ('intervention',2) if 'intervention' in states else (
             ('failure',3) if 'completed' in states else ('waiting',1) if 'waiting' in states else ('success',0))
         if outcome != 'waiting' or time.monotonic() >= deadline:
-            return {'children':children,'outcome':'timeout' if outcome == 'waiting' else outcome,'exit_code':code}
+            result = {'children':children,'outcome':'timeout' if outcome == 'waiting' else outcome,'exit_code':code}
+            if selected_ids is not None:
+                result['selected_child_ids'] = selected_ids
+            return result
         time.sleep(min(interval, max(0,deadline-time.monotonic())))

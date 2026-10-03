@@ -165,6 +165,8 @@ def parser() -> argparse.ArgumentParser:
     archive.add_argument("--allow-unmanaged", action="store_true")
     wait_children = session_commands.add_parser("wait-for-children")
     wait_children.add_argument("name")
+    wait_children.add_argument("--child", dest="child_selectors", action="append", metavar="ID_OR_NAME",
+                               help="wait only for these direct children; repeat for a batch")
     wait_children.add_argument("--timeout", type=int, default=None)
     wait_children.add_argument("--poll-interval", type=int, default=None)
 
@@ -592,6 +594,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.name,
                     timeout=args.timeout,
                     poll_interval=args.poll_interval,
+                    child_selectors=args.child_selectors,
                 )
                 if args.json:
                     emit(result)

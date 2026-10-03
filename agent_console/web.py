@@ -145,6 +145,7 @@ class ConfirmRequest(BaseModel):
 
 
 class WaitForChildrenRequest(BaseModel):
+    child_selectors: list[str] | None = Field(default=None, min_length=1, max_length=256)
     timeout: int | None = Field(default=None, ge=1, le=3600)
     poll_interval: int | None = Field(default=None, ge=1, le=120)
 
@@ -526,6 +527,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             name,
             timeout=payload.timeout,
             poll_interval=payload.poll_interval,
+            child_selectors=payload.child_selectors,
         )
 
     @app.get("/api/sessions/{name}/review")

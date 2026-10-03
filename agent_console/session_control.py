@@ -150,6 +150,19 @@ class SessionControl:
             return self.manager.delegate(parent=self.current['id'], creator_surface='session-api', **config)
         if command == 'children':
             self.authorize_control(target, own=True)
+            if 'child_selectors' in payload or 'child_ids' in payload:
+                from .child_waits import select_children
+                if 'child_selectors' in payload and 'child_ids' in payload:
+                    raise ValueError('provide child selectors or pinned child IDs, not both')
+                pinned = 'child_ids' in payload
+                children = select_children(list(self.all_sessions.values()), target['id'],
+                    payload['child_ids'] if pinned else payload['child_selectors'], ids_only=pinned)
+                selected_ids = [child['id'] for child in children]
+                visible = {row['id']:row for row in self.views.sessions}
+                if any(identity not in visible for identity in selected_ids):
+                    raise PermissionError('selected child is outside the permitted project or tree')
+                return {'parent_id':target['id'], 'selected_child_ids':selected_ids,
+                        'children':[visible[identity] for identity in selected_ids]}
             from .session_relatives import relatives
             group = relatives(self.views.sessions, target['id'])
             ids = set(group['relations']['descendant'])

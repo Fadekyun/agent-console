@@ -393,7 +393,9 @@ class SessionManager:
         *,
         timeout: int | None = None,
         poll_interval: int | None = None,
+        child_selectors: list[str] | None = None,
     ) -> dict[str, Any]:
+        from .child_waits import select_children
         validate_session_name(parent_name)
         timeout = timeout if timeout is not None else int(os.getenv("AGENT_CONSOLE_WAIT_TIMEOUT", "300"))
         poll_interval = poll_interval if poll_interval is not None else int(
@@ -414,6 +416,10 @@ class SessionManager:
             if parent_row is None:
                 raise KeyError(f"parent session not found: {parent_name}")
             parent_id = parent_row["id"]
+            selected_ids = None
+            if child_selectors is not None:
+                rows = [dict(row) for row in conn.execute("SELECT id,tmux_name,parent_session_id FROM sessions")]
+                selected_ids = [child["id"] for child in select_children(rows, parent_id, child_selectors)]
             conn.execute(
                 "INSERT INTO session_waits(parent_session_id, started_at, deadline_at, poll_interval_seconds) "
                 "VALUES(?, ?, ?, ?)",
@@ -423,6 +429,8 @@ class SessionManager:
 
         outcome: str | None = None
         summary: dict[str, Any] = {"children": [], "exit_code": None}
+        if selected_ids is not None:
+            summary["selected_child_ids"] = selected_ids
 
         try:
             while time.time() < deadline:
@@ -431,7 +439,7 @@ class SessionManager:
                 parent = None
                 for root in tree["roots"]:
                     for candidate in [root, *self._collect_children(root)]:
-                        if candidate["tmux_name"] == parent_name:
+                        if candidate["id"] == parent_id:
                             parent = candidate
                             break
                     if parent is not None:
@@ -441,6 +449,8 @@ class SessionManager:
                     raise KeyError(f"parent session not found: {parent_name}")
 
                 children = self._collect_children(parent)
+                if selected_ids is not None:
+                    children = select_children(children, parent_id, selected_ids, ids_only=True)
                 child_states: list[dict[str, Any]] = []
                 all_terminal = True
                 exit_code = 0
