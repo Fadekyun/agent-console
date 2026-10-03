@@ -22,8 +22,13 @@ async function fixture(page) {
 }
 const draft='First line\nSecond line\nThird line\nFourth line\nFifth line';
 async function inViewport(locator){
-  const geometry=await locator.evaluate(el=>{const r=el.getBoundingClientRect();return{top:r.top,bottom:r.bottom,height:r.height,viewport:innerHeight,hit:el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))};});
-  expect(geometry.top).toBeGreaterThanOrEqual(0);expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewport);expect(geometry.hit).toBe(true);return geometry;
+  let geometry;
+  // Viewport metrics can update before the resize handler has laid out the composer.
+  await expect(async()=>{
+    geometry=await locator.evaluate(el=>{const r=el.getBoundingClientRect();return{top:r.top,bottom:r.bottom,height:r.height,viewport:innerHeight,hit:el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))};});
+    expect(geometry.top).toBeGreaterThanOrEqual(0);expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewport);expect(geometry.hit).toBe(true);
+  }).toPass({timeout:5000});
+  return geometry;
 }
 
 test('multiline terminal drafts grow and retain their content across viewport changes',async({page})=>{
