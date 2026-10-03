@@ -2,7 +2,7 @@
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .skill_registry import SkillRegistry, read_deliveries
@@ -125,8 +125,10 @@ def skill_routes(manager, require_identity):
         return audit('revoked', payload.profile + '/' + name, auth, {'revoked': True})
 
     @router.get('/api/sessions/{name}/skills')
-    def delivered(name: str):
+    def delivered(name: str, session_id: str | None = None):
         session = manager.inspect(validate_session_name(name))
+        if session_id is not None and session['id'] != session_id:
+            raise HTTPException(status_code=409, detail='session identity changed')
         return read_deliveries(manager.settings.state_dir, session['id'])
 
     return router

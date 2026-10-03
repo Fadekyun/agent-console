@@ -1,4 +1,5 @@
 import { projectActions } from '/static/project-actions.js?v=1';
+import { copyText } from '/static/clipboard.js?v=1';
 import { initTheme } from '/static/theme.js?v=10';
 import { skillActionMessage, skillToolDiagnostic } from '/static/skill-diagnostics.js?v=1';
 
@@ -68,20 +69,9 @@ function showNotice(message, kind = 'success') {
   clearTimeout(showNotice.timer); showNotice.timer = setTimeout(() => { noticeEl.hidden = true; }, 5000);
 }
 
-async function copyText(value) {
-  if (window.isSecureContext && navigator.clipboard?.writeText) {
-    try { await navigator.clipboard.writeText(value); return true; } catch { /* fallback */ }
-  }
-  const fallback = $('#clipboard-fallback');
-  fallback.value = value; fallback.classList.remove('visually-hidden'); fallback.select();
-  const copied = document.execCommand?.('copy') || false;
-  fallback.classList.add('visually-hidden'); fallback.value = '';
-  return copied;
-}
-
 async function copyName(name) {
-  const copied = await copyText(name);
-  showNotice(copied ? `Copied ${name}` : 'Copy was blocked by the browser', copied ? 'success' : 'error');
+  const copied = await copyText(name, { title: 'Copy session name' });
+  if (copied) showNotice(`Copied ${name}`);
 }
 
 function formatActivity(value) {

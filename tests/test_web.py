@@ -206,6 +206,21 @@ class WebTests(unittest.TestCase):
         self.manager.kill("receipt-fixture")
         self.assertEqual(self.client.get(route, headers=self.headers).json(), before.json())
 
+    def test_session_delivery_receipt_rejects_reused_name_identity(self) -> None:
+        original = self.manager.create(tool="shell", profile="general", name="skill-identity")
+        self.manager.rename("skill-identity", "skill-renamed")
+        replacement = self.manager.create(tool="shell", profile="general", name="skill-identity")
+        route = "/api/sessions/skill-identity/skills"
+        with patch("agent_console.skill_api.read_deliveries") as read:
+            response = self.client.get(route, params={"session_id": original["id"]}, headers=self.headers)
+            self.assertEqual(response.status_code, 409, response.text)
+            read.assert_not_called()
+        for name, identity in (("skill-renamed", original["id"]), ("skill-identity", replacement["id"])):
+            response = self.client.get(f"/api/sessions/{name}/skills", params={"session_id": identity}, headers=self.headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["session_id"], identity)
+        self.assertEqual(self.client.get(route, headers=self.headers).json()["session_id"], replacement["id"])
+
     def test_versioned_result_and_two_session_handoff(self) -> None:
         source=self.manager.create(tool="shell",profile="general",name="result-source")
         target=self.manager.create(tool="shell",profile="general",name="result-target")
