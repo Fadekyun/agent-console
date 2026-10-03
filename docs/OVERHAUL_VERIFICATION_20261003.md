@@ -40,6 +40,7 @@ The scout reviewed the full frontend and consulted primary MDN/WAI guidance. Con
 
 - Integrated affected backend suites: **97 passed, 82 subtests passed** (capacity, owner CLI, selected-release entrypoints, environment, session controls, inspection and versions).
 - Combined desktop controls/icons/project run: **25 passed, 1 skipped**; two fixture errors were corrected (polling instead of clicking a toolbar obscured by an open inspector, and the select's accessible role). Both corrections passed on rerun, giving 27 verified cases.
+- Integrated workbench/navigation/capacity checks: **21 passed**, including merged bootstrap recovery, root-first opening with stopped or running roots, explicit child navigation, stable Add clicks during polling and configured capacity explanations.
 - Integrated phone environment/icons/project checks: **19 passed, 1 skipped**, at 360px/390px with explicit 320px reflow checks.
 - Integrated actual insecure-HTTP clipboard checks: **15 passed, 6 desktop-only cases skipped on touch projects**. Native keyboard Copy/Paste, modal selection/focus, manual paste, no accidental send and dock controls are covered. Two existing secure-context clipboard regressions also passed in the child.
 - Read-only live scout successfully used tree, root review and completion through the capability API with authorized network access. Initial EPERM came from sandbox network denial; no filesystem writer fallback or new repository/config write access was introduced.
