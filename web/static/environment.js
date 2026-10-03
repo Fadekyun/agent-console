@@ -13,7 +13,7 @@ function multiline() {
   }
   to.value = from.value; from.value = '';
   from.hidden = from.disabled = true; from.required = false;
-  to.hidden = to.disabled = false; to.required = true;
+  to.hidden = to.disabled = false; to.required = false;
 }
 $('environment-multiline').onchange = multiline;
 const query = () => $('environment-scope').value ? `?project_id=${encodeURIComponent($('environment-scope').value)}` : '';
