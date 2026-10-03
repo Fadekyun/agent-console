@@ -1,4 +1,7 @@
 import { expect, test } from '@playwright/test';
+async function openInput(target){if(await target.locator('#input-drawer').isHidden())await target.locator('#toggle-composer').click();}
+async function openMore(target){if(!await target.locator('#terminal-more').evaluate(e=>e.open))await target.locator('#terminal-more > summary').click();}
+
 
 const SKILLS_RESPONSE = {
   entries: [
@@ -94,14 +97,16 @@ async function mockApi(page) {
   return { requests };
 }
 
-async function installFakeWebSocket(page) {
-  await page.addInitScript(() => {
+async function installFakeWebSocket(page, { nativeClipboard = false } = {}) {
+  await page.addInitScript(nativeClipboard => {
     window.__wsSent = [];
     window.__wsBytes = [];
     window.__fakeWs = null;
-    Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true });
-    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
-    document.execCommand = () => true;
+    if (!nativeClipboard) {
+      Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true });
+      Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+      document.execCommand = () => true;
+    }
     class FakeWebSocket {
       static OPEN = 1;
       constructor() {
@@ -124,7 +129,7 @@ async function installFakeWebSocket(page) {
       close() { this.readyState = 3; this.onclose?.({ code: 1000, reason: '' }); }
     }
     window.WebSocket = FakeWebSocket;
-  });
+  }, nativeClipboard);
 }
 
 test('responsive shell, theme persistence, and no horizontal overflow', async ({ page }, testInfo) => {
@@ -177,22 +182,22 @@ test('managed kill remains confirmed and state-aware', async ({ page }) => {
   await expect(page.locator('#session-history')).toContainText('codex-root');
 });
 
-test('terminal is scroll-first on mobile and peer insertion never auto-sends', async ({ page }, testInfo) => {
+test('terminal supports direct typing on mobile and peer insertion never auto-sends', async ({ page }, testInfo) => {
   await installFakeWebSocket(page);
   await mockApi(page);
   await page.goto('/terminal?session=codex-root');
   const mobile = testInfo.project.name !== 'desktop';
-  await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', mobile ? 'scroll' : 'type');
+  await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'type');
   if (mobile) {
-    expect(await page.locator('.xterm-viewport').evaluate((node) => getComputedStyle(node).touchAction)).toBe('pan-y');
-    await page.locator('[data-mode="type"]').click();
-    await page.locator('#composer').fill('line one');
+    expect(await page.locator('.xterm-viewport').evaluate((node) => getComputedStyle(node).touchAction)).toBe('none');
+    await openMore(page);await page.locator('[data-mode="type"]').click();
+    await openInput(page);await page.locator('#composer').fill('line one');
     await page.locator('#composer').press('Enter');
     await expect(page.locator('#composer')).toHaveValue('line one\n');
   }
-  await page.locator('#composer').fill('');
+  await openInput(page);await page.locator('#composer').fill('');
   const before = await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length);
-  await page.locator('#peers').click();
+  await openMore(page);await page.locator('#peers').click();
   await page.getByRole('button', { name: 'Insert review command' }).first().click();
   await expect(page.locator('#composer')).toHaveValue('agentctl session review opencode-scout');
   expect(await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length)).toBe(before);
@@ -206,8 +211,71 @@ test('terminal detach and reconnect remain explicit', async ({ page }) => {
   await installFakeWebSocket(page);
   await mockApi(page);
   await page.goto('/terminal?session=codex-root');
-  await page.locator('#detach').click();
+  await openMore(page);await page.locator('#detach').click();
   await expect.poll(async () => page.evaluate(() => window.__wsSent.some((value) => value.includes('detach')))).toBeTruthy();
+});
+
+test('terminal Copy selection preserves selected text and offers a denied-clipboard fallback', async ({ page }, testInfo) => {
+  await installFakeWebSocket(page); await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await expect(page.locator('.terminal-controls').getByRole('button', {name: /copy|read/i})).toHaveCount(1);
+  await expect(page.getByRole('button', {name: 'Copy terminal text', exact: true})).toBeVisible();
+  await page.locator('#copy-selection').click();
+  await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
+  await page.evaluate(() => {
+    document.execCommand = () => false;
+    const range = document.createRange(), selection = getSelection();
+    range.selectNodeContents(document.querySelector('#text-content'));
+    selection.removeAllRanges(); selection.addRange(range);
+  });
+  if (testInfo.project.name === 'desktop') await page.locator('#copy-dom-selection').click();
+  else await page.locator('#copy-dom-selection').tap();
+  await expect(page.locator('#copy-sheet')).toBeVisible();
+  await expect(page.locator('#copy-sheet-text')).toHaveValue(/PEER_OUTPUT/);
+  await page.locator('[data-close="copy-sheet"]').click();
+  await page.evaluate(() => { document.execCommand = () => { throw new Error('Clipboard blocked'); }; });
+  await page.locator('#copy-visible').click();
+  await expect(page.locator('#copy-sheet')).toBeVisible();
+  await expect(page.locator('#copy-sheet-text')).toHaveValue(/PEER_OUTPUT/);
+});
+
+test('closing terminal Text View during a pending refresh does not reopen it', async ({ page }) => {
+  await installFakeWebSocket(page); await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await page.locator('#copy-selection').click();
+  await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/sessions/codex-root/review?lines=1000&session_id=sess-root', async route => {
+    await pending;
+    await route.fulfill({json:{content:'NEW_CAPTURE',alternate_screen:false,capture_scope:'history',line_count:1}});
+  });
+  const response = page.waitForResponse('**/api/sessions/codex-root/review?lines=1000&session_id=sess-root');
+  await page.locator('#text-refresh').click();
+  await expect(page.locator('#text-refresh')).toBeDisabled();
+  await page.locator('[data-close="text-dialog"]').click();
+  release(); await response;
+  await expect(page.locator('#text-refresh')).toBeEnabled();
+  await expect(page.locator('#text-dialog')).toBeHidden();
+  await page.locator('#copy-selection').click();
+  await expect(page.locator('#text-content')).toHaveText('NEW_CAPTURE');
+});
+
+test('terminal native clipboard permission copies text and pastes only into the draft', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await installFakeWebSocket(page, { nativeClipboard: true }); await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await page.locator('#copy-selection').click();
+  await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
+  await page.locator('#copy-visible').click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('PEER_OUTPUT');
+  await page.locator('[data-close="text-dialog"]').click();
+  await openInput(page);await page.locator('#composer').fill('');
+  await page.evaluate(() => navigator.clipboard.writeText('review this pasted text'));
+  const sent = await page.evaluate(() => window.__wsSent.filter(x => x === 'terminal-bytes').length);
+  await page.locator('#paste-device').click();
+  await expect(page.locator('#composer')).toHaveValue('review this pasted text');
+  expect(await page.evaluate(() => window.__wsSent.filter(x => x === 'terminal-bytes').length)).toBe(sent);
 });
 
 test('brief preload, alternate-screen paging, and Text View never auto-send the brief', async ({ page }, testInfo) => {
@@ -216,7 +284,7 @@ test('brief preload, alternate-screen paging, and Text View never auto-send the 
   await expect(page.locator('#composer')).toHaveValue('Coordinate work');
   await expect(page.locator('#connection')).toHaveText('Connected');
   expect(await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length)).toBe(0);
-  await page.locator('#text-view').click();
+  await page.locator('#copy-selection').click();
   await expect(page.locator('#text-dialog')).toBeVisible();
   await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
   await expect(page.locator('#text-scope')).toContainText('alternate-screen');
@@ -225,6 +293,7 @@ test('brief preload, alternate-screen paging, and Text View never auto-send the 
   if (testInfo.project.name !== 'desktop') {
     const before = await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length);
     await page.locator('#text-dialog').evaluate((dialog) => dialog.close());
+    await openMore(page);await page.locator('[data-mode=scroll]').click();
     await page.locator('#terminal').dispatchEvent('touchstart', { touches: [{ identifier: 1, clientX: 100, clientY: 500 }] });
     await page.locator('#terminal').dispatchEvent('touchend', { changedTouches: [{ identifier: 1, clientX: 100, clientY: 300 }] });
     await expect.poll(() => page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length)).toBeGreaterThan(before);
@@ -625,8 +694,11 @@ test('desktop terminal dock keeps four tabs connected and rejects a fifth', asyn
   await page.locator('#active-sessions .session-row').filter({ hasText: 'dock-four' }).locator('[data-attach]').click();
   await expect(page.locator('#notice')).toContainText('Four terminal tabs are already open');
   await expect(page.locator('.terminal-tab')).toHaveCount(4);
-  await page.locator('.terminal-tab').last().locator('.terminal-tab-close').click();
+  await page.getByRole('button', { name: 'Close dock-three', exact: true }).click();
   await expect(page.locator('.terminal-tab')).toHaveCount(3);
+  await expect(page.getByRole('tab', { name: 'dock-three', exact: true })).toHaveCount(0);
+  await expect(page.locator('.terminal-embed')).toHaveCount(3);
+  expect(await page.locator('.terminal-embed').evaluateAll((frames) => frames.map((frame) => frame.src))).toEqual(sources.slice(0, 3));
   await page.locator('#terminal-dock-collapse').click();
   await expect(page.locator('#terminal-dock')).toHaveClass(/collapsed/);
 });
@@ -1051,8 +1123,8 @@ function xtermFocus() {
 async function switchToType(page) {
   const body = page.locator('body');
   const current = await body.getAttribute('data-terminal-mode');
-  if (current !== 'type') {
-    await page.locator('[data-mode="type"]').click();
+  if (current !== 'type' || await page.evaluate(()=>matchMedia('(pointer: coarse)').matches)) {
+    await openMore(page);await page.locator('[data-mode="type"]').click();
     await expect(body).toHaveAttribute('data-terminal-mode', 'type');
   }
 }
@@ -1066,7 +1138,7 @@ test('dedicated terminal with stored brief keeps terminal focus, composer not fo
 });
 test('dedicated terminal without stored brief gets terminal focus', async ({ page }) => {
   await installFakeWebSocket(page); await mockApi(page);
-  await page.route('**/api/sessions/codex-root/brief', async (route) => {
+  await page.route('**/api/sessions/codex-root/brief?session_id=sess-root', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ session: 'codex-root', brief: null, stored_only: true }) });
   });
   await page.goto('/terminal?session=codex-root');
@@ -1103,21 +1175,21 @@ test('composer submission restores xterm focus in Type mode', async ({ page }) =
   await page.goto('/terminal?session=codex-root');
   await switchToType(page);
   await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
-  await page.locator('#composer').focus();
-  await page.locator('#composer').fill('printf hello');
+  await openInput(page);await page.locator('#composer').focus();
+  await openInput(page);await page.locator('#composer').fill('printf hello');
   await page.locator('#send-enter').click();
   await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
 });
 test('Scroll and Select modes remain intentionally non-focus', async ({ page }) => {
   await installFakeWebSocket(page); await mockApi(page);
   await page.goto('/terminal?session=codex-root');
-  await page.locator('[data-mode="scroll"]').click();
+  await openMore(page);await page.locator('[data-mode="scroll"]').click();
   await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'scroll');
   expect(await page.evaluate(xtermFocus)).toBeFalsy();
-  await page.locator('[data-mode="select"]').click();
+  await openMore(page);await page.locator('[data-mode="select"]').click();
   await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'select');
   expect(await page.evaluate(xtermFocus)).toBeFalsy();
-  await page.locator('[data-mode="type"]').click();
+  await openMore(page);await page.locator('[data-mode="type"]').click();
   await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'type');
   await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
 });
@@ -1174,7 +1246,7 @@ test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Sele
   })).toBeFalsy();
 
   // Switch to Scroll mode in first terminal — focus must NOT be forced
-  await iframe1.locator('[data-mode="scroll"]').click();
+  await openMore(iframe1);await iframe1.locator('[data-mode="scroll"]').click();
   await expect(iframe1.locator('body')).toHaveAttribute('data-terminal-mode', 'scroll');
   // Tab-switch to second and back — postMessage must not force focus on Scroll mode
   await page.locator('.terminal-tab').nth(1).click();
@@ -1191,7 +1263,7 @@ test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Sele
   })).toBeNull();
 
   // Switch back to Type mode — focus should be restored on tab switch
-  await iframe1.locator('[data-mode="type"]').click();
+  await openMore(iframe1);await iframe1.locator('[data-mode="type"]').click();
   await page.locator('.terminal-tab').nth(1).click();
   await page.locator('.terminal-tab').first().click();
   await expect.poll(async () => iframe1.evaluate(() => {
@@ -1222,4 +1294,15 @@ test('Codex model and effort controls send overrides and clear them for other to
   await expect.poll(() => requests.filter(r => r.path === '/api/sessions').length).toBe(2);
   const second = requests.filter(r => r.path === '/api/sessions')[1].body;
   expect(second).toMatchObject({ tool: 'shell', model: null, reasoning_effort: null, plan_reasoning_effort: null });
+});
+
+
+for(const limit of [0,5])test(`delegation displays active child capacity ${limit} without counting history`,async({page})=>{
+  await mockApi(page);
+  const root=session({child_count:4,total_child_count:19});
+  await page.route('**/api/delegations',route=>route.fulfill({json:{roots:[{...root,children:[]}],delegations:[],max_children_per_parent:limit}}));
+  await page.goto('/desktop');
+  await page.locator('[data-view="orchestration"]:visible').click();
+  await page.locator('.tree-node').first().locator('[data-delegate]').first().click();
+  await expect(page.locator('#delegate-parent')).toHaveText(`Parent: codex-root · ${limit?'4/5 active children':'4 active children · no per-parent limit'}`);
 });

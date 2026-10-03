@@ -93,3 +93,7 @@ empty; they never signal a guessed or reused PID.
   optional `compose.n100-apparmor.yaml` override. This disables AppArmor confinement for the
   container only — confirm the denial with `journalctl -k` before using it.
 - The entrypoint script copies default profiles on first boot and preserves user edits on restart.
+
+## Forwarded identity and terminal origins
+
+See [HTTP and terminal authentication](REQUEST_AUTHENTICATION.md) for explicit proxy-source and browser-origin configuration. Identity headers from arbitrary clients are not authentication. Keep the provided no-proxy-headers server configuration so authorization uses the real socket peer.

@@ -167,6 +167,42 @@ class JsonFormatterTests(unittest.TestCase):
 
 
 class SecretRedactionTests(unittest.TestCase):
+    def test_named_structured_secrets_are_redacted_without_token_prefixes(self):
+        payload = {'api_key':'fixture-key-value','nested':[{'password':'fixture password with spaces',
+                   'clientSecret':'fixture-client-value','Authorization':'Basic fixture-auth-value'}],
+                   'token_count':42,'session':'visible'}
+        rendered = str(_redact_value(payload))
+        for value in ('fixture-key-value','fixture password with spaces','fixture-client-value','fixture-auth-value'):
+            self.assertNotIn(value, rendered)
+        self.assertIn('visible',rendered)
+        self.assertEqual(_redact_value(payload)['token_count'],42)
+        self.assertEqual(payload['api_key'],'fixture-key-value')
+
+    def test_quoted_json_and_python_fields_redact_escaped_spaces(self):
+        sentinel = 'fixture value with "quoted" and \\ escapes'
+        for message in (json.dumps({'access_token':sentinel,'safe':'visible'}),
+                        repr({'password':sentinel,'safe':'visible'}),
+                        "client_secret='fixture spaced value' safe=visible"):
+            redacted = redact_secrets(message)
+            self.assertNotIn('fixture',redacted)
+            self.assertIn('visible',redacted)
+            self.assertIn('****',redacted)
+
+    def test_filter_redacts_after_placeholder_interpolation(self):
+        record = logging.LogRecord('fixture',logging.INFO,__file__,1,
+                                   'password=%s safe=%s',('fixture-interpolated','visible'),None)
+        self.assertTrue(SecretRedactionFilter().filter(record))
+        output = logging.Formatter('%(message)s').format(record)
+        self.assertNotIn('fixture-interpolated',output)
+        self.assertIn('safe=visible',output)
+
+    def test_json_formatter_redacts_plain_structured_values_without_filter(self):
+        record = logging.LogRecord('fixture',logging.INFO,__file__,1,
+                                   {'token':'fixture-unprefixed','safe':'visible'},(),None)
+        output = JsonFormatter().format(record)
+        self.assertNotIn('fixture-unprefixed',output)
+        self.assertIn('visible',output)
+
     def test_redact_api_key_pattern(self) -> None:
         msg = "api_key=sk-AAAAaaaabbbbccccddddeeeeffff0000"
         result = redact_secrets(msg)
@@ -270,8 +306,8 @@ class SecretRedactionTests(unittest.TestCase):
             exc_info=None,
         )
         self.assertTrue(filter_.filter(record))
-        self.assertNotIn("sk-AAAAaaaabbbbccccddddeeeeffff0000", str(record.args[1]))
-        self.assertIn("****", str(record.args[1]))
+        self.assertNotIn("sk-AAAAaaaabbbbccccddddeeeeffff0000", record.getMessage())
+        self.assertIn("****", record.getMessage())
 
     def test_filter_redacts_exc_text(self) -> None:
         filter_ = SecretRedactionFilter()
@@ -303,9 +339,8 @@ class SecretRedactionTests(unittest.TestCase):
             exc_info=None,
         )
         self.assertTrue(filter_.filter(record))
-        self.assertIsInstance(record.args, dict)
-        self.assertNotIn(key, str(record.args["api_key"]))
-        self.assertIn("sk-or-v1-****", str(record.args["api_key"]))
+        self.assertNotIn(key, record.getMessage())
+        self.assertIn("****", record.getMessage())
 
     def test_json_format_redacts_mapping_message_defense_in_depth(self) -> None:
         key = "sk-or-v1-" + "a" * 40
@@ -374,7 +409,7 @@ class SecretRedactionTests(unittest.TestCase):
         output = capture.getvalue()
         self.assertNotIn(key, output)
         self.assertNotIn(ght, output)
-        self.assertIn("sk-or-v1-****", output)
+        self.assertIn("****", output)
         self.assertIn("gho_****", output)
 
     def test_json_format_redacts_structured_msg_no_args(self) -> None:

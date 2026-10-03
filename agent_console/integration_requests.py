@@ -371,7 +371,8 @@ class IntegrationService:
             if not secrets.compare_digest(existing["canonical_hash"], request_hash):
                 error = IntegrationError("idempotency_conflict")
                 return self.error_response(parsed["request_id"], error), error.exit_code
-            self.reconcile(parsed["request_id"])
+            # Retried submission is an observation, never another launch attempt.
+            # Recovery belongs to status reconciliation after the launch settles.
             return self._row_response(self._lookup(parsed["request_id"]), duplicate=True), 0
         if not config["enabled"]:
             error = IntegrationError("integration_disabled", exit_code=4)
@@ -595,16 +596,40 @@ class IntegrationService:
         if row is None or row["state"] in TERMINAL_STATES:
             return
         name = f"n8n-plan-{request_id}"
-        if row["state"] == "accepted" and not self.manager.tmux.exists(name):
-            try:
-                frozen_dir = Path(row["artifact_dir"]) / "context"
-                with self.manager.database.connect() as conn:
-                    session = conn.execute(
-                        "SELECT launcher_path FROM sessions WHERE id=?", (row["session_id"],)
-                    ).fetchone()
-                self.manager.tmux.create(name, frozen_dir, Path(session["launcher_path"]))
-            except Exception:
-                return
+        if row["state"] == "accepted":
+            # The reservation is visible before tmux.create returns. Serialize
+            # recovery with initial admission and lease each retry so concurrent
+            # polls cannot create multiple runners while the child is claiming.
+            with admission_lock(self.manager.settings.state_dir):
+                row = self._lookup(request_id)
+                if row is None or row["state"] != "accepted":
+                    return
+                try:
+                    updated = datetime.fromisoformat(row["updated_at"])
+                    if updated.tzinfo is None:
+                        updated = updated.replace(tzinfo=timezone.utc)
+                    settled = (datetime.now(timezone.utc) - updated).total_seconds() > 10
+                except (TypeError, ValueError):
+                    settled = False
+                if not settled or self.manager.tmux.exists(name):
+                    return
+                try:
+                    frozen_dir = Path(row["artifact_dir"]) / "context"
+                    with self.manager.database.connect() as conn:
+                        changed = conn.execute(
+                            "UPDATE integration_requests SET updated_at=?, revision=revision+1 "
+                            "WHERE id=? AND state='accepted' AND claimed_at IS NULL",
+                            (utc_now(), row["id"]),
+                        )
+                        if changed.rowcount != 1:
+                            return
+                        session = conn.execute(
+                            "SELECT launcher_path FROM sessions WHERE id=?", (row["session_id"],)
+                        ).fetchone()
+                    self.manager.tmux.create(name, frozen_dir, Path(session["launcher_path"]))
+                except Exception:
+                    return
+            return
         now_moment = datetime.now(timezone.utc)
         try:
             claimed_at = datetime.fromisoformat(row["claimed_at"]) if row["claimed_at"] else None

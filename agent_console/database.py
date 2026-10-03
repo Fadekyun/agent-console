@@ -326,6 +326,7 @@ class Database:
             }
             if "release_blocked_at" not in plans_columns:
                 conn.execute("ALTER TABLE plans ADD COLUMN release_blocked_at TEXT")
+            if "release_blocked_reason" not in plans_columns:
                 conn.execute("ALTER TABLE plans ADD COLUMN release_blocked_reason TEXT")
             releases_columns = {
                 row[1] for row in conn.execute("PRAGMA table_info(releases)").fetchall()

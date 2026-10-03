@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import logging.handlers
@@ -36,7 +37,34 @@ SECRET_RULES: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
+# Cover named credentials even when their values have no provider-specific prefix.
+_SENSITIVE_KEY = re.compile(
+    r"(?:^|[_-])(?:api[_-]?key|secret|password|passwd|credentials?|authorization|auth[_-]?header|token|capability)$",
+    re.IGNORECASE,
+)
+_QUOTED_FIELD = re.compile(
+    r"(?P<prefix>(?P<quote>[\"']?)(?P<key>[A-Za-z_][A-Za-z0-9_-]*)(?P=quote)\s*[:=]\s*)"
+    r"(?P<value>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')",
+    re.DOTALL,
+)
+
+
+def _sensitive_key(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+    return bool(_SENSITIVE_KEY.search(normalized))
+
+
+def _redact_quoted_field(match: re.Match[str]) -> str:
+    if not _sensitive_key(match['key']):
+        return match.group(0)
+    quote = match['value'][0]
+    return match['prefix'] + quote + '****' + quote
+
+
 def redact_secrets(message: str) -> str:
+    message = _QUOTED_FIELD.sub(_redact_quoted_field, message)
     for pattern, replacement in SECRET_RULES:
         message = pattern.sub(replacement, message)
     return message
@@ -46,23 +74,28 @@ def _redact_value(value: Any) -> Any:
     if isinstance(value, str):
         return redact_secrets(value)
     if isinstance(value, dict):
-        return {_redact_value(k): _redact_value(v) for k, v in value.items()}
+        return {
+            _redact_value(k): ('****' if _sensitive_key(k) else _redact_value(v))
+            for k, v in value.items()
+        }
     if isinstance(value, (list, tuple)):
         return type(value)(_redact_value(v) for v in value)
     return value
 
 
+def _redacted_message(record: logging.LogRecord) -> str:
+    safe = copy.copy(record)
+    safe.msg = record.msg if isinstance(record.msg, str) else _redact_value(record.msg)
+    safe.args = _redact_value(record.args)
+    return redact_secrets(safe.getMessage())
+
+
 class SecretRedactionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str):
-            record.msg = redact_secrets(record.msg)
-        else:
-            record.msg = _redact_value(record.msg)
-        if record.args:
-            if isinstance(record.args, dict):
-                record.args = _redact_value(record.args)
-            else:
-                record.args = tuple(_redact_value(a) for a in record.args)
+        # Render placeholders before matching key=value text. Redacting `%s`
+        # itself would corrupt formatting or leave the interpolated value intact.
+        record.msg = _redacted_message(record)
+        record.args = ()
         if record.exc_info and not record.exc_text:
             record.exc_text = redact_secrets(
                 "".join(traceback.format_exception(*record.exc_info))
@@ -79,7 +112,7 @@ class JsonFormatter(logging.Formatter):
             "timestamp": created.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "level": record.levelname,
             "logger": record.name,
-            "message": redact_secrets(record.getMessage()),
+            "message": _redacted_message(record),
         }
         if record.exc_info and isinstance(record.exc_info, tuple) and record.exc_info[1]:
             obj["exception"] = redact_secrets(str(record.exc_info[1]))

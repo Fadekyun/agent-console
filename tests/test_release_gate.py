@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
-import shlex
 import subprocess
 import tempfile
 import time
@@ -48,12 +46,10 @@ def _setup_plan(manager: SessionManager, artifact_name: str) -> dict:
 
 
 def _read_capability(manager: SessionManager, session_name: str) -> str:
-    path = manager.settings.state_dir / "launchers" / f"{session_name}.sh"
-    text = path.read_text(encoding="utf-8")
-    m = re.search(r"export AGENT_CONSOLE_EVIDENCE_CAPABILITY=(\S+)", text)
-    if m:
-        return shlex.split(m.group(1))[0]
-    raise ValueError(f"capability not found in {path}")
+    with manager.database.connect() as conn:
+        row = conn.execute("SELECT id FROM sessions WHERE tmux_name=?", (session_name,)).fetchone()
+    path = manager.settings.state_dir / "environment-launches" / f"{row['id']}.json"
+    return json.loads(path.read_text())["environment"]["AGENT_CONSOLE_EVIDENCE_CAPABILITY"]
 
 
 @unittest.skipUnless(
@@ -695,7 +691,7 @@ class ReleaseGateWebTests(unittest.TestCase):
 
         os.environ["AGENT_CONSOLE_TAILSCALE_LOGIN"] = "test@example.com"
         from agent_console.web import create_app
-        self.client = TestClient(create_app(self.manager), base_url="http://localhost")
+        self.client = TestClient(create_app(self.manager), client=("127.0.0.1", 50000), base_url="http://localhost")
         self.headers = {"Tailscale-User-Login": "test@example.com", "Host": "localhost"}
 
     def tearDown(self) -> None:

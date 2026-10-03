@@ -44,13 +44,20 @@ class InstallerTests(unittest.TestCase):
 set -euo pipefail
 # The production wrapper disables bytecode; preserve the remaining CLI args.
 if [ "${1:-}" = "-B" ]; then shift; fi
+if [ "${1##*/}" = "maintenance.py" ] && [ "${2:-}" = "prepare-runtime" ]; then
+  mkdir -p "$3/.runtime/bin"
+  cp "$HOME/test-bin/python3" "$3/.runtime/bin/python"
+  chmod +x "$3/.runtime/bin/python"
+  exit 0
+fi
 if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then
   mkdir -p "$3/bin"
   cat > "$3/bin/pip" <<'PIPEOF'
 #!/bin/bash
 exit 0
 PIPEOF
-  chmod +x "$3/bin/pip"
+  cp "$HOME/test-bin/python3" "$3/bin/python"
+  chmod +x "$3/bin/python" "$3/bin/pip"
   exit 0
 fi
 if [ "$1" = "-m" ] && [ "$2" = "agent_console.cli" ]; then
@@ -65,7 +72,8 @@ elif sys.argv[1:3] == ['skills', 'doctor']:
     print(json.dumps({'ok': True, 'skills': 0, 'problems': []}))
 " "$@"
 fi
-exit 0
+if [ "${1##*/}" = "install-entrypoints.py" ]; then exit 0; fi
+exec /usr/bin/python3 -B "$@"
 """)
         self._stub("npm", "#!/bin/bash\nexit 0")
         self._stub("systemctl", "#!/bin/bash\necho \"SYSTEMCTL: $@\" >&2\nexit 0")
@@ -99,7 +107,7 @@ exit 0
         return self.temp_home / ".local" / "share" / "agent-console" / "runner.sh"
 
     def _stub_runner_uvicorn(self) -> None:
-        uvicorn = self.temp_home / ".local" / "share" / "agent-console" / "venv" / "bin" / "uvicorn"
+        uvicorn = self.temp_home / ".local" / "share" / "agent-console" / "venv" / "bin" / "python"
         uvicorn.write_text('#!/bin/bash\nprintf "%s|%s|%s\\n" "$PWD" "$PYTHONPATH" "$*"\n')
         uvicorn.chmod(0o755)
 
@@ -204,7 +212,7 @@ exit 0
         # A fresh install without the optional list still writes the empty key.
         first = self._run()
         self.assertEqual(first.returncode, 0, msg=first.stderr + first.stdout)
-        self.assertIn("AGCONSOLE_SHARED_SKILLS=\n", self._env_path().read_text())
+        self.assertIn("AGCONSOLE_SHARED_SKILLS=''\n", self._env_path().read_text())
 
         # Simulate the updater's regeneration path: it sources the existing
         # runtime.env (set -a; source ...) before re-running the installer, so a
@@ -245,7 +253,7 @@ exit 0
         self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
 
         env = self._env_path().read_text()
-        self.assertIn("AGENT_CONSOLE_TMUX_SOCKET_PATH=/run/user", env)
+        self.assertIn("AGENT_CONSOLE_TMUX_SOCKET_PATH=" + self.base_env["XDG_RUNTIME_DIR"], env)
         self.assertIn("AGENT_CONSOLE_LEGACY_TMUX_SOCKET_PATH=/tmp/tmux-", env)
 
     def test_no_state_deletion(self):
@@ -461,6 +469,8 @@ exit 0
         self._stub_runner_uvicorn()
         current = self.temp_home / ".local/share/agent-console/releases/current"
         current.parent.mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.rmtree(current)
         for target in (None, 'release-missing', str(REPO_ROOT)):
             with self.subTest(target=target):
                 current.unlink(missing_ok=True)
@@ -488,6 +498,8 @@ exit 0
             path = release / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("fixture\n")
+        import shutil
+        shutil.rmtree(releases / "current")
         (releases / "current").symlink_to("release-test")
         executed = subprocess.run(
             [str(self._runner_path())], capture_output=True, text=True, env=self.base_env,
@@ -528,6 +540,21 @@ exit 0
         self.assertIn("FATAL", result.stderr)
         self.assertIn("65536", result.stderr)
 
+    def test_reinstall_preserves_custom_keys_limits_and_service_definition(self):
+        first = self._run()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        with self._env_path().open('a') as handle:
+            handle.write("CUSTOM_SETTING='literal $() value'\nAGENT_CONSOLE_MAX_SESSIONS=6\nAGCONSOLE_DEVICE_PRESENCE=1\n")
+        with self._web_unit_path().open('a') as handle:
+            handle.write('# operator-owned service addition\n')
+        again = self._run()
+        self.assertEqual(again.returncode, 0, again.stderr)
+        actual = self._env_path().read_text()
+        self.assertIn("CUSTOM_SETTING='literal $() value'", actual)
+        self.assertIn('AGENT_CONSOLE_MAX_SESSIONS=6', actual)
+        self.assertIn('AGCONSOLE_DEVICE_PRESENCE=1', actual)
+        self.assertIn('# operator-owned service addition', self._web_unit_path().read_text())
+
     def test_reinstall_restart_systemctl_sequence(self):
         self._create_tool("codex")
         result = self._run()
@@ -562,7 +589,7 @@ class UpdateScriptTests(unittest.TestCase):
     def test_updater_contains_required_safety_gates(self):
         text = UPDATER.read_text(encoding="utf-8")
         for expected in (
-            "flock -n",
+            "with-lock",
             "fetch --quiet origin main",
             "requested SHA",
             "snapshot-database.py",
@@ -574,7 +601,7 @@ class UpdateScriptTests(unittest.TestCase):
             "select_release(release",
             "rollback()",
             "wait_for_health 30",
-            "systemctl --user restart agent-console-web.service",
+            '"$checkout/scripts/maintenance.py" service restart',
         ):
             self.assertIn(expected, text)
         rollback = text[text.index("rollback() {"):text.index("\nexport AGENT_CONSOLE_SOURCE_ROOT")]

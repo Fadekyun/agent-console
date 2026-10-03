@@ -1,31 +1,33 @@
 <!doctype html>
 <html lang="en" data-theme="system">
-<head>
+<head><script src="/static/theme-bootstrap.js?v=1"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>Agent Console</title>
   <script>
-    document.documentElement.dataset.theme=localStorage.getItem('agent-console-theme')||'system';
-    if(location.pathname==='/'){const v=localStorage.getItem('agent-console-layout')||'auto';if(v==='mobile'||(v==='auto'&&matchMedia('(max-width:760px)').matches))location.replace('/mobile'+location.search+location.hash);}
+
+    try { if(location.pathname==='/'){const v=localStorage.getItem('agent-console-layout')||'auto';if(v==='mobile'||(v==='auto'&&matchMedia('(max-width:760px)').matches))location.replace('/mobile'+location.search+location.hash);} } catch { /* Layout defaults remain usable without storage. */ }
   </script>
-  <link rel="stylesheet" href="/static/styles.css?v=9">
+  <link rel="stylesheet" href="/static/styles.css?v=0.28.8">
 </head>
 <body class="app-page">
   <div class="app-shell">
     <aside class="sidebar" aria-label="Primary navigation">
-      <div class="brand"><span class="brand-mark">AC</span><span class="nav-label"><strong>Agent Console</strong><small>v0.9.0</small></span></div>
+      <div class="brand"><span class="brand-mark">AC</span><span class="nav-label"><strong>Agent Console</strong><small>v0.28.8</small></span></div>
       <nav class="nav-list">
-        <button class="nav-button" data-view="sessions"><span aria-hidden="true">●</span><span class="nav-label">Sessions</span></button>
-        <button class="nav-button" data-view="projects"><span aria-hidden="true">▣</span><span class="nav-label">Projects</span></button>
-        <button class="nav-button" data-view="profiles"><span aria-hidden="true">◎</span><span class="nav-label">Profiles</span></button>
-        <button class="nav-button" data-view="skills"><span aria-hidden="true">⚡</span><span class="nav-label">Skills</span></button>
-        <button class="nav-button" data-view="jevghost"><span aria-hidden="true">✧</span><span class="nav-label">Jev Ghost</span></button>
-        <button class="nav-button" data-view="orchestration"><span aria-hidden="true">⌘</span><span class="nav-label">Orchestration</span></button>
-        <button class="nav-button" data-view="new"><span aria-hidden="true">＋</span><span class="nav-label">New session</span></button>
+        <button class="nav-button" data-view="sessions" aria-label="Sessions"><span data-icon="sessions" aria-hidden="true"></span><span class="nav-label">Sessions</span></button>
+        <button class="nav-button" data-view="projects" aria-label="Projects"><span data-icon="projects" aria-hidden="true"></span><span class="nav-label">Projects</span></button>
+        <button class="nav-button" data-view="profiles" aria-label="Profiles"><span data-icon="profiles" aria-hidden="true"></span><span class="nav-label">Profiles</span></button>
+        <button class="nav-button" data-view="skills" aria-label="Skills"><span data-icon="skills" aria-hidden="true"></span><span class="nav-label">Skills</span></button>
+        <button class="nav-button" data-view="jevghost" aria-label="Jev Ghost"><span data-icon="probe" aria-hidden="true"></span><span class="nav-label">Jev Ghost</span></button>
+        <button class="nav-button" data-view="orchestration" aria-label="Orchestration"><span data-icon="workflow" aria-hidden="true"></span><span class="nav-label">Orchestration</span></button>
+        <button class="nav-button" data-view="new" aria-label="New session"><span data-icon="plus" aria-hidden="true"></span><span class="nav-label">New session</span></button>
+        <a class="nav-button" href="/environment" aria-label="Environment"><span data-icon="settings" aria-hidden="true"></span><span class="nav-label">Environment</span></a>
       </nav>
       <div class="sidebar-footer">
         <label class="theme-field"><span class="nav-label">Theme</span><select id="theme-select" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
-        <button id="rail-toggle" class="nav-button" aria-label="Collapse navigation"><span aria-hidden="true">⇤</span><span class="nav-label">Collapse</span></button>
+        <label class="theme-field"><span class="nav-label">Palette</span><select data-palette-select aria-label="Palette"><option value="forest">Forest</option><option value="ocean">Ocean</option><option value="violet">Violet</option></select></label>
+        <button id="rail-toggle" class="nav-button" aria-label="Collapse navigation"><span data-icon="chevron-left" aria-hidden="true"></span><span class="nav-label">Collapse</span></button>
       </div>
     </aside>
 
@@ -80,7 +82,7 @@
         </section>
 
         <section class="view" data-view-panel="orchestration" hidden>
-          <div class="view-heading"><div><h2>Orchestration</h2><p class="muted">Independent terminals, explicit read-only delegation, and plan handoff.</p></div></div>
+          <div class="view-heading"><div><h2>Orchestration</h2><p class="muted">Independent terminals, bounded delegation, and plan handoff.</p></div></div>
           <div class="orchestration-grid">
             <div class="panel"><div class="panel-heading"><h3>Session tree</h3><span class="muted">Mechanical state only</span></div><div id="session-tree" class="tree-list"></div></div>
             <div class="panel"><div class="panel-heading"><h3>Planned work</h3><span class="muted">Separate implementation sessions</span></div><div id="plans" class="plan-list"></div></div>
@@ -103,9 +105,20 @@
     </div>
 
     <nav class="bottom-nav" aria-label="Mobile navigation">
-      <button data-view="sessions">Sessions</button><button data-view="orchestration">Orchestration</button><button data-view="new">New</button>
+      <button data-view="sessions">Sessions</button><button data-view="orchestration">Orchestration</button><button data-view="new">New</button><button id="open-navigation" type="button" data-icon="chevron-down" data-icon-only aria-label="More navigation" aria-haspopup="dialog" aria-controls="navigation-dialog" aria-expanded="false">More</button>
     </nav>
   </div>
+
+  <dialog id="navigation-dialog" aria-labelledby="navigation-title">
+    <div class="panel-heading"><h2 id="navigation-title">More navigation</h2><button type="button" data-close="navigation-dialog" aria-label="Close navigation">Close</button></div>
+    <nav class="nav-list" aria-label="Additional navigation">
+      <button class="navigation-link" data-view="projects">Projects</button>
+      <button class="navigation-link" data-view="profiles">Profiles</button>
+      <button class="navigation-link" data-view="skills">Skills</button>
+      <button class="navigation-link" data-view="jevghost">Jev Ghost</button>
+      <a class="navigation-link" href="/environment">Environment</a>
+    </nav>
+  </dialog>
 
   <aside id="session-inspector" class="session-inspector" aria-label="Session inspector" hidden>
     <header><div><span class="eyebrow">Session inspector</span><h2 id="inspector-name">Session</h2></div><button id="inspector-close" aria-label="Close inspector">Close</button></header>
@@ -120,7 +133,7 @@
     <div id="terminal-frames" class="terminal-frames"></div>
   </section>
 
-  <dialog id="confirm-dialog">
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title">
     <form method="dialog">
       <h2 id="confirm-title">Confirm action</h2><p id="confirm-text"></p>
       <label id="unmanaged-warning" class="check" hidden><input id="unmanaged-check" type="checkbox"> I understand this session is unmanaged</label>
@@ -128,9 +141,9 @@
     </form>
   </dialog>
 
-  <dialog id="delegate-dialog">
+  <dialog id="delegate-dialog" aria-labelledby="delegate-dialog-title">
     <form id="delegate-form" class="dialog-form">
-      <h2>Delegate read-only work</h2><p id="delegate-parent" class="muted"></p>
+      <h2 id="delegate-dialog-title">Delegate work</h2><p id="delegate-parent" class="muted"></p>
       <input name="parent" type="hidden">
       <label>Profile<select name="profile"></select></label>
       <label>Tool<select name="tool"></select></label>
@@ -144,7 +157,7 @@
     </form>
   </dialog>
 
-  <dialog id="plan-dialog">
+  <dialog id="plan-dialog" aria-labelledby="plan-title">
     <form id="plan-form" class="dialog-form">
       <h2 id="plan-title">Plan</h2><p id="plan-meta" class="muted"></p><pre id="plan-content" class="plan-preview"></pre>
       <input name="plan_id" type="hidden">
@@ -156,13 +169,13 @@
     </form>
   </dialog>
 
-  <dialog id="review-dialog">
+  <dialog id="review-dialog" aria-labelledby="review-title">
     <form method="dialog" class="dialog-form review-dialog-form"><h2 id="review-title">Peer review</h2><p id="review-notice" class="muted"></p><pre id="review-content" class="plan-preview"></pre><div class="dialog-actions"><button value="close">Close</button></div></form>
   </dialog>
 
-  <dialog id="new-project-dialog">
+  <dialog id="new-project-dialog" aria-labelledby="new-project-dialog-title">
     <form id="new-project-form" class="dialog-form">
-      <h2>New project</h2>
+      <h2 id="new-project-dialog-title">New project</h2>
       <label>Name<input name="name" required minlength="1"></label>
       <label>Repository<input name="repository" placeholder="Optional repository path"></label>
       <label>Description<textarea name="description" rows="3"></textarea></label>
@@ -171,7 +184,7 @@
     </form>
   </dialog>
 
-  <dialog id="group-dialog">
+  <dialog id="group-dialog" aria-labelledby="group-dialog-title">
     <form id="group-form" class="dialog-form">
       <h2 id="group-dialog-title">New session group</h2>
       <label>Group name<input name="group_name" required minlength="1" maxlength="80"></label>
@@ -181,7 +194,7 @@
     </form>
   </dialog>
 
-  <dialog id="group-detail-dialog">
+  <dialog id="group-detail-dialog" aria-labelledby="group-detail-title">
     <div class="dialog-form">
       <h2 id="group-detail-title">Group</h2>
       <p id="group-detail-purpose" class="muted"></p>
@@ -191,7 +204,7 @@
     </div>
   </dialog>
 
-  <dialog id="project-detail-dialog">
+  <dialog id="project-detail-dialog" aria-labelledby="project-detail-title">
     <form class="dialog-form">
       <h2 id="project-detail-title">Project</h2>
       <p id="project-detail-repo" class="muted"></p>
@@ -205,7 +218,7 @@
     </form>
   </dialog>
 
-  <dialog id="profile-editor-dialog">
+  <dialog id="profile-editor-dialog" aria-labelledby="profile-editor-title">
     <form id="profile-editor-form" class="dialog-form">
       <h2 id="profile-editor-title">Edit profile</h2>
       <input name="profile_name" type="hidden">
@@ -216,7 +229,7 @@
     </form>
   </dialog>
 
-  <dialog id="assign-skill-dialog">
+  <dialog id="assign-skill-dialog" aria-labelledby="assign-skill-title">
     <form id="assign-skill-form" class="dialog-form">
       <h2 id="assign-skill-title">Assign skill to profile</h2>
       <input name="skill_name" type="hidden">
@@ -227,7 +240,7 @@
     </form>
   </dialog>
 
-  <textarea id="clipboard-fallback" class="visually-hidden" aria-hidden="true"></textarea>
-  <script type="module" src="/static/app.js?v=11"></script>
+  <script type="module" src="/static/app.js?v=0.28.8"></script>
+<script type="module" src="/static/icons.js?v=1"></script>
 </body>
 </html>

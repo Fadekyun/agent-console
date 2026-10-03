@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, PropertyMock
 
 from agent_console.config import Settings
 from agent_console.database import Database
@@ -84,6 +84,24 @@ class SessionIntegrationTests(unittest.TestCase):
             self.manager.kill("legacy-test")
         killed = self.manager.kill("legacy-test", allow_unmanaged=True)
         self.assertEqual(killed["status"], "process-exited")
+
+    def test_kill_preserves_private_recent_output_and_capture_failure_keeps_session(self):
+        name = "stop-transcript"
+        self.manager.create(tool="shell", profile="general", name=name, repository=str(self.workspace))
+        tmux = self.manager.tmux_for_name(name)
+        with patch.object(tmux, "capture", side_effect=RuntimeError("capture unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "capture unavailable"):
+                self.manager.kill(name)
+        self.assertTrue(tmux.exists(name))
+        with patch.object(tmux, "capture", return_value=("kept output\n", False)):
+            stopped = self.manager.kill(name)
+        self.assertFalse(stopped["running"])
+        path = Path(stopped["archived_transcript"])
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        review = self.manager.review_session(name)
+        self.assertEqual(review["source"], "archived-transcript")
+        self.assertEqual(review["content"], "kept output\n")
+        self.assertTrue(self.workspace.exists())
 
     def test_attention_state_is_explicit_and_survives_reconciliation_and_exit(self) -> None:
         session = self.manager.create(
@@ -207,7 +225,7 @@ class SessionIntegrationTests(unittest.TestCase):
         launcher.chmod(0o700)
         self.manager.legacy_tmux.create("legacy-review", self.workspace, launcher)
         self.manager.reconcile()
-        for _ in range(20):
+        for _ in range(100):
             review = self.manager.review_session("legacy-review", lines=50)
             if "LEGACY_REVIEW_OK" in review["content"]:
                 break
@@ -220,28 +238,33 @@ class SessionIntegrationTests(unittest.TestCase):
         self.assertEqual(fallback["source"], "archived-transcript")
         self.assertIn("LEGACY_REVIEW_OK", fallback["content"])
 
-    def test_write_capable_delegation_is_rejected(self) -> None:
-        parent = self.manager.create(
-            tool="shell",
-            profile="general",
-            name="parent-test",
-            repository=str(self.workspace),
-        )
-        with self.assertRaises(ValueError):
-            self.manager.delegate(
-                profile="coder",
-                parent=parent["id"],
-                task="write something",
-                tool="shell",
-            )
+    def test_operator_add_session_preserves_read_only_parent_permissions(self) -> None:
+        parent = self.manager.create(tool="shell", profile="planner", name="manual-parent",
+                                     repository=str(self.workspace))
+        child = self.manager.create(tool="shell", profile="coder", name="manual-child",
+                                    repository=str(self.workspace), parent_session_id=parent["id"],
+                                    creator_surface="web")
+        self.assertEqual(child["parent_session_id"], parent["id"])
+        self.assertEqual(self.manager.inspect(parent["tmux_name"])["profile"], "planner")
+        with self.assertRaises(PermissionError):
+            self.manager.create(tool="shell", profile="coder", name="agent-child",
+                                repository=str(self.workspace), parent_session_id=parent["id"],
+                                creator_surface="session-api")
+
+    def test_write_capable_delegation_uses_worktree(self) -> None:
+        subprocess.run(["git", "init", str(self.workspace)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(self.workspace), "-c", "user.name=Fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture"],
+                       check=True, capture_output=True)
+        parent = self.manager.create(tool="shell", profile="general", name="parent-test",
+                                     repository=str(self.workspace))
+        child = self.manager.delegate(profile="coder", parent=parent["id"], task="write something", tool="shell")["session"]
+        self.assertEqual(child["parent_session_id"], parent["id"])
+        self.assertTrue(child["worktree"])
+        self.assertNotEqual(child["worktree"], str(self.workspace))
         with self.assertRaisesRegex(ValueError, "Plan mode"):
-            self.manager.delegate(
-                profile="planner",
-                parent=parent["id"],
-                task="do not build",
-                tool="opencode",
-                agent_mode="build",
-            )
+            self.manager.delegate(profile="planner", parent=parent["id"], task="do not build",
+                                  tool="opencode", agent_mode="build")
 
     def configure_commandcode(self):
         from agent_console.commandcode import BASE_URL, DEFAULT_MODEL
@@ -279,7 +302,9 @@ class SessionIntegrationTests(unittest.TestCase):
             self.assertEqual(session['model'], 'deepseek/deepseek-v4.1-flash')
             self.assertEqual(session['permission_mode'], 'unsupported')
             launcher = (self.manager.settings.state_dir / 'launchers/pi-context-test.sh').read_text()
-            self.assertIn('commandcode-main.env', launcher)
+            snapshot = self.manager.settings.state_dir / 'environment-launches' / f"{session['id']}.json"
+            self.assertIn('commandcode-main.env', snapshot.read_text())
+            self.assertNotIn('set -a', launcher)
             self.assertNotIn('fixture-key', launcher)
             self.assertIn('--append-system-prompt', launcher)
             with self.assertRaisesRegex(ValueError, 'catalogue'):
@@ -354,6 +379,139 @@ class SessionIntegrationTests(unittest.TestCase):
         tmux.create("stale-recovery", self.workspace, launcher)
         self.assertTrue(tmux.exists("stale-recovery"))
         tmux.kill("stale-recovery")
+
+    def test_rename_rejects_existing_stopped_name_without_touching_files(self):
+        first = self.manager.create(tool="shell", profile="general", name="rename-source", repository=str(self.workspace))
+        target = self.manager.create(tool="shell", profile="general", name="rename-target", repository=str(self.workspace))
+        self.manager.kill("rename-target")
+        paths = [self.manager.settings.state_dir / folder / filename
+                 for folder, filename in [("launchers", "rename-source.sh"), ("launchers", "rename-target.sh"),
+                                          ("contexts", "rename-source.md"), ("contexts", "rename-target.md")]]
+        before = {path: path.read_bytes() for path in paths}
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            self.manager.rename("rename-source", "rename-target")
+        self.assertEqual({path: path.read_bytes() for path in paths}, before)
+        self.assertTrue(self.manager.inspect("rename-source")["running"])
+        self.assertEqual(self.manager.inspect("rename-source")["id"], first["id"])
+        self.assertEqual(self.manager.inspect("rename-target")["id"], target["id"])
+
+    def test_reconcile_during_rename_keeps_one_managed_session_identity(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        source = self.manager.create(tool="shell", profile="general", name="rename-race", repository=str(self.workspace))
+        renamed, release, reconciled = Event(), Event(), Event()
+        original = Tmux.rename
+        def paused_rename(tmux, name, new_name):
+            original(tmux, name, new_name)
+            renamed.set()
+            if not release.wait(5):
+                raise RuntimeError("test rename release timed out")
+        def reconcile():
+            try:
+                return self.manager.reconcile()
+            finally:
+                reconciled.set()
+        with patch.object(Tmux, "rename", paused_rename), ThreadPoolExecutor(max_workers=2) as pool:
+            rename = pool.submit(self.manager.rename, "rename-race", "rename-race-new")
+            try:
+                self.assertTrue(renamed.wait(5))
+                read = pool.submit(reconcile)
+                self.assertFalse(reconciled.wait(.25), "reconciliation observed an unfinished rename")
+            finally:
+                release.set()
+            self.assertEqual(rename.result(timeout=5)["id"], source["id"])
+            read.result(timeout=5)
+        records = self.manager.list_sessions()
+        self.assertEqual([(r["id"], r["tmux_name"], r["managed"]) for r in records],
+                         [(source["id"], "rename-race-new", True)])
+
+    def test_session_list_snapshot_cannot_mix_names_across_rename(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        source = self.manager.create(tool="shell", profile="general", name="snapshot-old", repository=str(self.workspace))
+        observed, release = Event(), Event()
+        original = self.manager._live_sessions
+        def paused_snapshot():
+            snapshot = original()
+            if not observed.is_set():
+                observed.set()
+                if not release.wait(5):
+                    raise RuntimeError("test snapshot release timed out")
+            return snapshot
+        with patch.object(self.manager, "_live_sessions", paused_snapshot), ThreadPoolExecutor(max_workers=2) as pool:
+            read = pool.submit(self.manager.list_sessions, reconcile=False)
+            try:
+                self.assertTrue(observed.wait(5))
+                rename = pool.submit(self.manager.rename, "snapshot-old", "snapshot-new")
+                time.sleep(.1)
+                self.assertFalse(rename.done())
+            finally:
+                release.set()
+            records = read.result(timeout=5)
+            self.assertEqual([(r["id"], r["tmux_name"], r["running"]) for r in records],
+                             [(source["id"], "snapshot-old", True)])
+            self.assertEqual(rename.result(timeout=5)["id"], source["id"])
+
+    def test_tmux_observation_failure_preserves_status_and_releases_writer(self):
+        self.manager.create(tool="shell", profile="general", name="observation-error", repository=str(self.workspace))
+        with self.manager.database.connect() as conn:
+            before = dict(conn.execute("SELECT * FROM sessions WHERE tmux_name='observation-error'").fetchone())
+        with patch.object(self.manager, "_live_sessions", side_effect=RuntimeError("tmux list-sessions timed out")):
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                self.manager.reconcile()
+        with self.manager.database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            after = dict(conn.execute("SELECT * FROM sessions WHERE tmux_name='observation-error'").fetchone())
+        self.assertEqual(after, before)
+        self.assertTrue(self.manager.inspect("observation-error")["running"])
+
+    def test_rename_metadata_read_failure_does_not_duplicate_session(self):
+        session = self.manager.create(tool="shell", profile="general", name="metadata-missing", repository=str(self.workspace))
+        Path(session["launcher_path"]).unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.manager.rename("metadata-missing", "metadata-new")
+        self.assertEqual([(r["id"], r["tmux_name"]) for r in self.manager.list_sessions()],
+                         [(session["id"], "metadata-missing")])
+
+    def test_rename_timeout_after_applied_command_preserves_original_identity(self):
+        session = self.manager.create(tool="shell", profile="general", name="timeout-old", repository=str(self.workspace))
+        original = Tmux.rename
+        def applied_then_timeout(tmux, name, new_name):
+            original(tmux, name, new_name)
+            raise RuntimeError("tmux rename-session timed out") from subprocess.TimeoutExpired("tmux", 2)
+        with patch.object(Tmux, "rename", applied_then_timeout):
+            renamed = self.manager.rename("timeout-old", "timeout-new")
+        self.assertEqual(renamed["id"], session["id"])
+        self.assertEqual(len(self.manager.list_sessions()), 1)
+        self.assertTrue(renamed["running"])
+
+    def test_rename_database_failure_restores_live_name_and_original_metadata(self):
+        from contextlib import contextmanager
+        import sqlite3
+        session = self.manager.create(tool="shell", profile="general", name="rollback-old", repository=str(self.workspace))
+        original_connect = self.manager.database.connect
+        class FailingRenameConnection:
+            def __init__(self, connection):
+                self.connection = connection
+            def __getattr__(self, key):
+                return getattr(self.connection, key)
+            def execute(self, sql, *args):
+                if sql.startswith("UPDATE sessions SET tmux_name="):
+                    raise sqlite3.OperationalError("injected rename update failure")
+                return self.connection.execute(sql, *args)
+        @contextmanager
+        def fail_update():
+            with original_connect() as conn:
+                yield FailingRenameConnection(conn)
+        before = Path(session["launcher_path"]).read_bytes()
+        with patch.object(self.manager.database, "connect", fail_update):
+            with self.assertRaisesRegex(sqlite3.OperationalError, "injected rename"):
+                self.manager.rename("rollback-old", "rollback-new")
+        self.assertEqual([(r["id"], r["tmux_name"], r["running"]) for r in self.manager.list_sessions()],
+                         [(session["id"], "rollback-old", True)])
+        self.assertEqual(Path(session["launcher_path"]).read_bytes(), before)
+        self.assertFalse((self.manager.settings.state_dir / "launchers" / "rollback-new.sh").exists())
+        self.assertFalse((self.manager.settings.state_dir / "contexts" / "rollback-new.md").exists())
 
     def test_rename_updates_context_and_launcher(self) -> None:
         session = self.manager.create(
@@ -568,7 +726,7 @@ class SessionIntegrationTests(unittest.TestCase):
         update the env-var value to point at the renamed context file."""
         from agent_console.providers import TOOL_BINARIES
         original_bin = TOOL_BINARIES.get("opencode")
-        TOOL_BINARIES["opencode"] = Path("/usr/bin/zsh")
+        TOOL_BINARIES["opencode"] = Path("/bin/bash")
         try:
             models = [{
                 "id": "test-model",
@@ -629,7 +787,7 @@ class SessionIntegrationTests(unittest.TestCase):
         from agent_console.providers import TOOL_BINARIES
         self.configure_commandcode()
         original_bin = TOOL_BINARIES.get("hermes")
-        TOOL_BINARIES["hermes"] = Path("/usr/bin/zsh")
+        TOOL_BINARIES["hermes"] = Path("/bin/bash")
         try:
             secret_path = self.manager.auth.secrets_dir / "openrouter-main.env"
             secret_path.parent.mkdir(parents=True, exist_ok=True)
@@ -790,7 +948,7 @@ class SessionIntegrationTests(unittest.TestCase):
         with patch.object(
             self.manager,
             "_launch_spec",
-            return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+            return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
         ):
             session = self.manager.execute_plan("test-plan", name="plan-implementation")
         inspected = self.manager.inspect_plan("test-plan")
@@ -817,7 +975,7 @@ class SessionIntegrationTests(unittest.TestCase):
             with patch.object(
                 self.manager,
                 "_launch_spec",
-                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+                return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
             ):
                 session = self.manager.create(
                     tool="codex",
@@ -858,7 +1016,7 @@ class SessionIntegrationTests(unittest.TestCase):
             with patch.object(
                 self.manager,
                 "_launch_spec",
-                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+                return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
             ):
                 session = self.manager.create(
                     tool="codex",
@@ -893,7 +1051,7 @@ class SessionIntegrationTests(unittest.TestCase):
             with patch.object(
                 self.manager,
                 "_launch_spec",
-                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+                return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
             ):
                 session = self.manager.create(
                     tool="codex",
@@ -917,7 +1075,7 @@ class SessionIntegrationTests(unittest.TestCase):
                 self.manager.settings.state_dir / "skills-isolated" / "overlay-test"
             )
             self.assertEqual(overlay_skills.resolve(), isolated_root.resolve())
-            unassigned_entries = [p for p in overlay_skills.iterdir()]
+            unassigned_entries = [p for p in overlay_skills.iterdir() if p.is_dir()]
             self.assertEqual(len(unassigned_entries), 1)
             self.assertEqual(unassigned_entries[0].name, skill_name)
             self.manager.kill("overlay-test")
@@ -1025,6 +1183,12 @@ class SessionIntegrationTests(unittest.TestCase):
                 session_name="pin-spec-test",
                 session_id="sess-pin-spec-test",
             )
+            context = (self.manager.settings.state_dir / 'contexts' / 'pin-spec-test.md').read_text()
+            self.assertIn('session relatives --current', context)
+            self.assertIn('session review --relative parent', context)
+            self.assertIn('Tree links organize related conversations', context)
+            self.assertNotIn('Your orchestrator uses', context)
+            self.assertNotIn('Do not resolve the parent task while children are still running', context)
             self.assertIn('model="gpt-5.6-sol"', spec.argv)
             self.assertIn('model_reasoning_effort="high"', spec.argv)
             self.assertIn('plan_mode_reasoning_effort="xhigh"', spec.argv)
@@ -1148,11 +1312,19 @@ class SessionIntegrationTests(unittest.TestCase):
                 reasoning_effort="high",
             )
 
+    def test_stopped_restart_does_not_recreate_skill_snapshots(self) -> None:
+        self.manager.create(tool="shell", profile="general", name="stopped-snapshot")
+        self.manager.kill("stopped-snapshot")
+        isolated = self.manager.settings.state_dir / "skills-isolated" / "stopped-snapshot"
+        with self.assertRaisesRegex(ValueError, "requires a live terminal"):
+            self.manager.restart("stopped-snapshot")
+        self.assertFalse(isolated.exists())
+
     def test_empty_assignments_creates_empty_overlay(self) -> None:
         with patch.object(
             self.manager,
             "_launch_spec",
-            return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+            return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
         ):
             session = self.manager.create(
                 tool="codex",
@@ -1168,7 +1340,7 @@ class SessionIntegrationTests(unittest.TestCase):
         overlay_path = overlay_line.split("=", 1)[1].strip().strip("'\"")
         overlay_skills = Path(overlay_path) / "skills"
         self.assertTrue(overlay_skills.is_symlink())
-        self.assertEqual(len(list(overlay_skills.iterdir())), 0,
+        self.assertEqual(len([p for p in overlay_skills.iterdir() if p.is_dir()]), 0,
                          "empty-assignment overlay must be empty to prevent global skill leak")
         self.manager.kill("empty-overlay-test")
 
@@ -1187,10 +1359,10 @@ class SessionIntegrationTests(unittest.TestCase):
             assign_skill(self.manager.database, "general", skill_name)
             for bad_tool in ("opencode", "hermes", "claude"):
                 with self.assertRaises(RuntimeError) as ctx:
-                    with patch.object(
+                    with patch("agent_console.skills._default_version_probe", return_value="1.18.31"), patch("agent_console.providers.ProviderAdapter.can_isolate_skills", new_callable=PropertyMock, return_value=False), patch.object(
                         self.manager,
                         "_launch_spec",
-                        return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+                        return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
                     ):
                         self.manager.create(
                             tool=bad_tool,
@@ -1204,7 +1376,7 @@ class SessionIntegrationTests(unittest.TestCase):
             with patch.object(
                 self.manager,
                 "_launch_spec",
-                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+                return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
             ):
                 codex_session = self.manager.create(
                     tool="codex", profile="general",
@@ -1231,7 +1403,7 @@ class SessionIntegrationTests(unittest.TestCase):
             with patch.object(
                 self.manager,
                 "_launch_spec",
-                return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+                return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
             ):
                 session = self.manager.create(
                     tool="opencode",
@@ -1404,13 +1576,14 @@ class WaitProtocolTests(unittest.TestCase):
         self.assertIsNotNone(status)
         self.assertEqual(status["outcome"], "success")
 
-    def test_context_file_includes_wait_protocol(self) -> None:
+    def test_context_file_distinguishes_tree_links_from_delegated_work(self) -> None:
         parent = self.manager.create(
             tool="shell", profile="general", name="wait-ctx-parent",
             repository=str(self.workspace),
         )
         ctx = self.manager.session_context("wait-ctx-parent")
-        self.assertIn("wait-for-children", ctx["context"])
+        self.assertIn("session relatives --current", ctx["context"])
+        self.assertIn("Only when you actually delegate", ctx["context"])
 
         child = self.manager.delegate(
             profile="planner", parent=parent["id"], task="wait context test",
@@ -1418,7 +1591,8 @@ class WaitProtocolTests(unittest.TestCase):
         )["session"]
         child_ctx = self.manager.session_context(child["tmux_name"])
         self.assertIn("ready_for_review", child_ctx["context"])
-        self.assertIn("wait-for-children", child_ctx["context"])
+        self.assertIn("session review --relative parent", child_ctx["context"])
+        self.assertIn("they do not assign reviews or require waiting", child_ctx["context"])
 
     def test_wait_detects_blocked_child_immediately(self) -> None:
         parent = self.manager.create(
@@ -1508,7 +1682,7 @@ class WaitProtocolTests(unittest.TestCase):
         os.environ["AGENT_CONSOLE_TAILSCALE_LOGIN"] = "test@example.com"
         from fastapi.testclient import TestClient
         from agent_console.web import create_app
-        client = TestClient(create_app(self.manager), base_url="http://localhost")
+        client = TestClient(create_app(self.manager), client=("127.0.0.1", 50000), base_url="http://localhost")
         headers = {"Tailscale-User-Login": "test@example.com"}
 
         parent = self.manager.create(
@@ -1731,24 +1905,18 @@ class SessionGroupTests(unittest.TestCase):
         self.assertIn("open-group-s2", unavailable_names)
 
     def test_delegation_guard_uses_schema(self) -> None:
-        parent = self.manager.create(
-            tool="shell", profile="general", name="deleg-guard-parent",
-            repository=str(self.workspace),
-        )
+        parent = self.manager.create(tool="shell", profile="planner", name="deleg-guard-parent",
+                                     repository=str(self.workspace))
         from agent_console.profiles import PROFILE_SCHEMA
-        parent_profile_meta = PROFILE_SCHEMA.get("general", {})
-        delegatable = parent_profile_meta.get("allowed_delegation_profiles", frozenset())
-        for name, meta in PROFILE_SCHEMA.items():
-            if name in delegatable:
-                result = self.manager.delegate(
-                    profile=name, parent=parent["id"], task="test delegation with schema guard", tool="shell",
-                )
+        allowed = PROFILE_SCHEMA["planner"]["allowed_delegation_profiles"]
+        for name in PROFILE_SCHEMA:
+            if name in allowed:
+                result = self.manager.delegate(profile=name, parent=parent["id"], task="bounded check", tool="shell")
                 self.assertIn("session", result)
+                self.manager.kill(result["session"]["tmux_name"])
             else:
-                with self.assertRaises(ValueError):
-                    self.manager.delegate(
-                        profile=name, parent=parent["id"], task="should fail", tool="shell",
-                    )
+                with self.assertRaises(PermissionError):
+                    self.manager.delegate(profile=name, parent=parent["id"], task="cannot escalate", tool="shell")
 
 
 class ProjectTests(unittest.TestCase):

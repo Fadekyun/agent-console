@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from agent_console.auth import AuthRegistry
-from agent_console.commandcode import (BASE_URL, DEFAULT_MODEL, catalogue, pi_model_entries,
+from agent_console.commandcode import (BASE_URL, DEFAULT_MODEL, MCP_SERVERS, catalogue, pi_model_entries,
                                        provision, selected_model)
 from agent_console.providers import provider_adapter
 from agent_console.profiles import validate_profile_capability
@@ -20,6 +20,12 @@ class CommandCodeTests(unittest.TestCase):
                             models=[DEFAULT_MODEL, 'test/alternate'], verified=True, secret_ref='commandcode-main')
         self.context_path = self.root / 'context.md'
         self.context_path.write_text('Profile: general\nSession: test\nPROJECT_CONTEXT_MARKER')
+        self.env = patch.dict(os.environ, {}, clear=False)
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        for server in MCP_SERVERS:
+            os.environ.pop(server['token_env'], None)
+            os.environ.pop(server['url_env'], None)
     def tearDown(self):
         self.tmp.cleanup()
     def _launch(self, tool, model=None):
@@ -87,11 +93,11 @@ class CommandCodeTests(unittest.TestCase):
             os.environ.pop('DIRECTUS_MCP_URL', None)
             pi_root = Path(self._launch('pi').environment['PI_CODING_AGENT_DIR'])
             pi_config = json.loads((pi_root / 'mcp.json').read_text())
-            self.assertEqual(sorted(pi_config['mcpServers']), ['directus', 'n8n'])
+            self.assertEqual(sorted(pi_config['mcpServers']), ['bushi', 'directus', 'n8n', 'openrouter'])
             self.assertEqual(pi_config['mcpServers']['n8n'], {
-                'url': 'http://n8n.example.test/mcp', 'auth': 'bearer',
-                'bearerTokenEnv': 'N8N_MCP_TOKEN', 'lifecycle': 'lazy',
-                'requestTimeoutMs': 180000,
+                'url': 'http://n8n.example.test/mcp',
+                'headers': {'Authorization': 'Bearer ${N8N_MCP_TOKEN}'},
+                'exposure': 'codemode', 'timeout': 180,
             })
             self.assertEqual(pi_config['mcpServers']['directus']['url'], 'http://192.168.1.71:8055/mcp')
             self.assertEqual((pi_root / 'mcp.json').stat().st_mode & 0o777, 0o600)
@@ -112,10 +118,9 @@ class CommandCodeTests(unittest.TestCase):
                 os.environ.pop(name, None)
             pi_root = Path(self._launch('pi').environment['PI_CODING_AGENT_DIR'])
             pi_config = json.loads((pi_root / 'mcp.json').read_text())
-            # Explicit suppression: the per-session file outranks any host-global
-            # entry that still names these servers.
-            self.assertEqual(pi_config['mcpServers'], {'n8n': {'disabled': True},
-                                                       'directus': {'disabled': True}})
+            self.assertEqual(pi_config['mcpServers'], {
+                server['name']: {'url': server['url'], 'enabled': False}
+                for server in MCP_SERVERS})
             hermes_root = Path(self._launch('hermes').environment['HERMES_HOME'])
             self.assertNotIn('mcp_servers', (hermes_root / 'config.yaml').read_text())
 
@@ -124,12 +129,39 @@ class CommandCodeTests(unittest.TestCase):
         with patch.dict(os.environ, {'N8N_MCP_TOKEN': stale_secret}, clear=False):
             os.environ.pop('DIRECTUS_MCP_TOKEN', None)
             pi_root = Path(self._launch('pi').environment['PI_CODING_AGENT_DIR'])
-            self.assertIn('bearerTokenEnv', (pi_root / 'mcp.json').read_text())
+            self.assertIn('Bearer ${N8N_MCP_TOKEN}', (pi_root / 'mcp.json').read_text())
             os.environ.pop('N8N_MCP_TOKEN', None)
             self._launch('pi')
             config = json.loads((pi_root / 'mcp.json').read_text())
-            self.assertEqual(config['mcpServers']['n8n'], {'disabled': True})
+            self.assertEqual(config['mcpServers']['n8n'], {
+                'url': 'http://192.168.1.73/mcp-server/http', 'enabled': False})
             self.assertNotIn(stale_secret, (pi_root / 'mcp.json').read_text())
+
+    def test_all_managed_mcp_servers_reach_both_native_configs(self):
+        credentials = {server['token_env']: 'fixture-only-' + server['name'] for server in MCP_SERVERS}
+        overrides = {server['url_env']: 'http://' + server['name'] + '.example.test/mcp'
+                     for server in MCP_SERVERS}
+        with patch.dict(os.environ, {**credentials, **overrides}):
+            pi_root = Path(self._launch('pi').environment['PI_CODING_AGENT_DIR'])
+            hermes_root = Path(self._launch('hermes').environment['HERMES_HOME'])
+            pi_text = (pi_root / 'mcp.json').read_text()
+            hermes_text = (hermes_root / 'config.yaml').read_text()
+            pi_entries = json.loads(pi_text)['mcpServers']
+            hermes_entries = json.loads(hermes_text)['mcp_servers']
+            self.assertEqual(set(pi_entries), set(hermes_entries))
+            for server in MCP_SERVERS:
+                pi_entry, hermes_entry = pi_entries[server['name']], hermes_entries[server['name']]
+                self.assertEqual(pi_entry['url'], overrides[server['url_env']])
+                self.assertEqual(pi_entry['url'], hermes_entry['url'])
+                self.assertEqual(pi_entry['headers'], hermes_entry['headers'])
+                self.assertEqual(pi_entry['timeout'], hermes_entry['timeout'])
+                self.assertNotIn(credentials[server['token_env']], pi_text + hermes_text)
+            self.assertEqual(pi_entries['bushi']['timeout'], 1200)
+            # The next Hermes launch must also drop credentials removed since launch.
+            for server in MCP_SERVERS:
+                os.environ.pop(server['token_env'])
+            self._launch('hermes')
+            self.assertNotIn('mcp_servers', (hermes_root / 'config.yaml').read_text())
 
     def test_unavailable_model_does_not_write_anything(self):
         untouched = self.root / 'untouched'

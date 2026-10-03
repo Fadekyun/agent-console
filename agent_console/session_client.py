@@ -1,0 +1,115 @@
+"""Managed-session CLI transport; never opens or migrates Console databases."""
+import errno
+import json
+import os
+import time
+import urllib.error
+import urllib.request
+from .managed_context import managed_context
+
+
+NETWORK_PERMISSION_ERROR = ("Console session network access was denied by the sandbox. "
+                            "Retry with authorized network access or network escalation; "
+                            "no local writer fallback was attempted.")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def request(command, payload):
+    context = managed_context(required=True)
+    url = context.reporting_url + '/api/agent-sessions'
+    req = urllib.request.Request(url, data=json.dumps({'command':command,'payload':payload}).encode(),
+             headers={'Content-Type':'application/json', 'Authorization':'Bearer '+context.capability,
+                      'X-Agent-Console-Session':context.session_id})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    try:
+        with opener.open(req, timeout=45) as response:
+            raw = response.read(4*1024*1024+1)
+            if len(raw) > 4*1024*1024:
+                raise ValueError('session response too large')
+            return json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        # Remote error bodies may contain submitted data or credentials.
+        raise ValueError(f'Console session request rejected (HTTP {exc.code}); check session authorization and request constraints') from None
+    except PermissionError:
+        raise RuntimeError(NETWORK_PERMISSION_ERROR) from None
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, PermissionError) or getattr(exc.reason, "errno", None) in {errno.EPERM, errno.EACCES}:
+            raise RuntimeError(NETWORK_PERMISSION_ERROR) from None
+        raise RuntimeError('Console session endpoint unavailable; no local writer fallback was attempted') from None
+
+
+def current_ref(name):
+    if name and name == os.getenv('AGENT_CONSOLE_SESSION_NAME'):
+        return os.getenv('AGENT_CONSOLE_SESSION_ID') or name
+    return name
+
+
+def managed_read(args, route):
+    payload = {'route':route, **{key:getattr(args,key) for key in
+        ('name','current','relative','index','session_id','lines') if hasattr(args,key)}}
+    if 'name' in payload:
+        payload['name'] = current_ref(payload['name'])
+    return request('read', payload)
+
+
+def handles(args):
+    return args.command == 'delegate' or (args.command == 'session' and args.session_command in
+        {'attention','create','interrupt','restart-agent','kill','wait-for-children'})
+
+
+def run(args):
+    command = 'delegate' if args.command == 'delegate' else args.session_command
+    if command in {'delegate','create'}:
+        payload = {key:getattr(args,key) for key in ('profile','task','repository','tool','auth_context','agent_mode','model','provider')
+                   if getattr(args,key,None) is not None}
+        payload.update(name=current_ref(getattr(args,'parent',None)), child_name=args.name,
+                       reasoning_effort=args.effort, plan_reasoning_effort=args.plan_effort)
+        return request('delegate',payload)
+    if command == 'attention':
+        if args.current == bool(args.name):
+            raise ValueError('provide exactly one of NAME or --current')
+        return request(command, {'name':current_ref(args.name),'state':args.state,'note':args.note})
+    if command == 'kill' and (not args.yes or args.allow_unmanaged):
+        raise PermissionError('managed descendant kill requires --yes and cannot target unmanaged sessions')
+    if command != 'wait-for-children':
+        return request(command, {'name':current_ref(args.name)})
+    timeout = args.timeout if args.timeout is not None else 300
+    interval = args.poll_interval if args.poll_interval is not None else 10
+    if timeout < 1 or interval < 1:
+        raise ValueError('timeout and poll interval must be at least one second')
+    deadline = time.monotonic() + timeout
+    selectors = getattr(args, 'child_selectors', None)
+    selected_ids = None
+    parent_id = None
+    while True:
+        payload = {'name':parent_id or current_ref(args.name)}
+        if selectors is not None:
+            payload['child_ids' if selected_ids is not None else 'child_selectors'] = selected_ids if selected_ids is not None else selectors
+        observed = request('children', payload)
+        children = observed['children']
+        if selectors is not None:
+            from .child_waits import select_children
+            if not observed.get('parent_id') or not observed.get('selected_child_ids'):
+                raise RuntimeError('Console did not confirm the selected child batch; scoped waiting requires an updated server')
+            if parent_id is not None and (observed['parent_id'] != parent_id or observed['selected_child_ids'] != selected_ids):
+                raise RuntimeError('Console changed the selected wait batch; inspect the session tree')
+            parent_id, selected_ids = observed['parent_id'], observed['selected_child_ids']
+            children = select_children(children, parent_id, selected_ids, ids_only=True)
+        for child in children:
+            attention = child.get('attention_state')
+            child['wait_status'] = ('success' if attention == 'ready_for_review' else
+                'intervention' if attention in {'blocked','needs_input'} else
+                'completed' if child.get('running') is False else 'waiting')
+        states = {child['wait_status'] for child in children}
+        outcome, code = ('intervention',2) if 'intervention' in states else (
+            ('failure',3) if 'completed' in states else ('waiting',1) if 'waiting' in states else ('success',0))
+        if outcome != 'waiting' or time.monotonic() >= deadline:
+            result = {'children':children,'outcome':'timeout' if outcome == 'waiting' else outcome,'exit_code':code}
+            if selected_ids is not None:
+                result['selected_child_ids'] = selected_ids
+            return result
+        time.sleep(min(interval, max(0,deadline-time.monotonic())))
