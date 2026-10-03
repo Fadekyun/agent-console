@@ -6,6 +6,7 @@ authority. Operator endpoints retain their existing authorization.
 """
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from .inspection_views import InspectionViews, read_route, READ_ROUTES
@@ -42,8 +43,17 @@ class SessionControl:
     def __init__(self, manager, identity):
         self.manager = manager
         self.identity = identity
+        from ._inspection_reader import SESSION_COLUMNS, PROJECTIONS, MAX_OUTPUT, MAX_ROWS
+        from .inspection import InspectionUnavailable
         with manager.database.connect() as db:
-            rows = [dict(row) for row in db.execute('SELECT * FROM sessions')]
+            selected = ','.join((*SESSION_COLUMNS, 'execution_kind'))
+            rows = [dict(row) for row in db.execute(f'SELECT {selected} FROM sessions ORDER BY id LIMIT ?', (MAX_ROWS+1,))]
+            if len(rows) > MAX_ROWS:
+                raise InspectionUnavailable('snapshot-too-large')
+            for row in rows:
+                if row['execution_kind'] != 'interactive':
+                    for field in ('initial_task','attention_note','exit_reason','archived_transcript'):
+                        row[field] = None
             self.all_sessions = {row['id']: row for row in rows}
             self.current = self.all_sessions[identity['id']]
             project = self.current.get('project_id')
@@ -54,13 +64,18 @@ class SessionControl:
             sessions = []
             for row in rows:
                 if row['id'] in ids:
-                    row = dict(row)
-                    row.pop('evidence_capability_hash', None)
-                    sessions.append(row)
-            delegations = [dict(row) for row in db.execute('SELECT * FROM delegations')
+                    sessions.append(dict(row))
+            selected = ','.join(PROJECTIONS['delegations'])
+            delegations = [dict(row) for row in db.execute(f'SELECT {selected} FROM delegations ORDER BY id LIMIT ?', (MAX_ROWS+1,))
                            if row['parent_session_id'] in ids and row['child_session_id'] in ids]
-        self.views = InspectionViews(manager.settings, snapshot={'sessions':sessions,
-             'delegations':delegations, 'session_groups':[], 'group_members':[]}, current_id=identity['id'])
+            private = {row['id'] for row in rows if row['execution_kind'] != 'interactive'}
+            for row in delegations:
+                if row['parent_session_id'] in private or row['child_session_id'] in private:
+                    row['task'] = None
+        snapshot = {'sessions':sessions,'delegations':delegations,'session_groups':[],'group_members':[]}
+        if len(delegations) > MAX_ROWS or len(json.dumps(snapshot, ensure_ascii=True)) > MAX_OUTPUT-4096:
+            raise InspectionUnavailable('snapshot-too-large')
+        self.views = InspectionViews(manager.settings, snapshot=snapshot, current_id=identity['id'])
         # Observed but unrecorded tmux sessions have no authenticated project.
         self.views.sessions = [row for row in self.views.sessions if row['id'] in ids]
 
@@ -85,6 +100,8 @@ class SessionControl:
         raise PermissionError('session is outside the permitted project or tree')
 
     def authorize_control(self, target, *, own=False):
+        if not target.get('managed') or target.get('execution_kind') != 'interactive':
+            raise PermissionError('session control requires a managed interactive target')
         if target['id'] == self.current['id']:
             if own:
                 return
@@ -112,6 +129,8 @@ class SessionControl:
             if args.name:
                 args.name = self.target(args.name)['tmux_name']
             return read_route(args, route, views=self.views)
+        if self.current.get('execution_kind') != 'interactive':
+            raise PermissionError('session control requires a managed interactive caller')
         target = self.target(payload.get('name'))
         actor = 'session:' + self.current['id']
         if command == 'attention':

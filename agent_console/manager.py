@@ -2748,6 +2748,8 @@ class SessionManager:
         plan_reasoning_effort: str | None = None,
         creator_surface: str = "CLI",
     ) -> dict[str, Any]:
+        if not isinstance(task, str) or not task.strip() or len(task) > 12000:
+            raise ValueError("delegated task must contain 1 to 12000 characters")
         validate_tool(tool)
         if profile not in PROFILE_SCHEMA:
             raise ValueError(f"unknown profile: {profile}")

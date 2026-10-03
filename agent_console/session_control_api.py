@@ -4,7 +4,7 @@ from .session_control import SessionControl
 from .workflow_service import authenticate_session
 
 class ControlRequest(BaseModel):
-    command: str = Field(max_length=32)
+    command: str = Field(min_length=1, max_length=32)
     payload: dict = Field(default_factory=dict)
 
 

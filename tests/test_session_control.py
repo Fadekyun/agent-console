@@ -70,6 +70,23 @@ class SessionControlTests(unittest.TestCase):
         self.assertEqual(result.json()['source'],'unavailable')
         self.assertEqual(result.json()['session']['live_state'],'unknown')
 
+    def test_private_integration_content_is_redacted_in_every_peer_view(self):
+        with self.db.connect() as db:
+            db.execute("UPDATE sessions SET execution_kind='integration-plan',initial_task='PRIVATE-TASK',attention_note='PRIVATE-NOTE',exit_reason='PRIVATE-EXIT',archived_transcript='PRIVATE-PATH' WHERE id='child'")
+            db.execute("INSERT INTO delegations(id,parent_session_id,child_session_id,profile,task,status,created_at) VALUES('d','parent','child','coder','PRIVATE-DELEGATION','running','2026-10-03')")
+        for command,payload in [('read',{'route':['session','list']}),
+                ('read',{'route':['session','tree']}),('read',{'route':['session','inspect'],'name':'child'}),
+                ('read',{'route':['session','context'],'name':'child'}),
+                ('read',{'route':['session','review'],'name':'child'}),('children',{})]:
+            result = self.request(command,payload)
+            self.assertEqual(result.status_code,200,result.text)
+            self.assertNotIn('PRIVATE-',result.text)
+            self.assertNotIn('evidence_capability_hash',result.text)
+
+    def test_malformed_payload_types_do_not_produce_server_errors(self):
+        for payload in [{'route':1},{'route':['session','review'],'name':'parent','lines':'bad'}]:
+            self.assertEqual(self.request('read',payload).status_code,400)
+
     def test_saved_output_remains_readable_when_socket_is_unavailable(self):
         transcript = self.settings.state_dir / 'saved.txt'
         transcript.write_text('saved peer output\n')
