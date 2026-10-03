@@ -1,3 +1,10 @@
+## 0.28.7 — unreleased, 2026-10-03 (#141)
+
+- Impact: terminal options use one fixed-size chevron that points down when closed and up when open, with an accessible label and expanded state. Removed the duplicate Copy / Read toolbar button: the remaining Copy control copies highlighted text or opens selectable output when nothing is highlighted. Paging, refresh, selection copying and clipboard fallbacks remain available.
+- Configuration/migration: none. Refresh the page. Change appearance from Settings or the terminal options chevron, then choose Theme and Palette.
+- Verification: terminal menu geometry/state, keyboard dismissal, copy/selection and clipboard regressions across desktop and phone viewports; native Theme selector interaction checked with click/arrow keys/Enter. Full CI and live acceptance gate deployment; physical mobile OS pickers remain unverified.
+- Rollback: select retained v0.28.6 through its schema guard and restart web only; preserve databases, drafts and running harnesses.
+
 ## 0.28.6 — unreleased, 2026-10-03 (#141)
 
 - Impact: theme controls remain available from terminal More on phones and embedded terminals; primary hover, keyboard focus, links and mobile surfaces use readable palette colors. Forest, Ocean and Violet continue to support System, Light and Dark appearance.

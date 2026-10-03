@@ -333,7 +333,11 @@ dialog::backdrop { background: rgb(0 0 0 / .58); } .dialog-form, dialog form { d
 .terminal-embedded .terminal-frame { grid-row:2; }
 .terminal-embedded .composer { grid-row:3; }
 .terminal-controls > button, #terminal-more > summary { min-height:40px; padding:7px 10px; font-size:.82rem; }
-#terminal-more > summary { cursor:pointer; border:1px solid var(--border); border-radius:7px; }
+#terminal-more > summary { display:flex; align-items:center; justify-content:center; width:44px; height:44px; padding:10px; list-style:none; cursor:pointer; border:1px solid var(--border-strong); border-radius:9px; background:var(--surface-raised); color:var(--text); }
+#terminal-more > summary::-webkit-details-marker { display:none; }
+#terminal-more > summary::before { width:20px; height:20px; flex-basis:20px; }
+#terminal-more[open] > summary::before { transform:rotate(180deg); }
+#terminal-more > summary:hover { border-color:var(--accent); background:var(--accent-soft); }
 .terminal-menu { position:fixed; left:7px; right:7px; top:0; max-height:calc(var(--visual-height, 100dvh) - 60px); overflow:auto; padding:12px; border:1px solid var(--border); background:var(--surface); box-shadow:var(--shadow); }
 .terminal-menu .mode-switch { display:flex; flex-wrap:wrap; margin-bottom:10px; }
 .terminal-menu .key-strip, .terminal-embedded .terminal-menu .key-strip { display:flex; flex-wrap:wrap; overflow:visible; }

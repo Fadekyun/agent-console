@@ -38,7 +38,7 @@ test('standalone rename follows the pinned ID for reconnect and reads while reta
   await page.evaluate(()=>{const socket=window.__identitySockets.at(-1);socket.readyState=3;socket.onclose({code:1006});});
   await expect.poll(()=>page.evaluate(()=>window.__identitySockets.at(-1).url)).toMatch(/\/renamed\?session_id=original-id$/);
   await expect(page.locator('#session-name')).toHaveText('renamed');await expect(page.locator('#composer')).toHaveValue('Private original draft');
-  await page.locator('#text-view').click();await expect(page.locator('#text-content')).toContainText('Owned output');
+  await page.locator('#copy-selection').click();await expect(page.locator('#text-content')).toContainText('Owned output');
   const review=requests.filter(url=>url.pathname.endsWith('/review')&&url.searchParams.get('lines')==='1000').at(-1);
   expect(review.pathname).toBe('/api/sessions/renamed/review');expect(review.searchParams.get('session_id')).toBe('original-id');
   await page.reload();await expect(page.locator('#connection')).toHaveText('Connected');await expect(page.locator('#composer')).toHaveValue('Private original draft');

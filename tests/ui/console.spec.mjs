@@ -218,7 +218,9 @@ test('terminal detach and reconnect remain explicit', async ({ page }) => {
 test('terminal Copy selection preserves selected text and offers a denied-clipboard fallback', async ({ page }, testInfo) => {
   await installFakeWebSocket(page); await mockApi(page);
   await page.goto('/terminal?session=codex-root');
-  await page.locator('#text-view').click();
+  await expect(page.locator('.terminal-controls').getByRole('button', {name: /copy|read/i})).toHaveCount(1);
+  await expect(page.getByRole('button', {name: 'Copy terminal text', exact: true})).toBeVisible();
+  await page.locator('#copy-selection').click();
   await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
   await page.evaluate(() => {
     document.execCommand = () => false;
@@ -240,7 +242,7 @@ test('terminal Copy selection preserves selected text and offers a denied-clipbo
 test('closing terminal Text View during a pending refresh does not reopen it', async ({ page }) => {
   await installFakeWebSocket(page); await mockApi(page);
   await page.goto('/terminal?session=codex-root');
-  await page.locator('#text-view').click();
+  await page.locator('#copy-selection').click();
   await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
   let release;
   const pending = new Promise(resolve => { release = resolve; });
@@ -255,7 +257,7 @@ test('closing terminal Text View during a pending refresh does not reopen it', a
   release(); await response;
   await expect(page.locator('#text-refresh')).toBeEnabled();
   await expect(page.locator('#text-dialog')).toBeHidden();
-  await page.locator('#text-view').click();
+  await page.locator('#copy-selection').click();
   await expect(page.locator('#text-content')).toHaveText('NEW_CAPTURE');
 });
 
@@ -263,7 +265,7 @@ test('terminal native clipboard permission copies text and pastes only into the 
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await installFakeWebSocket(page, { nativeClipboard: true }); await mockApi(page);
   await page.goto('/terminal?session=codex-root');
-  await page.locator('#text-view').click();
+  await page.locator('#copy-selection').click();
   await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
   await page.locator('#copy-visible').click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('PEER_OUTPUT');
@@ -282,7 +284,7 @@ test('brief preload, alternate-screen paging, and Text View never auto-send the 
   await expect(page.locator('#composer')).toHaveValue('Coordinate work');
   await expect(page.locator('#connection')).toHaveText('Connected');
   expect(await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length)).toBe(0);
-  await page.locator('#text-view').click();
+  await page.locator('#copy-selection').click();
   await expect(page.locator('#text-dialog')).toBeVisible();
   await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
   await expect(page.locator('#text-scope')).toContainText('alternate-screen');

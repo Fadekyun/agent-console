@@ -108,7 +108,7 @@ test('late clipboard rejection does not reopen closed text or peer dialogs', asy
   await open(page);
   for (const origin of ['text', 'peers']) {
     await page.evaluate(() => Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:() => new Promise((resolve,reject) => {window.__rejectCopy = reject;})}}));
-    if (origin === 'text') { await page.locator('#text-view').click(); await page.locator('#copy-visible').click(); }
+    if (origin === 'text') { await page.locator('#copy-selection').click(); await page.locator('#copy-visible').click(); }
     else { await page.locator('#terminal-more > summary').click(); await page.locator('#peers').click(); await page.getByRole('button',{name:'Copy name',exact:true}).click(); }
     await page.locator(`[data-close="${origin === 'text' ? 'text-dialog' : 'peers-dialog'}"]`).click();
     await page.evaluate(async () => { document.execCommand=()=>{window.__legacyCopyCalled=true;return false;}; window.__rejectCopy(new DOMException('Denied','NotAllowedError')); await new Promise(resolve=>setTimeout(resolve,0)); });

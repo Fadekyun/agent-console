@@ -68,6 +68,7 @@ new MutationObserver(() => { reconnect.hidden = reconnect.disabled; }).observe(r
 const more = $('#terminal-more');
 const moreMenu = $('.terminal-menu');
 function fitMoreMenu() {
+  $('#terminal-more > summary').setAttribute('aria-expanded', String(more.open));
   if (!more.open) return;
   const viewport = window.visualViewport;
   const bottom = (viewport?.offsetTop || 0) + (viewport?.height || innerHeight);
@@ -637,7 +638,6 @@ $('#detach').onclick = () => {
   } catch (error) { setStatus(error.message); }
 };
 $('#fullscreen').onclick = async () => { try { await document.documentElement.requestFullscreen?.(); } catch (error) { setStatus(`Fullscreen unavailable: ${error.message}`); } };
-$('#text-view').onclick = () => refreshTextView();
 $('#load-brief').onclick = () => { $('#terminal-more').open = false; loadBrief(false); };
 $('#text-refresh').onclick = () => refreshTextView();
 $('#text-page-up').onclick = () => refreshTextView('up');

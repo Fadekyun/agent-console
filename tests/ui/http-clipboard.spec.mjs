@@ -54,7 +54,7 @@ test('HTTP manual paste returns focus to draft and never sends',async({page})=>{
 });
 
 test('HTTP copy fallback preserves text selection and focus',async({page})=>{
-  await open(page);await page.locator('#text-view').click();
+  await open(page);await page.locator('#copy-selection').click();
   await expect(page.locator('#text-content')).toContainText('HTTP clipboard text');
   await page.evaluate(()=>{
     const text=document.querySelector('#text-content');text.focus();
@@ -68,7 +68,7 @@ test('HTTP copy fallback preserves text selection and focus',async({page})=>{
 
 test('HTTP native keyboard paste stages clipboard text instead of terminal input',async({page},info)=>{
   test.skip(info.project.name!=='desktop','Keyboard paste is a desktop check.');
-  const writes=await open(page);await page.locator('#text-view').click();
+  const writes=await open(page);await page.locator('#copy-selection').click();
   await expect(page.locator('#text-content')).toContainText('HTTP clipboard text');
   await page.locator('#copy-visible').click();
   await expect(page.locator('#connection')).toHaveText('Visible text copied');

@@ -70,12 +70,22 @@ for (const {height, embed} of [{height:180,embed:false},{height:100,embed:true},
 test('delayed initial connection preserves focused controls and menu Escape never reaches the terminal', async ({page}) => {
   await terminalFixture(page,{delayed:true});
   await page.goto('/terminal?session=menu-fixture');
+  const toggle=page.getByRole('button',{name:'Terminal options',exact:true});
+  await expect(toggle).toHaveAttribute('aria-expanded','false');
+  const closed=await toggle.boundingBox();
+  expect(closed.width).toBe(44);expect(closed.height).toBe(44);
+  const closedArrow=await toggle.evaluate(el=>getComputedStyle(el,'::before').transform);
   await openMore(page);
+  await expect(toggle).toHaveAttribute('aria-expanded','true');
+  expect(await toggle.boundingBox()).toEqual(closed);
+  expect(await toggle.evaluate(el=>getComputedStyle(el,'::before').transform)).not.toBe(closedArrow);
   await page.evaluate(()=>window.__openTerminal());
   await expect(page.locator('#terminal-more > summary')).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(page.locator('#terminal-more')).not.toHaveAttribute('open','');
   expect(await page.evaluate(()=>window.__terminalBytes)).toEqual([]);
+  await expect(toggle).toHaveAttribute('aria-expanded','false');
+  expect(await toggle.boundingBox()).toEqual(closed);
   // A real terminal Escape still works once the menu is dismissed.
   await page.locator('.xterm-helper-textarea').focus();
   await page.keyboard.press('Escape');

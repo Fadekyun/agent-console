@@ -1,3 +1,9 @@
+## Terminal control clarity — 2026-10-03 (#141)
+
+- Replaced terminal More text/native marker with a stable 44px chevron and explicit accessible expanded state.
+- Consolidated duplicate copy/read entry points into one selection-aware Copy control while retaining selectable text, paging and clipboard fallbacks.
+- Existing keyboard, focus, viewport and clipboard checks cover the simplified toolbar; native Theme dropdown interaction remains usable in Chromium desktop/phone layouts.
+
 ## Theme, clipboard and continuing UI audit — 2026-10-03 (#141)
 
 - Fixed: low-contrast hovered primary controls and focus rings; theme/palette selectors hidden in embedded and phone terminals; unthemed links/mobile surfaces.
