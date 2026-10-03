@@ -63,7 +63,8 @@ def confirm_twice(prompt: str) -> bool:
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog="agentctl")
+    from .owner_cli import OwnerArgumentParser
+    root = OwnerArgumentParser(prog="agentctl")
     root.add_argument("--json", action="store_true", help="emit JSON (currently the default format)")
     commands = root.add_subparsers(dest="command", required=True)
 
@@ -308,6 +309,8 @@ def parser() -> argparse.ArgumentParser:
 
     from .workflow_cli import add_commands as add_workflow_commands
     add_workflow_commands(commands)
+    from .owner_cli import add_commands as add_owner_commands
+    add_owner_commands(commands)
     commands.add_parser("doctor")
     return root
 
@@ -316,6 +319,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         route = inspection_route(args)
+        if args.command in {"project", "environment"}:
+            if any(os.getenv(key) for key in ("AGENT_CONSOLE_REPORTING_URL", "AGENT_CONSOLE_SESSION_ID", "AGENT_CONSOLE_EVIDENCE_CAPABILITY")):
+                raise PermissionError("project and environment owner commands are unsupported in managed sessions; use a local human owner terminal")
+            from .owner_cli import run
+            emit(run(args, SessionManager()))
+            return 0
         if route is not None:
             if os.getenv("AGENT_CONSOLE_REPORTING_URL") and route[0] == "session" and len(route) == 2:
                 from .session_client import managed_read

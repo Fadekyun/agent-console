@@ -1686,7 +1686,7 @@ class SessionManager:
                         row = conn.execute("SELECT * FROM sessions WHERE id=?",
                                            (ancestor.get("parent_session_id"),)).fetchone()
                         ancestor = dict(row) if row else None
-                if child_count >= self.settings.max_children_per_parent:
+                if self.settings.max_children_per_parent > 0 and child_count >= self.settings.max_children_per_parent:
                     raise RuntimeError(f"child-session limit reached ({self.settings.max_children_per_parent})")
             if ordinary_count + integration_count >= self.settings.max_managed_sessions:
                 raise RuntimeError(

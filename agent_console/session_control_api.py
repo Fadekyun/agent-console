@@ -27,6 +27,6 @@ def session_control_routes(manager):
             raise HTTPException(403, str(exc)) from None
         except KeyError:
             raise HTTPException(404, 'session or required field not found') from None
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, RuntimeError) as exc:
             raise HTTPException(400, str(exc)) from None
     return router

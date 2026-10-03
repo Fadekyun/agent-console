@@ -1057,3 +1057,12 @@ test('audit skill actions report structured failure diagnostics',async({page})=>
   await page.getByRole('button',{name:'Validate discovery'}).click();
   await expect(page.locator('#notice')).toHaveText('Doctor: Missing required skill');
 });
+
+for(const children of [0,4])test(`Settings explains configured child capacity ${children}`,async({page})=>{
+  await fixture(page);
+  await page.route('**/api/me',route=>route.fulfill({json:{profiles:[],tool_status:[],auth_contexts:[],session_limits:{managed:24,children}}}));
+  await page.goto('/work#settings');
+  await expect(page.locator('#session-capacity')).toContainText('24 running or reserved sessions in total');
+  await expect(page.locator('#session-capacity')).toContainText(children?'4 active children per parent':'No per-parent child limit');
+  await expect(page.locator('#session-capacity')).toContainText('Stopped and archived sessions do not use a slot');
+});

@@ -1290,3 +1290,14 @@ test('Codex model and effort controls send overrides and clear them for other to
   const second = requests.filter(r => r.path === '/api/sessions')[1].body;
   expect(second).toMatchObject({ tool: 'shell', model: null, reasoning_effort: null, plan_reasoning_effort: null });
 });
+
+
+for(const limit of [0,5])test(`delegation displays active child capacity ${limit} without counting history`,async({page})=>{
+  await mockApi(page);
+  const root=session({child_count:4,total_child_count:19});
+  await page.route('**/api/delegations',route=>route.fulfill({json:{roots:[{...root,children:[]}],delegations:[],max_children_per_parent:limit}}));
+  await page.goto('/desktop');
+  await page.locator('[data-view="orchestration"]:visible').click();
+  await page.locator('.tree-node').first().locator('[data-delegate]').first().click();
+  await expect(page.locator('#delegate-parent')).toHaveText(`Parent: codex-root · ${limit?'4/5 active children':'4 active children · no per-parent limit'}`);
+});

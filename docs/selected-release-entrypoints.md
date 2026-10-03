@@ -68,3 +68,71 @@ and in-place writes), verify sealed bytes cannot be written, and require refusal
 before alias changes without executing the substituted code. Selection changes
 are also rejected. This Linux memfd boundary fails closed when sealing is absent;
 no host package/policy change or fallback is attempted.
+
+
+Normal Python CLI wrappers use Python 3.11 safe-path mode (`-P`) and put the selected
+release first on `PYTHONPATH`. Calling an installed alias from an old checkout
+cannot import that checkout's `agent_console` package. The caller's working
+directory stays unchanged, preserving relative workspace defaults. The wrappers
+also disable bytecode writes (`-B`). All eight installed aliases continue to
+follow `releases/current`, with no old-wrapper fallback.
+
+CLI parity: in a managed agent session, `agentctl session create` and `agentctl
+delegate` both use capability-authenticated delegation and enforce parent role,
+project, repository, worktree, depth and capacity rules. Operator CLI `delegate`
+uses the same admission rules. Operator CLI `session create` has no parent flag
+corresponding to the UI's human Add session endpoint; that UI-only operator action
+may choose a writable child of a read-only parent without changing its authority.
+This is a surface gap, not permission for an agent to bypass delegation restrictions.
+
+### Local owner projects and environment
+
+`agentctl project list|show|create|update|delete|assign|unassign` uses the same
+manager validation as the web interface. Examples:
+
+```sh
+agentctl project create 'Example' --repository /path/in/workspace --description 'Brief'
+agentctl project show PROJECT_ID
+agentctl project update PROJECT_ID --status paused
+agentctl project assign PROJECT_ID SESSION_NAME
+agentctl project unassign PROJECT_ID SESSION_NAME
+agentctl project delete PROJECT_ID
+```
+
+`agentctl environment list|set|unset|enable|disable|suppress` manages global
+settings by default; add `--project PROJECT_ID` for a project scope. `list` and
+mutation output contain names, states, revisions and session refresh metadata,
+never values. Set values through `--stdin` (exact UTF-8, including newlines,
+maximum 32 KiB) or the hidden prompt in an interactive terminal. There is no
+value argument or `--value` option. Avoid typing secrets into shell commands:
+pipe an existing private file or use the prompt.
+
+```sh
+agentctl environment set API_KEY
+agentctl environment set API_KEY --stdin < /path/to/private/value-file
+agentctl environment list --project PROJECT_ID
+agentctl environment disable API_KEY --project PROJECT_ID
+agentctl environment enable API_KEY --project PROJECT_ID
+agentctl environment suppress API_KEY --project PROJECT_ID
+agentctl environment unset API_KEY --project PROJECT_ID
+```
+
+Disable retains the stored value and allows inherited settings to apply.
+Project-only suppress removes the inherited variable and discards that project's
+stored value; set a new value to enable it again. Unset deletes the scope entry
+and restores inheritance. Reserved execution and Console variables remain
+protected. Running sessions require an explicit restart to use changes.
+
+These commands require a local human owner terminal. Managed agent sessions
+explicitly reject them before opening a local writer; session capabilities do
+not grant owner environment administration or project assignment. Existing
+managed session tree, review, attention and delegation commands remain supported.
+If the sandbox denies their network transport, retry with authorized network
+access or escalation; there is no local database writer fallback.
+
+Parity is bounded to projects and environment. Workflow owner policy/review,
+connections and release operator actions remain web controls; existing CLI
+workflow proposal, result publication, routing, acknowledgement and inspection
+commands retain their current capability-scoped behavior.
+Manual child creation from the local operator session CLI remains a separate
+parity gap; managed delegation and the web Add session control support children.

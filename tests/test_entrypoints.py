@@ -62,6 +62,33 @@ class EntrypointTests(unittest.TestCase):
         self.assert_aliases();self.assertEqual(unrelated.read_text(),'manual')
         self.install();self.assert_aliases()
 
+    def test_python_wrappers_ignore_stale_checkout_and_follow_current_selection(self):
+        stale=self.home/'stale-checkout';(stale/'agent_console').mkdir(parents=True)
+        (stale/'agent_console/__init__.py').write_text("raise RuntimeError('stale checkout was imported')")
+        releases=[self.one,self.make_release('release-two')]
+        for release in releases:
+            for name in ('agentctl','agent-selector','agent-console-status'):
+                shutil.copy2(REPO/'scripts'/name,release/'scripts'/name)
+            for module in ('cli','selector'):
+                (release/'agent_console'/f'{module}.py').write_text(
+                    'import json, os\nprint(json.dumps({"source":__file__,"cwd":os.getcwd()}))\n')
+            manifest(release)
+        self.install()
+        environment=dict(os.environ,HOME=str(self.home),AGENT_CONSOLE_ENV_FILE=str(self.home/'absent.env'),PYTHONPATH=str(stale))
+        for release in releases:
+            Deployer(self.releases,object(),state_dir=self.state).select_release(release.name)
+            for base in (self.home/'bin',self.home/'.local/bin'):
+                for name in ('agentctl','agent-selector','agent-console-status'):
+                    with self.subTest(release=release.name,base=base,name=name):
+                        result=subprocess.run([str(base/name),'--help'],cwd=stale,env=environment,
+                            capture_output=True,text=True,timeout=15)
+                        self.assertEqual(result.returncode,0,result.stderr)
+                        outputs=[json.loads(line) for line in result.stdout.splitlines()]
+                        self.assertEqual(len(outputs),2 if name=='agent-console-status' else 1)
+                        for output in outputs:
+                            self.assertTrue(Path(output['source']).is_relative_to(release))
+                            self.assertEqual(output['cwd'],str(stale))
+
     def test_stale_paths_repaired_without_executing_old_writer(self):
         old=self.home/'old-writer';old.write_text('#!/bin/sh\ntouch '+str(self.home/'EXECUTED')+'\n');old.chmod(0o755)
         for p in self.aliases():p.parent.mkdir(parents=True,exist_ok=True);p.symlink_to(old)

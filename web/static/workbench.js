@@ -111,7 +111,10 @@ function route() {
 async function loadSettings() {
  try {
   const [me, instance] = await Promise.all([api('/api/me'), api('/api/interface')]); state.me = me; state.workspace = instance.workspace;
-  if(me.session_limits)$('#session-capacity').textContent=`Up to ${me.session_limits.managed} running sessions. Stopped sessions do not use a slot.`;
+  if(me.session_limits){
+    const limits=me.session_limits;
+    $('#session-capacity').textContent=`Up to ${limits.managed} running or reserved sessions in total. ${limits.children>0?`Up to ${limits.children} active children per parent.`:'No per-parent child limit.'} Stopped and archived sessions do not use a slot.`;
+  }
   $('#instance').textContent = instance.label;
   for (const id of ['#current-version','#settings-current']) if (instance.current_url) { $(id).href = instance.current_url; $(id).hidden = false; }
   $('#tools').replaceChildren(...me.tool_status.map(x => el('p', `${x.name} · ${x.status}${x.reason ? ` — ${x.reason}` : ''}`, 'tool')));
@@ -403,7 +406,6 @@ $('#expand-terminal').onclick = () => { const expanded = $('#terminal-panel').cl
 $('#refresh').onclick = refresh;
 window.addEventListener('hashchange', route); window.addEventListener('focus', refresh);
 initTheme($('#theme'));
-
 await refresh(); setInterval(() => { if (!document.hidden && !['#settings','#skills'].includes(location.hash) && !document.activeElement?.matches('#search,.filter-grid select')) refresh(); }, 10000);
 
 window.addEventListener('message', event => {

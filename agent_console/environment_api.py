@@ -5,47 +5,11 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from .environment import read_private
+from .environment_service import describe, mutate
 
 
 def environment_routes(manager, require_identity, static_root):
     router = APIRouter(dependencies=[Depends(require_identity)])
-
-    def scope(project_id):
-        manager.environment.scope(project_id)
-        if project_id is not None:
-            with manager.database.connect() as conn:
-                if not conn.execute("SELECT id FROM projects WHERE id=?", (project_id,)).fetchone():
-                    raise KeyError("Project does not exist")
-        return project_id
-
-    def mutate(project_id, operation):
-        # Project deletion holds the same database writer lock while clearing
-        # its private scope. Recheck existence inside the transaction, preventing
-        # an edit validated before deletion from recreating inaccessible values.
-        if project_id is None:
-            return operation()
-        manager.environment.scope(project_id)
-        with manager.database.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if not conn.execute("SELECT id FROM projects WHERE id=?", (project_id,)).fetchone():
-                raise KeyError("Project does not exist")
-            return operation()
-
-    def describe(project_id):
-        result = manager.environment.describe(scope(project_id))
-        with manager.database.connect() as conn:
-            rows = conn.execute("SELECT id, tmux_name, project_id, status FROM sessions WHERE managed=1 AND execution_kind!='integration-plan'").fetchall()
-        sessions = []
-        for row in rows:
-            if project_id and row["project_id"] != project_id:
-                continue
-            snapshot = read_private(manager.settings.state_dir / "environment-launches" / f"{row['id']}.json")
-            revision = snapshot.get("revision") if snapshot else None
-            sessions.append({"id": row["id"], "name": row["tmux_name"], "status": row["status"],
-                             "revision": revision, "refresh_required": revision != manager.environment.revision(row["project_id"])})
-        result["sessions"] = sessions
-        return result
 
     @router.get('/environment')
     def page():
@@ -53,7 +17,7 @@ def environment_routes(manager, require_identity, static_root):
 
     @router.get('/api/environment')
     def get(project_id: str | None = None):
-        return describe(project_id)
+        return describe(manager, project_id)
 
     @router.put('/api/environment/{name}')
     async def put(name: str, request: Request, project_id: str | None = None, auth=Depends(require_identity)):
@@ -66,18 +30,18 @@ def environment_routes(manager, require_identity, static_root):
             payload = json.loads(body)
             if not isinstance(payload, dict) or set(payload) - {'value', 'state'}:
                 raise ValueError()
-            mutate(project_id, lambda: manager.environment.put(name, project_id=project_id, **payload))
+            mutate(manager, project_id, lambda: manager.environment.put(name, project_id=project_id, **payload))
         except (ValueError, TypeError, UnicodeError):
             raise HTTPException(400, "Invalid environment request: check name, value, state and reserved variable rules") from None
         manager.database.audit('environment.updated', name, 'success', actor=auth.actor,
                                surface=auth.access_surface, details={'scope': manager.environment.scope(project_id)})
-        return describe(project_id)
+        return describe(manager, project_id)
 
     @router.delete('/api/environment/{name}')
     def delete(name: str, project_id: str | None = None, auth=Depends(require_identity)):
-        mutate(project_id, lambda: manager.environment.delete(name, project_id=project_id))
+        mutate(manager, project_id, lambda: manager.environment.delete(name, project_id=project_id))
         manager.database.audit('environment.deleted', name, 'success', actor=auth.actor,
                                surface=auth.access_surface, details={'scope': manager.environment.scope(project_id)})
-        return describe(project_id)
+        return describe(manager, project_id)
 
     return router

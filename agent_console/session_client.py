@@ -1,9 +1,15 @@
 """Managed-session CLI transport; never opens or migrates Console databases."""
+import errno
 import json
 import os
 import time
 import urllib.error
 import urllib.request
+
+
+NETWORK_PERMISSION_ERROR = ("Console session network access was denied by the sandbox. "
+                            "Retry with authorized network access or network escalation; "
+                            "no local writer fallback was attempted.")
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -28,12 +34,13 @@ def request(command, payload):
                 raise ValueError('session response too large')
             return json.loads(raw)
     except urllib.error.HTTPError as exc:
-        try:
-            detail = json.loads(exc.read(4096)).get('detail', 'session request rejected')
-        except (ValueError, UnicodeError):
-            detail = 'session request rejected'
-        raise ValueError(str(detail)) from None
-    except urllib.error.URLError:
+        # Remote error bodies may contain submitted data or credentials.
+        raise ValueError(f'Console session request rejected (HTTP {exc.code}); check session authorization and request constraints') from None
+    except PermissionError:
+        raise RuntimeError(NETWORK_PERMISSION_ERROR) from None
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, PermissionError) or getattr(exc.reason, "errno", None) in {errno.EPERM, errno.EACCES}:
+            raise RuntimeError(NETWORK_PERMISSION_ERROR) from None
         raise RuntimeError('Console session endpoint unavailable; no local writer fallback was attempted') from None
 
 

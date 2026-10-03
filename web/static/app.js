@@ -231,7 +231,7 @@ function renderInspector(session) {
       <div><dt>Parent / plan</dt><dd>${escapeHtml(session.parent_session || 'Root')} · ${escapeHtml(session.linked_plan_id || 'No plan')}</dd></div>
       <div><dt>Process / socket</dt><dd>${escapeHtml(session.current_command || 'None')} · ${escapeHtml(session.socket_scope)}</dd></div>
       <div><dt>Clients</dt><dd>${session.attached_clients} attached</dd></div>
-      <div><dt>Children</dt><dd>${session.child_count || 0} / ${session.total_child_count || 0} active</dd></div>
+      <div><dt>Children</dt><dd>${session.child_count || 0} active · ${session.total_child_count || 0} total</dd></div>
       <div><dt>Last activity</dt><dd title="${escapeHtml(session.last_activity || '')}">${formatActivity(session.last_activity)}</dd></div>
       <div><dt>Attention updated</dt><dd>${escapeHtml(session.attention_updated_by || 'Never')} · ${formatActivity(session.attention_updated_at)}</dd></div>
     </dl>
@@ -343,7 +343,8 @@ function updateContextSelect(toolSelect, contextSelect) {
 async function openDelegate(session) {
   delegateForm.reset(); delegateForm.elements.parent.value = session.tmux_name;
   delegateForm.elements.repository.value = session.repository || '';
-  $('#delegate-parent').textContent = `Parent: ${session.tmux_name} · ${session.child_count}/${state.tree.max_children_per_parent || 3} children`;
+  const childLimit=state.tree.max_children_per_parent??0;
+  $('#delegate-parent').textContent = `Parent: ${session.tmux_name} · ${session.child_count||0}${childLimit>0?'/'+childLimit:''} active children${childLimit>0?'':' · no per-parent limit'}`;
   try {
     const allProfiles = await api('/api/profiles');
     const parentProfile = session.profile || 'general';

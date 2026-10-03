@@ -48,7 +48,7 @@ class Settings:
     legacy_tmux_socket_path: Path | None = None
     config_dir: Path | None = None
     releases_root: Path | None = None
-    max_children_per_parent: int = 3
+    max_children_per_parent: int = 0
     max_managed_sessions: int = 12
     deployment_mode: str = "disabled"
     user_service_name: str = "agent-console-web.service"
@@ -117,9 +117,9 @@ class Settings:
                     state_dir / "releases",
                 )
             ).expanduser(),
-            max_children_per_parent=_safe_parse_int(
-                os.getenv("AGENT_CONSOLE_MAX_CHILDREN"), 3
-            ),
+            max_children_per_parent=max(0, _safe_parse_int(
+                os.getenv("AGENT_CONSOLE_MAX_CHILDREN"), 0
+            )),
             max_managed_sessions=_safe_parse_int(
                 os.getenv("AGENT_CONSOLE_MAX_SESSIONS"), 12
             ),

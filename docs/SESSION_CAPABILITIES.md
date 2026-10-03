@@ -22,7 +22,7 @@ coding delegates and writable delegates into Git repositories get isolated workt
 Non-coding general/shell work in a non-Git workspace remains supported.
 Human Add-session links retain their existing operator authority; agent capability
 calls cannot use them to escalate. Creation checks depth (eight),
-existing child limits, and global capacity under the existing admission lock.
+configured positive per-parent child limits (default `0`, unlimited), and global capacity under the existing admission lock. Only active/reserved children count toward child capacity; stopped and archived history does not.
 A child that disappears without `ready_for_review` is a failure; `blocked` or
 `needs_input` requires intervention. Ordinary single sessions need no extra stages.
 
