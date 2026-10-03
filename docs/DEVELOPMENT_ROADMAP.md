@@ -1,3 +1,8 @@
+## Exact session targeting — 2026-10-03 (#141)
+
+- Implemented: exact tmux session/pane targets across controls, reads, launchers and browser terminal attachment; prefix-related child sessions cannot substitute for a stopped parent.
+- Verification: isolated real tmux regressions and live parent/child checks in OVERHAUL_VERIFICATION_20261003.md.
+
 ## Frontend audit and CLI parity follow-up — 2026-10-03 (#141)
 
 - Implemented: compact accessible SVG controls, named dialogs, keyboard terminal close, HTTP-IP clipboard fallback, and project editing/deletion in full desktop/mobile controls.

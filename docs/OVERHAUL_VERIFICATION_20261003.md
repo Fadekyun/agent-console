@@ -1,6 +1,6 @@
 # Console overhaul verification — 2026-10-03
 
-Issue: #141. Baseline: local deployed `cf4cb0864c87`, v0.24.1. Initial deployed release: v0.25.0 (`22af690441c0`). Follow-up candidate: v0.27.0 on the isolated `feat/console-overhaul-20261003` branch. GitHub main was older than the deployed baseline; this work does not discard those local improvements or imply a push/merge.
+Issue: #141. Baseline: local deployed `cf4cb0864c87`, v0.24.1. Initial deployed release: v0.25.0 (`22af690441c0`). Follow-up candidate: v0.27.1 on the isolated `feat/console-overhaul-20261003` branch. GitHub main was older than the deployed baseline; this work does not discard those local improvements or imply a push/merge.
 
 ## Delivered behavior
 
@@ -101,3 +101,28 @@ inspection, session control and version. Log: `/tmp/console-final-parity-tests.l
 The only warning is the existing Starlette/httpx test-client deprecation. The
 v0.27 changes do not change UI interaction code; the previously recorded 82
 browser checks and live desktop/phone/insecure-IP acceptance remain applicable.
+
+## Live-discovered exact tmux target fix — v0.27.1
+
+After v0.27.0 passed its canary and preserved 573/573 session records, a live
+fixture named a child with its parent's name as a prefix. tmux `has-session -t`
+accepted the remaining child after the parent was killed, causing a false
+"session still exists" error. The same tmux fallback could affect later reads
+or controls. Exact session/pane targets now prevent that substitution, including
+browser terminal attachment. The initial fixture report and service error were
+retained; the fixture script's separate incorrect inspection URL was corrected.
+The two original fixtures were stopped and hidden after inspection.
+
+Older pre-capability sessions can have a session ID/token but no reporting URL.
+They now fail closed instead of opening a local writer. To use the existing
+capability without restarting, set `AGENT_CONSOLE_REPORTING_URL` to the configured
+Console URL for that command. New launches receive it automatically. The parent
+completion check used this explicit configured URL; no marker was removed and
+no local writer fallback was used.
+
+Final exact-target regression run: **241 passed, 28 subtests passed** in 98
+seconds across real tmux targeting, core, authenticated web, session control,
+inspection, parent-cycle rejection, child capacity and version checks. Log:
+`/tmp/console-exact-target-final.log`. It verifies both missing-target rejection
+and normal create/restart/rename/scroll behavior. The existing Starlette/httpx
+warning is unchanged.

@@ -1,3 +1,10 @@
+## 0.27.1 — unreleased, 2026-10-03 (#141)
+
+- Impact: tmux operations target exact session names. A stopped parent can no longer match a similarly named child during existence checks, capture, controls or terminal attachment. Stopping a parent leaves its child running and reports the correct result.
+- Configuration/migration: none. Existing sessions and names remain unchanged; restart only the web service and refresh browser assets.
+- Verification: 241 tests and 28 subtests passed, including real isolated tmux prefix-name regressions and affected core/web/session tests. Live parent/child plus terminal checks are recorded in OVERHAUL_VERIFICATION_20261003.md. The initial live failure was retained as evidence and prompted this patch.
+- Rollback: retain v0.27.0 and the private pre-cutover backup. Select through the schema guard and restart the web service, preserving databases and tmux. The prior version retains ambiguous tmux prefix behavior.
+
 ## 0.27.0 — unreleased, 2026-10-03 (#141)
 
 - Impact: local owner `agentctl workflow manage` now covers proposal/policy/control, step preview/review/edit/retry, attempt reconciliation, connection inspection/attachment/dependencies/delivery and release target/evidence/preview/authorization/start. Structured input uses `--stdin` or `--json-file` and the same API validators/services as the UI; versions, hashes and request keys remain explicit. Local `session create --parent NAME_OR_ID` creates manual children with inherited project/repository. Managed commands retain capability-scoped delegation and fail closed when reporting context is incomplete.
