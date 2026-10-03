@@ -1,8 +1,75 @@
 #!/usr/bin/env bash
+# Managed launches already contain resolved credentials and native MCP settings.
 set -euo pipefail
 if [[ -n "${AGENT_CONSOLE_CONTEXT_FILE:-}" ]]; then
   : "${CMD_API_KEY:?selected CommandCode credential is missing}"
 fi
+managed_launch=false
+if [[ -n "${AGENT_CONSOLE_CONTEXT_FILE:-}${AGENT_CONSOLE_SESSION_ID:-}${AGENT_CONSOLE_EVIDENCE_CAPABILITY:-}${AGENT_CONSOLE_REPORTING_URL:-}${AGENT_CONSOLE_SESSION_NAME:-}" ]]; then
+  managed_launch=true
+fi
 pi_node="${AGCONSOLE_PI_NODE:-$HOME/.local/share/agent-console/pi-runtime/node_modules/node/bin/node}"
-pi_cli="${AGCONSOLE_PI_CLI:-$HOME/.local/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js}"
+pi_pkg="$HOME/.local/lib/node_modules/@earendil-works/pi-coding-agent"
+pi_cli="${AGCONSOLE_PI_CLI:-$pi_pkg/dist/bundle/cli.js}"
+if [[ -z "${AGCONSOLE_PI_CLI:-}" && ! -f "$pi_cli" && -f "$pi_pkg/dist/cli.js" ]]; then
+  pi_cli="$pi_pkg/dist/cli.js"
+fi
+if [[ ! -x "$pi_node" || ! -f "$pi_cli" ]]; then
+  printf 'pi: configured Node runtime or CLI bundle is unavailable\n' >&2
+  exit 127
+fi
+
+agent_dir="${PI_CODING_AGENT_DIR:-}"
+if [[ -n "$agent_dir" && -d "$agent_dir" ]]; then
+  ext_root="${AGCONSOLE_PI_EXTENSIONS:-$HOME/.local/share/agent-console/pi-extensions}"
+  if [[ -d "$ext_root" && ! -e "$agent_dir/extensions" && ! -L "$agent_dir/extensions" ]]; then
+    ln -s "$ext_root" "$agent_dir/extensions"
+  fi
+  # The provider creates the selected snapshot link first. Never replace it.
+  skills_root="${AGCONSOLE_SKILLS_ROOT:-}"
+  if [[ -n "$skills_root" && -d "$skills_root" && ! -e "$agent_dir/skills" && ! -L "$agent_dir/skills" ]]; then
+    ln -s "$skills_root" "$agent_dir/skills"
+  fi
+fi
+
+if "$managed_launch"; then
+  # Preserve readable defaults without invoking the retired MCP normalizer.
+  # Existing explicit theme/settings and the native mcp.json remain unchanged.
+  if [[ -n "$agent_dir" && -d "$agent_dir" ]]; then
+    "$pi_node" - "$agent_dir" <<'JS'
+const fs = require('fs'), path = require('path');
+try {
+  const file = path.join(process.argv[2], 'settings.json');
+  let settings = {};
+  if (fs.existsSync(file)) settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error();
+  if (typeof settings.theme !== 'string' || !settings.theme) {
+    settings.theme = process.env.AGCONSOLE_PI_THEME || 'dark';
+    const temporary = `${file}.wrapper-${process.pid}`;
+    fs.writeFileSync(temporary, JSON.stringify(settings, null, 2) + '\n', {mode: 0o600, flag: 'wx'});
+    fs.renameSync(temporary, file);
+  }
+} catch {
+  process.stderr.write('pi: cannot preserve the existing agent settings; inspect settings.json\n');
+  process.exit(1);
+}
+JS
+  fi
+else
+  # Compatibility for explicitly standalone use. Managed launches never source
+  # these files or rewrite native MCP configuration after Console resolved it.
+  for secret_file in "${AGENT_CONSOLE_OPENROUTER_ENV:-$HOME/.config/agent-console/secrets.d/openrouter-main.env}" \
+                     "${AGENT_CONSOLE_BUSHI_ENV:-$HOME/.config/agent-console/secrets.d/bushi-mcp.env}"; do
+    if [[ -f "$secret_file" ]]; then
+      set -a
+      # shellcheck disable=SC1090
+      source "$secret_file"
+      set +a
+    fi
+  done
+  mcp_shim="$HOME/.local/bin/pi-normalize-mcp-config.cjs"
+  if [[ -f "$mcp_shim" ]]; then
+    "$pi_node" "$mcp_shim" || true
+  fi
+fi
 exec "$pi_node" "$pi_cli" "$@"
