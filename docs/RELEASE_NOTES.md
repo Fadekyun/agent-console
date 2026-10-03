@@ -1,3 +1,10 @@
+## 0.27.0 — unreleased, 2026-10-03 (#141)
+
+- Impact: local owner `agentctl workflow manage` now covers proposal/policy/control, step preview/review/edit/retry, attempt reconciliation, connection inspection/attachment/dependencies/delivery and release target/evidence/preview/authorization/start. Structured input uses `--stdin` or `--json-file` and the same API validators/services as the UI; versions, hashes and request keys remain explicit. Local `session create --parent NAME_OR_ID` creates manual children with inherited project/repository. Managed commands retain capability-scoped delegation and fail closed when reporting context is incomplete.
+- Configuration/migration: no database or runtime configuration change. Owner commands require a local human terminal; managed markers are checked before opening a writer. Workbench, Coordination and Release guides advance to revision 2026-10-03.2; other guides retain 2026-10-03.1. New sessions or explicit restarts receive updated guides.
+- Verification: 75 focused tests and 131 subtests passed across owner workflow/project/environment commands, child capacity, all seven harness environment launchers, managed session control and inspection. Final release and ancestry-cycle regression evidence is recorded in OVERHAUL_VERIFICATION_20261003.md. No external release is executed by the release CLI fixtures.
+- Rollback: retain selected v0.26.0 and private cutover backup. Select it through the schema guard and restart only the web service; preserve operational databases and tmux sessions. Guide changes are independently reversible using canonical/mirror backups and refreshed reviews.
+
 ## 0.26.0 — unreleased, 2026-10-03 (#141)
 
 - Impact: unlimited children per parent by default, while explicit positive limits and global/depth guards remain; owner CLI project/environment management; secure stdin/prompt secret entry; compact SVG utility controls without emoji; HTTP-IP terminal copy/paste fallbacks; project edit/status/delete controls in desktop and phone panels; named dialogs and keyboard-operable terminal close controls.

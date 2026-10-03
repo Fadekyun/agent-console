@@ -284,3 +284,39 @@ class EnvironmentLifecycleTests(unittest.TestCase):
             self.manager.environment.put('BUSHI_MCP_TOKEN', value='', state='enabled')
             self.manager.restart('env-pi')
             self.assertFalse(json.loads(native.read_text())['mcpServers']['bushi']['enabled'])
+
+    def test_each_harness_adapter_executes_with_the_same_project_environment(self):
+        """Exercise every real adapter and launcher with inert provider executables."""
+        from agent_console.providers import TOOL_BINARIES
+        self.configure_commandcode()
+        data = self.manager.auth._read()
+        data['contexts']['pi']['commandcode-main'] = data['contexts']['hermes']['commandcode-main'].copy()
+        self.manager.auth._write(data)
+        project = self.manager.create_project(name='All harness environment')
+        keys = ['MATRIX_SHARED', 'MATRIX_OVERRIDE', 'MATRIX_SUPPRESSED', 'MATRIX_EMPTY', 'MATRIX_LITERAL']
+        literal = "quote'\"\n$(touch " + str(self.root/'must-not-execute') + ')'
+        self.manager.environment.put(keys[0], value='global-value')
+        self.manager.environment.put(keys[1], value='global-original')
+        self.manager.environment.put(keys[1], value='project-override', project_id=project['id'])
+        self.manager.environment.put(keys[2], value='global-hidden')
+        self.manager.environment.put(keys[2], state='suppressed', project_id=project['id'])
+        self.manager.environment.put(keys[3], value='', project_id=project['id'])
+        self.manager.environment.put(keys[4], value=literal, project_id=project['id'])
+        executable = self.root/'inspect-provider-environment'
+        executable.write_text('#!' + sys.executable + '\nimport os,json\nprint(json.dumps({k:os.getenv(k) for k in ' + repr(keys) + '}))\n')
+        executable.chmod(0o700)
+        expected = dict(zip(keys, ['global-value', 'project-override', None, '', literal]))
+        with patch.dict(TOOL_BINARIES, {tool:executable for tool in TOOL_BINARIES}):
+            for tool in TOOL_BINARIES:
+                with self.subTest(tool=tool):
+                    name = 'matrix-' + tool
+                    spec = self.manager._launch_spec(tool, 'general', self.workspace, None,
+                        model='opencode-go/fixture-model' if tool=='opencode' else None,
+                        session_name=name, session_id=name, project_id=project['id'])
+                    launcher = self.manager._write_launcher(name, name, spec, project_id=project['id'])
+                    process = subprocess.run(['bash', str(launcher)], capture_output=True, text=True, check=True, timeout=10)
+                    self.assertEqual(json.loads(process.stdout), expected)
+                    self.assertNotIn('project-override', launcher.read_text())
+                    self.assertNotIn(literal, launcher.read_text())
+                    self.assertNotIn(b'project-override', self.manager.database.path.read_bytes())
+        self.assertFalse((self.root/'must-not-execute').exists())

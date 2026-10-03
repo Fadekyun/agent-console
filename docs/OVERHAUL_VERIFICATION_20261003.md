@@ -1,6 +1,6 @@
 # Console overhaul verification — 2026-10-03
 
-Issue: #141. Baseline: local deployed `cf4cb0864c87`, v0.24.1. Initial deployed release: v0.25.0 (`22af690441c0`). Follow-up candidate: v0.26.0 on the isolated `feat/console-overhaul-20261003` branch. GitHub main was older than the deployed baseline; this work does not discard those local improvements or imply a push/merge.
+Issue: #141. Baseline: local deployed `cf4cb0864c87`, v0.24.1. Initial deployed release: v0.25.0 (`22af690441c0`). Follow-up candidate: v0.27.0 on the isolated `feat/console-overhaul-20261003` branch. GitHub main was older than the deployed baseline; this work does not discard those local improvements or imply a push/merge.
 
 ## Delivered behavior
 
@@ -36,7 +36,7 @@ The broad test run's workflow suite passed after the earlier host-load-related r
 
 ## Follow-up audit and verification
 
-The scout reviewed the full frontend and consulted primary MDN/WAI guidance. Confirmed findings were implemented: environment scope isolation, recovered bootstrap, older release candidates, skill failure diagnostics, reusable controls, guarded editors, preserved drafts, mobile group navigation and duplicate-submit prevention, accessible icons/dialogs/terminal close, project management, and insecure-HTTP clipboard handling. Owner project/environment CLI commands were added; advanced workflow/connection/release actions remain available through their existing web controls.
+The scout reviewed the full frontend and consulted primary MDN/WAI guidance. Confirmed findings were implemented: environment scope isolation, recovered bootstrap, older release candidates, skill failure diagnostics, reusable controls, guarded editors, preserved drafts, mobile group navigation and duplicate-submit prevention, accessible icons/dialogs/terminal close, project management, and insecure-HTTP clipboard handling. Owner project/environment CLI commands were added; advanced workflow/connection/release actions were subsequently given owner CLI parity in v0.27.0 below.
 
 - Integrated affected backend suites: **97 passed, 82 subtests passed** (capacity, owner CLI, selected-release entrypoints, environment, session controls, inspection and versions).
 - Combined desktop controls/icons/project run: **25 passed, 1 skipped**; two fixture errors were corrected (polling instead of clicking a toolbar obscured by an open inspector, and the select's accessible role). Both corrections passed on rerun, giving 27 verified cases.
@@ -60,3 +60,23 @@ Live result, selected SHA, private backup location and session-count comparison 
 ## Remaining verification boundaries
 
 Native macOS login startup, Windows/WSL2 bootstrap and Docker image execution were not available for this Linux-host verification. Linux `/proc`-based presence and durable integration-process ownership are not claimed portable merely because a LaunchAgent can be installed. Physical mobile keyboards/trackpads remain separate from Chromium viewport checks. CI configuration is added but remote CI/branch protection was not run or changed because no push/merge was performed. A skill discovery result proves availability, not that a model invoked every skill. No claim is made that every future workload or third-party harness version is verified.
+
+## Final requirement audit and CLI parity — v0.27.0
+
+The original design and v2 implementation plan were compared with current source, deployed behavior and acceptance records. Concept B and the subsequent user request for stable ordering supersede earlier concept/priority-order prototypes. Mandatory multi-stage review, provider chat-history restoration and suppression of every native skill source were not accepted requirements. The current simple one-session path remains the default.
+
+| Requirement | Current implementation and evidence |
+| --- | --- |
+| Stable Add/session ordering and root-first resume | Keyed tree reconciliation, immutable creation ordering and explicit root navigation; workbench/browser and live checks above |
+| Simple mobile controls, icons and themes | Accessible SVG controls, 44px targets, phone reflow, three palettes and appearance modes; desktop/phone/insecure-HTTP tests above |
+| Clipboard over plain IP | Selection-preserving copy fallback, native paste and unsent manual draft; actual insecure-origin browser and live checks above |
+| Children beyond three, bounded agent reads/control | Unlimited default per-parent capacity with explicit/global/depth guards; all roles use project-scoped reads, writable descendant controls and read-only completion; focused backend/native scout evidence above |
+| Shared environment entry and launch delivery | Write-only global/project UI/API/CLI, safe inheritance/suppression/rotation; an additional execution test launches all seven adapter specs through an inert executable and verifies actual child variables, literal multiline/empty values, no expansion and no launcher/SQLite values |
+| Current roles and skills | Eleven installed roles match reviewed bundled templates; seven canonical guides delivered with content receipts; three guide revisions add current owner CLI boundaries |
+| UI/CLI/backend consistency | `workflow manage` reuses UI models and services for owner policy, review, connections and release; `session create --parent` inherits parent project/repository for human owners while managed invocations retain delegation restrictions |
+| Durable workflows, selected results and release authority | Existing staging acceptance and native dispatch/release evidence; new owner CLI tests exercise actual services, stale versions/hashes, dependency signatures, uncertain-attempt reconciliation and release grants/probe admission without executing an external release |
+| Deployment and issue cleanup | Isolated exact-SHA release/private canary, configuration-preserving installation, state backups, exact runtime health and session preservation; obsolete/fixed GitHub issues closed with evidence under #141 |
+
+Current CLI/environment/capacity/control/inspection validation: **75 passed, 131 subtests passed**. New workflow tests cover 60 managed-marker/route cases, reject before manager construction or request reads, and never silently generate authorization hashes/keys. Owner child tests use real isolated tmux sessions; name/ID parents inherit project/repository and missing parents do not launch. Managed child requests remain on the capability endpoint, and incomplete reporting context cannot fall back to a local writer. See selected-release-entrypoints.md for operator examples.
+
+Physical-device, unavailable native Claude, non-Linux runner and remote publication/CI limits remain explicitly bounded; they are not represented as executed verification. Source publication remains separate from the user-authorized local port-3210 deployment.

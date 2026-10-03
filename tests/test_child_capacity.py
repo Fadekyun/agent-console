@@ -91,6 +91,45 @@ class ChildCapacityTests(unittest.TestCase):
         root = self.manager.inspect('agent-parent')
         self.assertEqual((root['child_count'], root['total_child_count']), (5, 5))
 
+    def test_owner_cli_child_inherits_project_by_name_or_id(self):
+        project = self.manager.create_project('CLI project', repository=str(self.workspace))
+        parent = self.manager.create(tool='shell', profile='planner', name='cli-parent',
+            project_id=project['id'], repository=str(self.workspace), creator_surface='web')
+        emitted = []
+        markers = {key: '' for key in ('AGENT_CONSOLE_REPORTING_URL',
+            'AGENT_CONSOLE_SESSION_ID', 'AGENT_CONSOLE_EVIDENCE_CAPABILITY')}
+        with patch.dict(os.environ, markers), patch.object(cli, 'SessionManager', return_value=self.manager), \
+                patch.object(cli, 'emit', side_effect=emitted.append):
+            for number, ref in enumerate((parent['id'], parent['tmux_name'])):
+                self.assertEqual(cli.main(['session', 'create', '--tool', 'shell', '--profile', 'coder',
+                    '--parent', ref, '--name', 'cli-child-' + str(number)]), 0)
+                self.assertEqual(emitted[-1]['parent_session_id'], parent['id'])
+                self.assertEqual(emitted[-1]['project_id'], project['id'])
+                self.assertEqual(emitted[-1]['repository'], str(self.workspace))
+            self.assertEqual(cli.main(['session', 'create', '--tool', 'shell', '--parent', 'missing',
+                '--name', 'not-created']), 2)
+            self.assertFalse(self.manager.tmux.exists('not-created'))
+        self.assertEqual(self.delegate(parent, 'cannot-escalate', profile='coder').status_code, 403)
+
+    def test_managed_create_parent_uses_capability_and_partial_context_fails_closed(self):
+        parent = self.create('cli-managed-parent')
+        emitted = []
+        def transport(command, payload):
+            self.assertEqual(payload['name'], parent['id'])
+            response = self.control(parent, command, payload)
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()
+        with patch.dict(os.environ, {'AGENT_CONSOLE_REPORTING_URL':'http://fixture.invalid',
+                'AGENT_CONSOLE_SESSION_ID':parent['id']}), \
+                patch('agent_console.session_client.request', side_effect=transport), \
+                patch.object(cli, 'SessionManager', side_effect=AssertionError('no local writer')), \
+                patch.object(cli, 'emit', side_effect=emitted.append):
+            self.assertEqual(cli.main(['session', 'create', '--tool', 'shell', '--profile', 'scout',
+                '--parent', parent['id'], '--task', 'Bounded task', '--name', 'cli-managed-child']), 0)
+            self.assertEqual(emitted[-1]['session']['parent_session_id'], parent['id'])
+            with patch.dict(os.environ, {'AGENT_CONSOLE_REPORTING_URL':''}):
+                self.assertEqual(cli.main(['session', 'create', '--tool', 'shell', '--parent', parent['id']]), 2)
+
     def test_explicit_limit_reclaims_stopped_and_archived_children(self):
         self.manager.settings = replace(self.manager.settings, max_children_per_parent=2)
         parent = self.create('limited-parent')

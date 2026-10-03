@@ -117,6 +117,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--tool", required=True, choices=sorted(TOOLS))
     create.add_argument("--profile", default="general", choices=sorted(PROFILES))
     create.add_argument("--name")
+    create.add_argument("--parent", help="parent session name or durable ID; inherits project and repository")
     create.add_argument("--task")
     create.add_argument("--repository")
     create.add_argument("--worktree", action="store_true")
@@ -416,8 +417,10 @@ def main(argv: list[str] | None = None) -> int:
             if exit_code:
                 print("agentctl: integration operation rejected", file=sys.stderr)
             return exit_code
-        if os.getenv("AGENT_CONSOLE_REPORTING_URL"):
-            from .session_client import handles, run as run_session_control
+        from .session_client import handles, run as run_session_control
+        if handles(args) and any(os.getenv(key) for key in ("AGENT_CONSOLE_REPORTING_URL", "AGENT_CONSOLE_SESSION_ID", "AGENT_CONSOLE_EVIDENCE_CAPABILITY")):
+            if not os.getenv("AGENT_CONSOLE_REPORTING_URL"):
+                raise PermissionError("managed session reporting URL required; no local writer fallback")
             if handles(args):
                 result = run_session_control(args)
                 emit(result)
@@ -546,13 +549,25 @@ def main(argv: list[str] | None = None) -> int:
             elif args.session_command == "attach":
                 manager.attach(args.name)
             elif args.session_command == "create":
+                parent = None
+                if args.parent:
+                    with manager.database.connect() as conn:
+                        rows = conn.execute("SELECT tmux_name FROM sessions WHERE id=? OR tmux_name=?",
+                                            (args.parent, args.parent)).fetchall()
+                    if len(rows) != 1:
+                        raise ValueError("Choose an existing, unambiguous parent session")
+                    parent = manager.inspect(rows[0]["tmux_name"])
+                    if not parent.get("managed") or parent.get("execution_kind") == "integration-plan":
+                        raise ValueError("Choose a managed interactive parent session")
                 emit(
                     manager.create(
                         tool=args.tool,
                         profile=args.profile,
                         name=args.name,
                         task=args.task,
-                        repository=args.repository,
+                        repository=args.repository or (parent.get("repository") if parent else None),
+                        parent_session_id=parent["id"] if parent else None,
+                        project_id=parent.get("project_id") if parent else None,
                         worktree=args.worktree,
                         auth_context=args.auth_context,
                         agent_mode=args.agent_mode,
