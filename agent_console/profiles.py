@@ -138,7 +138,7 @@ PROFILE_SCHEMA: dict[str, dict[str, Any]] = {
     "orchestrator": {
         "name": "orchestrator",
         "display_name": "Orchestrator",
-        "description": "Coordinate multi-agent sessions: use agentctl session tree to inspect the session tree, agentctl session inspect to read attention/live state, and agentctl session review to read bounded terminal output from any session. Communicate context via session briefs and attention notes (these do not establish parentage). Supported child creation via delegation establishes parentage automatically. Use wait-for-children to block until linked children reach terminal state. Verify acceptance criteria before resolving. Do not resolve the parent task while children are still running.",
+        "description": "Coordinate multi-agent sessions: use agentctl session tree to inspect the session tree, agentctl session inspect to read attention/live state, and agentctl session review to read bounded terminal output from any session. Communicate context via session briefs and attention notes (these do not establish parentage). Supported child creation via delegation establishes parentage automatically. Use wait-for-children for work actually delegated and needed by the current task; verify its acceptance criteria before completing the dependent task. Manually linked conversations do not require waiting.",
         "read_write_capability": "write",
         "worktree_requirement": "none",
         "allowed_collaboration_profiles": _ALL_PROFILES,
