@@ -7,6 +7,7 @@ from pathlib import Path
 import selectors
 import shutil
 import stat
+import sys
 import subprocess
 import time
 
@@ -134,7 +135,12 @@ def _read_file(path: Path, root: Path, *, tail: bool = False) -> tuple[str | Non
         except FileNotFoundError:
             return None, False
         with os.fdopen(fd, "rb") as stream:
-            actual = Path(os.readlink(f"/proc/self/fd/{fd}"))
+            if sys.platform == "darwin":
+                import fcntl
+                # macOS F_GETPATH checks the opened descriptor, not a raced path.
+                actual = Path(os.fsdecode(fcntl.fcntl(fd, 50, bytes(1024)).split(b"\0", 1)[0]))
+            else:
+                actual = Path(os.readlink(f"/proc/self/fd/{fd}"))
             actual.relative_to(root)
             metadata = os.fstat(fd)
             if not stat.S_ISREG(metadata.st_mode):
@@ -150,10 +156,17 @@ def _read_file(path: Path, root: Path, *, tail: bool = False) -> tuple[str | Non
 
 
 class InspectionViews:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, snapshot=None, current_id=None):
         self.settings = settings
-        self.snapshot = read_session_snapshot(settings.database_path)
-        self.observation = TmuxObservation(settings)
+        self.current_id = current_id
+        self.snapshot = snapshot if snapshot is not None else read_session_snapshot(settings.database_path)
+        self.observation_error = None
+        try:
+            self.observation = TmuxObservation(settings)
+        except InspectionUnavailable as exc:
+            from types import SimpleNamespace
+            self.observation_error = exc.code
+            self.observation = SimpleNamespace(sessions={}, observed_at=None)
         self.sessions = self._sessions()
 
     def _sessions(self):
@@ -183,6 +196,10 @@ class InspectionViews:
             item["observation_source"] = "tmux"
             item["actions"] = (["interrupt", "kill"] if observation else []) if item["execution_kind"] != "interactive" else (
                 ["archive"] + (["attach", "interrupt", "kill"] + (["restart"] if item["managed"] and item["launcher_path"] else []) if observation else []))
+            if self.observation_error:
+                item.update(running=None, live_state="unknown", observed_status="unknown",
+                            state_disagreement=None, observation_source="unavailable",
+                            observation_error=self.observation_error, actions=[])
             result.append(item)
         for name, observation in live.items():
             if name not in known:
@@ -212,7 +229,7 @@ class InspectionViews:
         if name:
             validate_session_name(name)
             return name
-        session_id = (os.getenv("AGENT_CONSOLE_SESSION_ID") or "").strip()
+        session_id = self.current_id or (os.getenv("AGENT_CONSOLE_SESSION_ID") or "").strip()
         if session_id:
             for session in self.sessions:
                 if session.get("id") == session_id and session.get("tmux_name"):
@@ -310,8 +327,8 @@ class InspectionViews:
             "line_count": len(content.splitlines()), "lines": lines, "truncated": truncated, "notice": NOTICE, "content": content}
 
 
-def read_route(args, route):
-    settings = Settings.from_env()  # Pure environment parsing, no ensure_state_dirs.
+def read_route(args, route, *, views=None):
+    settings = views.settings if views is not None else Settings.from_env()  # Pure environment parsing, no ensure_state_dirs.
     if route[0] == "profile":
         if route[1] == "list": return installed_profiles(settings.profile_dir)
         validate_profile(args.name)
@@ -324,7 +341,7 @@ def read_route(args, route):
         return {"name": args.name, "read_only": metadata["read_write_capability"] == "read_only",
             "path": str(settings.profile_dir / f"{args.name}.md"), "content": content,
             **{key: sorted(metadata[key]) if isinstance(metadata[key], frozenset) else metadata[key] for key in keys}}
-    views = InspectionViews(settings)
+    views = views if views is not None else InspectionViews(settings)
     if route == ("session", "list"): return views.sessions
     if route == ("session", "inspect"): return views.inspect(args.name)
     if route == ("session", "relatives"):

@@ -81,6 +81,8 @@ class SkillToolCapability:
             "supports_permissions": self.supports_permissions,
             "materialization_method": self.materialization_method,
             "can_isolate_skills": self.can_isolate_skills,
+            "selected_snapshot_delivery": self.can_isolate_skills,
+            "suppresses_native_sources": False,
             "verification": self.verification,
             "discovery_sources": [source.as_dict() for source in self.discovery_sources],
             "configured_sources_inspected": self.configured_sources_inspected,
@@ -131,7 +133,7 @@ SKILL_TOOL_CAPABILITIES: dict[str, SkillToolCapability] = {
         supports_on_demand=True,
         supports_permissions=True,
         materialization_method="symlink",
-        can_isolate_skills=False,
+        can_isolate_skills=True,
         verification="recorded-version",
         discovery_sources=(
             SkillDiscoverySource("native-global", "home", ".claude/skills", True, None, False),
@@ -146,7 +148,7 @@ SKILL_TOOL_CAPABILITIES: dict[str, SkillToolCapability] = {
         supports_on_demand=True,
         supports_permissions=False,
         materialization_method="symlink",
-        can_isolate_skills=False,
+        can_isolate_skills=True,
         verification="recorded-version",
         discovery_sources=(
             SkillDiscoverySource("native-global", "home", ".hermes/skills", True, None, False),
@@ -183,7 +185,7 @@ SKILL_TOOL_CAPABILITIES: dict[str, SkillToolCapability] = {
         supports_on_demand=True,
         supports_permissions=True,
         materialization_method="symlink",
-        can_isolate_skills=False,
+        can_isolate_skills=True,
         verification="exact-version",
         discovery_sources=(
             # Repeated isolated 1.18.30 discovery selected different winners

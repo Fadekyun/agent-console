@@ -121,7 +121,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--worktree", action="store_true")
     create.add_argument("--auth-context")
     create.add_argument("--agent-mode", choices=["plan", "build", "auto"])
-    create.add_argument("--provider", choices=["openrouter", "opencode"])
+    create.add_argument("--provider", choices=["openrouter", "opencode", "opencode-go"])
     create.add_argument("--model")
     create.add_argument("--effort", choices=sorted(CODEX_EFFORT_LEVELS),
                         help="Codex reasoning effort (codex/codex-pro only)")
@@ -202,7 +202,7 @@ def parser() -> argparse.ArgumentParser:
     plan_promote.add_argument("--yes", action="store_true")
 
     delegate = commands.add_parser("delegate")
-    delegate.add_argument("profile", choices=["planner", "researcher", "reviewer", "scout"])
+    delegate.add_argument("profile", choices=sorted(PROFILES))
     delegate.add_argument("--parent", required=True)
     delegate.add_argument("--task", required=True)
     delegate.add_argument("--repository")
@@ -210,6 +210,7 @@ def parser() -> argparse.ArgumentParser:
     delegate.add_argument("--name")
     delegate.add_argument("--auth-context")
     delegate.add_argument("--agent-mode", choices=["plan", "build", "auto"])
+    delegate.add_argument("--provider", choices=["openrouter", "opencode", "opencode-go"])
     delegate.add_argument("--model", help="Model for the child (codex/codex-pro or provider-qualified OpenCode)")
     delegate.add_argument("--effort", choices=sorted(CODEX_EFFORT_LEVELS),
                           help="Codex reasoning effort (codex/codex-pro only)")
@@ -316,7 +317,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         route = inspection_route(args)
         if route is not None:
-            result = read_route(args, route)
+            if os.getenv("AGENT_CONSOLE_REPORTING_URL") and route[0] == "session" and len(route) == 2:
+                from .session_client import managed_read
+                result = managed_read(args, route)
+            else:
+                result = read_route(args, route)
             if route == ("session", "tree") and not args.json:
                 print_session_tree(result)
             elif route == ("session", "review") and not args.json:
@@ -398,6 +403,12 @@ def main(argv: list[str] | None = None) -> int:
             if exit_code:
                 print("agentctl: integration operation rejected", file=sys.stderr)
             return exit_code
+        if os.getenv("AGENT_CONSOLE_REPORTING_URL"):
+            from .session_client import handles, run as run_session_control
+            if handles(args):
+                result = run_session_control(args)
+                emit(result)
+                return result.get("exit_code", 0) if isinstance(result, dict) else 0
         manager = SessionManager()
         if args.command == "auth":
             if args.auth_command == "login":
@@ -667,6 +678,7 @@ def main(argv: list[str] | None = None) -> int:
                     auth_context=args.auth_context,
                     agent_mode=args.agent_mode,
                     model=args.model,
+                    provider=args.provider,
                     reasoning_effort=args.effort,
                     plan_reasoning_effort=args.plan_effort,
                 )

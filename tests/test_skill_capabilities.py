@@ -56,9 +56,9 @@ class SkillCapabilityTests(unittest.TestCase):
         required = {
             "codex": (".codex/skills", True),
             "codex-pro": (".codex/skills", True),
-            "claude": (".claude/skills", False),
-            "hermes": (".hermes/skills/homelab", False),
-            "opencode": ("xdg-config/opencode/skills", False),
+            "claude": (".claude/skills", True),
+            "hermes": (".hermes/skills/homelab", True),
+            "opencode": ("xdg-config/opencode/skills", True),
         }
         for tool, (native_root, can_isolate) in required.items():
             capability = SKILL_TOOL_CAPABILITIES[tool]

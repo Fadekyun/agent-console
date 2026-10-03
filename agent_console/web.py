@@ -763,6 +763,8 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     app.include_router(launch_routes(session_manager, require_identity))
     from .workflow_api import workflow_routes, agent_workflow_routes
     app.include_router(agent_workflow_routes(session_manager))
+    from .session_control_api import session_control_routes
+    app.include_router(session_control_routes(session_manager))
     app.include_router(workflow_routes(session_manager, require_identity))
 
     from .skill_api import skill_routes

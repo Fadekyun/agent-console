@@ -337,7 +337,8 @@ async function openDelegate(session) {
     const allProfiles = await api('/api/profiles');
     const parentProfile = session.profile || 'general';
     const parentMeta = allProfiles.find((p) => p.name === parentProfile) || {};
-    const allowed = parentMeta.allowed_delegation_profiles || [];
+    const allowed = (parentMeta.allowed_delegation_profiles || []).filter(name =>
+      session.agent_mode !== 'plan' || allProfiles.find(profile => profile.name === name)?.read_write_capability === 'read_only');
     delegateForm.elements.profile.replaceChildren(...allowed.map((name) => {
       const p = state.identity.profiles.find((x) => x.name === name) || {};
       return new Option(p.display_name || name, name, false, name === 'planner');
@@ -346,7 +347,7 @@ async function openDelegate(session) {
     delegateForm.elements.profile.replaceChildren(...state.identity.profiles.filter((p) => p.read_write_capability === 'read_only').map((p) => new Option(p.display_name || p.name, p.name, false, p.name === 'planner')));
   }
   const toolSelect = delegateForm.elements.tool;
-  toolSelect.replaceChildren(...state.identity.tool_status.filter((item) => item.status === 'ready' && item.name !== 'claude').map((item) => new Option(item.name, item.name, false, item.name === state.identity.default_tool)));
+  toolSelect.replaceChildren(...state.identity.tool_status.filter((item) => item.status === 'ready').map((item) => new Option(item.name, item.name, false, item.name === state.identity.default_tool)));
   updateContextSelect(toolSelect, delegateForm.elements.auth_context);
   $('#delegate-mode-field').hidden = toolSelect.value !== 'opencode'; $('#delegate-status').textContent = '';
   delegateDialog.showModal();

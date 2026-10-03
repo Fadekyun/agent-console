@@ -48,3 +48,37 @@ Unassign a new staging guide to remove it from future role sessions; existing se
 The complete cross-harness discovery/version matrix and remaining Workbench acceptance checks are tracked in [the full audit](FULL_REVAMP_ACCEPTANCE.md). Guide completion does not close those requirements. Git import behavior added in 0.19 is documented in [Git imports](SKILL_GIT_IMPORTS.md).
 
 All seven current packages were also discovered by actual native Codex, Claude, OpenCode, Pi and Hermes readers in clean fixture homes; see [the native matrix](NATIVE_SKILL_MATRIX.md). The maintenance guide now documents package validation, profile validation, unassignment and the per-harness inspection control. No model invocation is inferred from discovery.
+
+## Capability-session guide revision — issue #141
+
+The seven current mirrored packages were read against the new implementation.
+Their existing single-session default, untrusted peer-output treatment, immutable
+handoffs, and separate release authorization remain valid. Two instructions need
+correction: Verification currently tells every reviewer to open a workflow inbox,
+and Skills still treats a native harness's extra skill sources as an assignment
+isolation limitation. Workbench and Coordination need the distinction between an
+operator's Add-session link and agent-originated delegated authority.
+
+Apply the following **pending canonical revisions** on n100 after the new service
+is selected. They are update instructions, not a claim that host packages were
+modified by the code change. Use the canonical source, preserve operator changes,
+and bump each package's `agent-console/revision` to `2026-10-03.1` after applying
+its relevant update. Validate all seven packages, refresh content-bound reviews
+where applicable, mirror the reviewed packages through the normal sync process,
+and verify new-session delivery. Do not rewrite active session snapshots.
+
+| Package | Exact content to add or replace |
+| --- | --- |
+| Workbench | Add under tree awareness: “Every role can inspect bounded peers in its project through the session capability endpoint. Unassigned sessions inspect their own tree. If tmux observation fails, live status is unknown; stored metadata and saved transcripts remain readable. `agentctl session attention --current --state ready_for_review` reports completion without requiring database writes. A stopped or unobserved process is not proof of success.” |
+| Results | Add under Reporting and recovery: “Session inspection, own attention and authorized descendant control also use the session capability. This does not grant environment management or release execution. Workflow publication remains optional for ordinary work. Never use direct database writes to recover a failed reporting request.” |
+| Coding | Add: “When separate implementation is useful and authorized, use `agentctl delegate coder --parent "$AGENT_CONSOLE_SESSION_ID" --task 'Bounded task'`. Coding delegates receive an isolated worktree and inherit the project/repository. Read-only verification can use the verifier role. Wait only for delegated work required by the current task and examine the result before relying on it.” |
+| Coordination | Add: “Human Add session is an operator action and can place a writable child under a read-only parent without changing that parent's permissions. Agent-originated delegation is different: read-only or Plan sessions may delegate only read-only work, including verifier. Writable sessions may manage descendants within existing authorization. Existing child/global capacity limits and an eight-level delegation depth limit apply.” |
+| Verification | Replace the opening sentence of Bind the evidence to the candidate with: “For a direct review, inspect the supplied commit, diff or worktree and report findings in the session; no workflow inbox or publication is required. Only when the task supplies durable workflow inputs, run `agentctl workflow inbox --current` and inspect the source-attributed result and immutable selected artifacts.” Scope the following acknowledgment and publication instructions to that durable workflow case. Add: “Report your own completion with `agentctl session attention --current --state ready_for_review`; this is allowed for read-only roles.” |
+| Release | Add: “Preparing a candidate, inspecting checks and local verification use existing task authorization; do not add separate permission prompts for each routine step. Push, merge, deployment and release still require the explicit action/candidate/target authorization described below. The session-control capability cannot grant or run release actions.” |
+| Skills | Replace the final sentence of the policy-preview paragraph with: “Claude added-directory skills, OpenCode configured paths and Hermes external directories support Console-selected snapshots; their other native discovery sources can remain active. Use delivery capability and version diagnostics, not suppression of all native sources, to decide assignment compatibility. Unsupported or unverified adapters must still report their actual limitation.” Add: “The service preview reports affected running sessions and restart requirements. Profile listings include a bundled diff for customized installed roles; review it without overwriting local instructions. `scripts/probe-skill-delivery.py` runs credential-free OpenCode and Hermes discovery probes in disposable homes; a successful probe is availability evidence, not model use.” |
+
+The applicable API and CLI behavior, portable descriptor checks, native-probe
+limits, and code rollback are documented in [Session capabilities](SESSION_CAPABILITIES.md).
+Canonical guide changes are independently reversible by restoring their reviewed
+previous package versions and refreshing future assignments; a code rollback
+must not silently rewrite the library or old delivery receipts.

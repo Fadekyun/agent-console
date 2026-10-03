@@ -426,8 +426,11 @@ class SessionManager:
                 tree = self.session_tree()
                 parent = None
                 for root in tree["roots"]:
-                    if root["tmux_name"] == parent_name:
-                        parent = root
+                    for candidate in [root, *self._collect_children(root)]:
+                        if candidate["tmux_name"] == parent_name:
+                            parent = candidate
+                            break
+                    if parent is not None:
                         break
 
                 if parent is None:
@@ -1090,7 +1093,10 @@ class SessionManager:
             raise ValueError(f"attention note must be {ATTENTION_NOTE_MAX_LENGTH} characters or fewer")
         if state == "normal":
             note = ""
-        self.inspect(name)
+        with self.database.connect() as conn:
+            row = conn.execute("SELECT id FROM sessions WHERE tmux_name=?", (name,)).fetchone()
+        if row is None:
+            raise KeyError(f"session not found: {name}")
         changed_at = utc_now()
         with self.database.connect() as conn:
             conn.execute(
@@ -1109,7 +1115,14 @@ class SessionManager:
             surface=surface,
             details={"state": state, "has_note": bool(note)},
         )
-        return self.inspect(name)
+        try:
+            return self.inspect(name)
+        except RuntimeError:
+            with self.database.connect() as conn:
+                result = dict(conn.execute("SELECT * FROM sessions WHERE tmux_name=?", (name,)).fetchone())
+            result.pop("evidence_capability_hash", None)
+            result.update(running=None, live_state="unknown", observation_source="unavailable")
+            return result
 
     def model_catalogue(self, provider: str, *, refresh: bool = False) -> dict[str, Any]:
         return self.models.list(provider, refresh=refresh)
@@ -1631,7 +1644,7 @@ class SessionManager:
             if parent_session_id:
                 with self.database.connect() as conn:
                     parent_exists = conn.execute(
-                        "SELECT id FROM sessions WHERE id=?", (parent_session_id,)
+                        "SELECT * FROM sessions WHERE id=?", (parent_session_id,)
                     ).fetchone()
                     child_count = conn.execute(
                         "SELECT COUNT(*) FROM sessions WHERE parent_session_id=? "
@@ -1639,6 +1652,22 @@ class SessionManager:
                     ).fetchone()[0]
                 if parent_exists is None:
                     raise KeyError("parent session no longer exists")
+                from .session_control import validate_child, MAX_DELEGATION_DEPTH
+                # Operator Add-session links organize conversations and do not
+                # transfer agent authority. Capability calls are agent-originated.
+                if creator_surface == "session-api":
+                    validate_child(dict(parent_exists), profile=profile, repository=str(cwd),
+                                   project_id=project_id, agent_mode=agent_mode, worktree=worktree)
+                ancestor = dict(parent_exists)
+                seen = set()
+                with self.database.connect() as conn:
+                    while ancestor:
+                        if ancestor["id"] in seen or len(seen) >= MAX_DELEGATION_DEPTH:
+                            raise ValueError("descendant depth limit reached")
+                        seen.add(ancestor["id"])
+                        row = conn.execute("SELECT * FROM sessions WHERE id=?",
+                                           (ancestor.get("parent_session_id"),)).fetchone()
+                        ancestor = dict(row) if row else None
                 if child_count >= self.settings.max_children_per_parent:
                     raise RuntimeError(f"child-session limit reached ({self.settings.max_children_per_parent})")
             if ordinary_count + integration_count >= self.settings.max_managed_sessions:
@@ -2714,56 +2743,31 @@ class SessionManager:
         auth_context: str | None = None,
         agent_mode: str | None = None,
         model: str | None = None,
+        provider: str | None = None,
         reasoning_effort: str | None = None,
         plan_reasoning_effort: str | None = None,
         creator_surface: str = "CLI",
     ) -> dict[str, Any]:
         validate_tool(tool)
-        profile_meta = PROFILE_SCHEMA.get(profile)
-        if profile_meta is None:
+        if profile not in PROFILE_SCHEMA:
             raise ValueError(f"unknown profile: {profile}")
-        delegation_perm = profile_meta.get("delegation_permissions")
-        if not delegation_perm or "read_only" not in delegation_perm:
-            raise ValueError(f"profile {profile!r} does not permit delegation")
-        validate_profile_capability(profile, tool, agent_mode)
-        if tool == "opencode" and agent_mode not in {None, "plan"}:
-            raise ValueError("delegated OpenCode sessions must use Plan mode")
-        self.reconcile()
         with self.database.connect() as conn:
             parent_row = conn.execute(
                 "SELECT * FROM sessions WHERE id=? OR tmux_name=?", (parent, parent)
             ).fetchone()
-            if parent_row is None:
-                raise KeyError(f"parent session not found: {parent}")
-            parent_profile = parent_row["profile"] or "general"
-            parent_meta = PROFILE_SCHEMA.get(parent_profile, {})
-            parent_allowed = parent_meta.get("allowed_delegation_profiles") or set()
-            if profile not in parent_allowed:
-                raise ValueError(
-                    f"profile {parent_profile!r} is not allowed to delegate to {profile!r}"
-                )
-            child_count = conn.execute(
-                "SELECT COUNT(*) FROM delegations WHERE parent_session_id=? AND status IN ('created', 'running')",
-                (parent_row["id"],),
-            ).fetchone()[0]
-        if child_count >= self.settings.max_children_per_parent:
-            raise RuntimeError(
-                f"child-session limit reached ({self.settings.max_children_per_parent})"
-            )
+        if parent_row is None:
+            raise KeyError(f"parent session not found: {parent}")
+        repository = repository or parent_row["repository"] or str(self.settings.workspace_root)
+        from .session_control import validate_child, child_worktree_required
+        worktree = child_worktree_required(profile, repository)
+        validate_child(dict(parent_row), profile=profile, repository=repository,
+                       project_id=parent_row["project_id"], agent_mode=agent_mode, worktree=worktree)
         session = self.create(
-            tool=tool,
-            profile=profile,
-            name=name,
-            task=task,
-            repository=repository or parent_row["repository"] or str(self.settings.workspace_root),
-            worktree=False,
-            creator_surface=creator_surface,
-            parent_session_id=parent_row["id"],
-            auth_context=auth_context,
-            agent_mode=agent_mode,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            plan_reasoning_effort=plan_reasoning_effort,
+            tool=tool, profile=profile, name=name, task=task, repository=repository,
+            worktree=worktree, creator_surface=creator_surface,
+            parent_session_id=parent_row["id"], project_id=parent_row["project_id"],
+            auth_context=auth_context, agent_mode=agent_mode, model=model, provider=provider,
+            reasoning_effort=reasoning_effort, plan_reasoning_effort=plan_reasoning_effort,
         )
         delegation_id = f"deleg-{uuid.uuid4().hex}"
         with self.database.connect() as conn:

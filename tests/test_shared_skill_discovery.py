@@ -339,7 +339,9 @@ class SharedSkillSessionTests(unittest.TestCase):
         data = self.manager.auth._read()
         data['contexts']['claude']['default'].update(enabled=True, verified=True)
         self.manager.auth._write(data)
+        assign_skill(self.manager.database, 'general', 'unrelated-skill', canonical_root=self.skills_root)
         self.manager.create(tool='claude', profile='general', name='claude-shared', repository=str(self.workspace))
+        self.assertTrue((self.isolated_root('claude-shared') / 'unrelated-skill/SKILL.md').is_file())
         added = self.settings.state_dir / 'tool-overlays/claude-shared/claude-skills'
         delivered = added / '.claude/skills/typesafe-ai/SKILL.md'
         original = delivered.read_bytes()
@@ -494,7 +496,8 @@ class SharedSkillSessionTests(unittest.TestCase):
             "capabilities": {"reasoning": False, "attachment": False, "toolcall": True},
         }]
         with mock.patch.object(self.manager.models, "list", return_value={"models": models}):
-            self.manager.create(
+            assign_skill(self.manager.database, 'general', 'unrelated-skill', canonical_root=self.skills_root)
+        self.manager.create(
                 tool="opencode", profile="general", name="opencode-shared",
                 repository=str(self.workspace),
             )
@@ -509,9 +512,9 @@ class SharedSkillSessionTests(unittest.TestCase):
         content = json.loads(exports["OPENCODE_CONFIG_CONTENT"])
         self.assertEqual(content["skills"], [str(self.isolated_root("opencode-shared"))])
         self.assertTrue((self.isolated_root("opencode-shared") / "typesafe-ai").is_dir())
-        self.assertFalse((self.isolated_root("opencode-shared") / "unrelated-skill").exists())
+        self.assertTrue((self.isolated_root("opencode-shared") / "unrelated-skill/SKILL.md").is_file())
 
-    def test_assigned_skill_still_blocks_non_isolating_harness(self) -> None:
+    def test_assigned_skill_reaches_hermes_native_external_dirs(self) -> None:
         self.configure_commandcode()
         _write_skill(self.skills_root, "assigned-hermes")
         assign_skill(
@@ -520,10 +523,13 @@ class SharedSkillSessionTests(unittest.TestCase):
             "assigned-hermes",
             canonical_root=self.skills_root,
         )
-        with self.assertRaisesRegex(RuntimeError, "cannot isolate per-session skills"):
-            self.manager.create(
-                tool="hermes", profile="general", name="hermes-assigned", repository=str(self.workspace)
-            )
+        self.manager.create(
+            tool="hermes", profile="general", name="hermes-assigned", repository=str(self.workspace)
+        )
+        delivered = self.isolated_root("hermes-assigned") / "assigned-hermes/SKILL.md"
+        self.assertTrue(delivered.is_file())
+        self.manager.restart("hermes-assigned")
+        self.assertTrue(delivered.is_file())
 
 
 if __name__ == "__main__":

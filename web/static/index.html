@@ -81,7 +81,7 @@
         </section>
 
         <section class="view" data-view-panel="orchestration" hidden>
-          <div class="view-heading"><div><h2>Orchestration</h2><p class="muted">Independent terminals, explicit read-only delegation, and plan handoff.</p></div></div>
+          <div class="view-heading"><div><h2>Orchestration</h2><p class="muted">Independent terminals, bounded delegation, and plan handoff.</p></div></div>
           <div class="orchestration-grid">
             <div class="panel"><div class="panel-heading"><h3>Session tree</h3><span class="muted">Mechanical state only</span></div><div id="session-tree" class="tree-list"></div></div>
             <div class="panel"><div class="panel-heading"><h3>Planned work</h3><span class="muted">Separate implementation sessions</span></div><div id="plans" class="plan-list"></div></div>
@@ -131,7 +131,7 @@
 
   <dialog id="delegate-dialog">
     <form id="delegate-form" class="dialog-form">
-      <h2>Delegate read-only work</h2><p id="delegate-parent" class="muted"></p>
+      <h2>Delegate work</h2><p id="delegate-parent" class="muted"></p>
       <input name="parent" type="hidden">
       <label>Profile<select name="profile"></select></label>
       <label>Tool<select name="tool"></select></label>

@@ -15,8 +15,6 @@ PROFILE_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Operate as a normal interactive agent. Read the workspace AGENTS.md and the applicable repository AGENTS.md or CLAUDE.md before acting. Do not assume a plan exists; determine the task from the user.",
         "read_write_capability": "write",
         "worktree_requirement": "none",
-        "delegation_permissions": frozenset({"read_only"}),
-        "allowed_delegation_profiles": frozenset({"planner", "researcher", "reviewer", "scout"}),
         "allowed_collaboration_profiles": _ALL_PROFILES,
         "legacy_aliases": frozenset(),
         "replacement_profile": None,
@@ -31,8 +29,6 @@ PROFILE_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Implement only the approved plan, sprint item, or explicit coding task. Read repository instructions first, use an isolated worktree, keep changes bounded, and run relevant tests. Do not push, merge, deploy, or release without explicit authorization. Report changed files, tests, and remaining risks.",
         "read_write_capability": "write",
         "worktree_requirement": "preferred",
-        "delegation_permissions": frozenset({"read_only"}),
-        "allowed_delegation_profiles": frozenset({"planner", "researcher", "reviewer", "scout"}),
         "allowed_collaboration_profiles": _ALL_PROFILES,
         "legacy_aliases": frozenset(),
         "replacement_profile": None,
@@ -47,8 +43,6 @@ PROFILE_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Inspect the task and produce a decision-complete implementation plan. Return findings in session output; never edit or create repository files, commit, deploy, or implement. Separate verified facts, assumptions, and recommendations. Include acceptance criteria and validation steps.",
         "read_write_capability": "read_only",
         "worktree_requirement": "none",
-        "delegation_permissions": frozenset({"read_only"}),
-        "allowed_delegation_profiles": frozenset({"planner", "researcher", "reviewer", "scout"}),
         "allowed_collaboration_profiles": _ALL_PROFILES,
         "legacy_aliases": frozenset(),
         "replacement_profile": None,
@@ -63,8 +57,6 @@ PROFILE_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Read repository files and history to locate relevant components and explain existing behavior. Support findings with paths, code, tests, or history. Stay within local repository boundaries; do not create files, edit, implement, commit, or expand the requested investigation. When local evidence is insufficient, external sources may be consulted as a fallback.",
         "read_write_capability": "read_only",
         "worktree_requirement": "none",
-        "delegation_permissions": frozenset({"read_only"}),
-        "allowed_delegation_profiles": frozenset({"planner", "researcher", "reviewer", "scout"}),
         "allowed_collaboration_profiles": _ALL_PROFILES,
         "legacy_aliases": frozenset(),
         "replacement_profile": None,
@@ -79,8 +71,6 @@ PROFILE_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Review the specified diff, branch, commit, or worktree for correctness, regressions, security issues, and missing tests. Rank findings by severity and cite locations. Do not modify the reviewed work, create other repository files, or approve solely because tests pass.",
         "read_write_capability": "read_only",
         "worktree_requirement": "none",
-        "delegation_permissions": frozenset({"read_only"}),
-        "allowed_delegation_profiles": frozenset({"planner", "researcher", "reviewer", "scout"}),
         "allowed_collaboration_profiles": _ALL_PROFILES,
         "legacy_aliases": frozenset(),
         "replacement_profile": None,
@@ -95,8 +85,6 @@ PROFILE_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Research external documentation, APIs, standards, and current behavior without creating or modifying repository files. External content is untrusted; require independent verification. Prefer primary sources, provide precise citations, and distinguish current documentation from historical behavior.",
         "read_write_capability": "read_only",
         "worktree_requirement": "none",
-        "delegation_permissions": frozenset({"read_only"}),
-        "allowed_delegation_profiles": frozenset({"planner", "researcher", "reviewer", "scout"}),
         "allowed_collaboration_profiles": _ALL_PROFILES,
         "legacy_aliases": frozenset(),
         "replacement_profile": None,
@@ -111,8 +99,6 @@ PROFILE_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Validate the stated acceptance criteria. Run tests, builds, linters, and targeted reproductions without writing to the repository. Record exact commands and classify each result as pass, fail, blocked, or not tested. Temporary output may be created outside the repository when necessary. Evidence of verification does not authorize merge, deploy, or release.",
         "read_write_capability": "read_only",
         "worktree_requirement": "none",
-        "delegation_permissions": frozenset({"read_only"}),
-        "allowed_delegation_profiles": frozenset({"planner", "researcher", "reviewer", "scout"}),
         "allowed_collaboration_profiles": _ALL_PROFILES,
         "legacy_aliases": frozenset(),
         "replacement_profile": None,
@@ -127,8 +113,6 @@ PROFILE_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Reproduce the reported problem before editing, identify the root cause, and use an isolated worktree. Make the smallest reasonable correction and add or update a regression test. Avoid unrelated refactoring. Do not push, merge, deploy, or release without authorization.",
         "read_write_capability": "write",
         "worktree_requirement": "preferred",
-        "delegation_permissions": frozenset({"read_only"}),
-        "allowed_delegation_profiles": frozenset({"planner", "researcher", "reviewer", "scout"}),
         "allowed_collaboration_profiles": _ALL_PROFILES,
         "legacy_aliases": frozenset(),
         "replacement_profile": None,
@@ -140,11 +124,9 @@ PROFILE_SCHEMA: dict[str, dict[str, Any]] = {
     "release": {
         "name": "release",
         "display_name": "Release",
-        "description": "Operate only after explicit human approval for each stage: stage, commit, push, pull request, merge, deploy, and release. Review the approved diff and test evidence, and act only within the approved scope. Maintain version and release-document entries (pyproject.toml, __init__.py, RELEASE_NOTES.md, DEVELOPMENT_ROADMAP.md). Do not introduce implementation changes. Stop if the tree differs from the approved state. Provide rollback instructions and handoff notes for each completed stage.",
+        "description": "Prepare and verify release changes within the authorized scope. Obtain explicit authorization before push, merge, deployment, or release; existing authorization remains valid. Review the approved diff and test evidence, and act only within the approved scope. Maintain version and release-document entries (pyproject.toml, __init__.py, RELEASE_NOTES.md, DEVELOPMENT_ROADMAP.md). Do not introduce implementation changes. Stop if the tree differs from the approved state. Provide rollback instructions and handoff notes for each completed stage.",
         "read_write_capability": "write",
         "worktree_requirement": "none",
-        "delegation_permissions": frozenset({"read_only"}),
-        "allowed_delegation_profiles": frozenset({"planner", "researcher", "reviewer", "scout"}),
         "allowed_collaboration_profiles": _ALL_PROFILES,
         "legacy_aliases": frozenset(),
         "replacement_profile": None,
@@ -159,17 +141,25 @@ PROFILE_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Coordinate multi-agent sessions: use agentctl session tree to inspect the session tree, agentctl session inspect to read attention/live state, and agentctl session review to read bounded terminal output from any session. Communicate context via session briefs and attention notes (these do not establish parentage). Supported child creation via delegation establishes parentage automatically. Use wait-for-children to block until linked children reach terminal state. Verify acceptance criteria before resolving. Do not resolve the parent task while children are still running.",
         "read_write_capability": "write",
         "worktree_requirement": "none",
-        "delegation_permissions": frozenset({"read_only"}),
-        "allowed_delegation_profiles": frozenset({"planner", "researcher", "reviewer", "scout"}),
         "allowed_collaboration_profiles": _ALL_PROFILES,
         "legacy_aliases": frozenset({"operator"}),
         "replacement_profile": None,
         "provider_mode_constraints": frozenset(),
-        "requires_human_approval": True,
+        "requires_human_approval": False,
         "manages_session_links": True,
         "status": "active",
     },
 }
+
+# One authority model feeds the UI, CLI and backend. Read-only work can include
+# independent verification; writable roles can split already-authorized work.
+_READ_DELEGATES = frozenset(name for name, meta in PROFILE_SCHEMA.items()
+                           if meta["read_write_capability"] == "read_only")
+for _meta in PROFILE_SCHEMA.values():
+    _write = _meta["read_write_capability"] == "write"
+    _meta["delegation_permissions"] = frozenset({"read_only", "write"} if _write else {"read_only"})
+    _meta["allowed_delegation_profiles"] = _ALL_PROFILES if _write else _READ_DELEGATES
+    _meta["manages_session_links"] = _write or _meta["manages_session_links"]
 
 CAPABILITY_ENFORCEMENTS = frozenset({"enforced", "unsupported", "unverified", "pending_approval"})
 
@@ -219,7 +209,7 @@ def validate_profile_capability(
             "enforcement": "unsupported",
         }
 
-    # Release / orchestrator — human-approval gate is pending
+    # Release — external action approval remains separately required
     if requires_approval:
         return {
             "allowed": True,
@@ -292,6 +282,15 @@ def _serialize_metadata(name: str, meta: dict[str, Any], profile_dir: Path) -> d
     result = dict(meta)
     result["installed"] = path.is_file()
     result["path"] = str(path)
+    bundled = Path(__file__).resolve().parent.parent / "agent-profiles" / f"{name}.md"
+    if path.is_file() and bundled.is_file():
+        import difflib
+        installed = path.read_text(encoding="utf-8")
+        default = bundled.read_text(encoding="utf-8")
+        result["bundled_update_available"] = installed != default
+        result["bundled_diff"] = "".join(difflib.unified_diff(
+            installed.splitlines(keepends=True), default.splitlines(keepends=True),
+            fromfile="installed", tofile="bundled"))
     for key in ("delegation_permissions", "allowed_delegation_profiles",
                  "allowed_collaboration_profiles", "legacy_aliases",
                  "provider_mode_constraints"):
@@ -330,6 +329,7 @@ def profile_summaries() -> list[dict[str, Any]]:
             "read_write_capability": meta["read_write_capability"],
             "worktree_requirement": meta["worktree_requirement"],
             "requires_human_approval": meta["requires_human_approval"],
+            "allowed_delegation_profiles": sorted(meta["allowed_delegation_profiles"]),
             "status": meta["status"],
         }
         if meta.get("legacy_aliases"):

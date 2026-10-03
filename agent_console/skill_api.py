@@ -69,7 +69,15 @@ def skill_routes(manager, require_identity):
         if selected['validation']['effective'] and not isolating:
             selected['validation']['valid'] = False
             selected['validation']['issues'].append('This tool cannot isolate profile assignments; select an isolating tool or remove assignments.')
+        from .skill_capabilities import SKILL_TOOL_CAPABILITIES
+        capability = SKILL_TOOL_CAPABILITIES.get(payload.tool)
+        with manager.database.connect() as db:
+            affected = [dict(row) for row in db.execute(
+                "SELECT id,tmux_name,tool,profile FROM sessions WHERE profile=? AND managed=1 "
+                "AND status IN ('attached','detached')", (payload.profile,))]
         return {**selected, 'policies': policies, 'isolation': isolating,
+                'delivery_capability': capability.as_dict() if capability else None,
+                'affected_sessions': affected, 'restart_required': bool(affected),
                 'notice': 'Console snapshots cover selected library skills. Tool-bundled, plugin and repository skills may also be discovered by the harness.'}
 
     @router.get('/api/skill-registry/imports/{identifier}')

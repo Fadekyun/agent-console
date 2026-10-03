@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, PropertyMock
 
 from agent_console.config import Settings
 from agent_console.database import Database
@@ -238,28 +238,33 @@ class SessionIntegrationTests(unittest.TestCase):
         self.assertEqual(fallback["source"], "archived-transcript")
         self.assertIn("LEGACY_REVIEW_OK", fallback["content"])
 
-    def test_write_capable_delegation_is_rejected(self) -> None:
-        parent = self.manager.create(
-            tool="shell",
-            profile="general",
-            name="parent-test",
-            repository=str(self.workspace),
-        )
-        with self.assertRaises(ValueError):
-            self.manager.delegate(
-                profile="coder",
-                parent=parent["id"],
-                task="write something",
-                tool="shell",
-            )
+    def test_operator_add_session_preserves_read_only_parent_permissions(self) -> None:
+        parent = self.manager.create(tool="shell", profile="planner", name="manual-parent",
+                                     repository=str(self.workspace))
+        child = self.manager.create(tool="shell", profile="coder", name="manual-child",
+                                    repository=str(self.workspace), parent_session_id=parent["id"],
+                                    creator_surface="web")
+        self.assertEqual(child["parent_session_id"], parent["id"])
+        self.assertEqual(self.manager.inspect(parent["tmux_name"])["profile"], "planner")
+        with self.assertRaises(PermissionError):
+            self.manager.create(tool="shell", profile="coder", name="agent-child",
+                                repository=str(self.workspace), parent_session_id=parent["id"],
+                                creator_surface="session-api")
+
+    def test_write_capable_delegation_uses_worktree(self) -> None:
+        subprocess.run(["git", "init", str(self.workspace)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(self.workspace), "-c", "user.name=Fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture"],
+                       check=True, capture_output=True)
+        parent = self.manager.create(tool="shell", profile="general", name="parent-test",
+                                     repository=str(self.workspace))
+        child = self.manager.delegate(profile="coder", parent=parent["id"], task="write something", tool="shell")["session"]
+        self.assertEqual(child["parent_session_id"], parent["id"])
+        self.assertTrue(child["worktree"])
+        self.assertNotEqual(child["worktree"], str(self.workspace))
         with self.assertRaisesRegex(ValueError, "Plan mode"):
-            self.manager.delegate(
-                profile="planner",
-                parent=parent["id"],
-                task="do not build",
-                tool="opencode",
-                agent_mode="build",
-            )
+            self.manager.delegate(profile="planner", parent=parent["id"], task="do not build",
+                                  tool="opencode", agent_mode="build")
 
     def configure_commandcode(self):
         from agent_console.commandcode import BASE_URL, DEFAULT_MODEL
@@ -1219,7 +1224,7 @@ class SessionIntegrationTests(unittest.TestCase):
             assign_skill(self.manager.database, "general", skill_name)
             for bad_tool in ("opencode", "hermes", "claude"):
                 with self.assertRaises(RuntimeError) as ctx:
-                    with patch.object(
+                    with patch("agent_console.skills._default_version_probe", return_value="1.18.31"), patch("agent_console.providers.ProviderAdapter.can_isolate_skills", new_callable=PropertyMock, return_value=False), patch.object(
                         self.manager,
                         "_launch_spec",
                         return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
@@ -1765,24 +1770,18 @@ class SessionGroupTests(unittest.TestCase):
         self.assertIn("open-group-s2", unavailable_names)
 
     def test_delegation_guard_uses_schema(self) -> None:
-        parent = self.manager.create(
-            tool="shell", profile="general", name="deleg-guard-parent",
-            repository=str(self.workspace),
-        )
+        parent = self.manager.create(tool="shell", profile="planner", name="deleg-guard-parent",
+                                     repository=str(self.workspace))
         from agent_console.profiles import PROFILE_SCHEMA
-        parent_profile_meta = PROFILE_SCHEMA.get("general", {})
-        delegatable = parent_profile_meta.get("allowed_delegation_profiles", frozenset())
-        for name, meta in PROFILE_SCHEMA.items():
-            if name in delegatable:
-                result = self.manager.delegate(
-                    profile=name, parent=parent["id"], task="test delegation with schema guard", tool="shell",
-                )
+        allowed = PROFILE_SCHEMA["planner"]["allowed_delegation_profiles"]
+        for name in PROFILE_SCHEMA:
+            if name in allowed:
+                result = self.manager.delegate(profile=name, parent=parent["id"], task="bounded check", tool="shell")
                 self.assertIn("session", result)
+                self.manager.kill(result["session"]["tmux_name"])
             else:
-                with self.assertRaises(ValueError):
-                    self.manager.delegate(
-                        profile=name, parent=parent["id"], task="should fail", tool="shell",
-                    )
+                with self.assertRaises(PermissionError):
+                    self.manager.delegate(profile=name, parent=parent["id"], task="cannot escalate", tool="shell")
 
 
 class ProjectTests(unittest.TestCase):
