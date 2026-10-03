@@ -401,7 +401,7 @@ class WebTests(unittest.TestCase):
         # Automatic delegation still cannot escalate a planner to a coder.
         denied = self.client.post("/api/sessions/human-parent/delegations", json=payload, headers=self.headers)
         self.assertEqual(denied.status_code, 400)
-        self.assertIn("not allowed", denied.json()["detail"])
+        self.assertIn("cannot delegate", denied.json()["detail"])
 
     def test_lifespan_keeps_live_wal_sidecars_for_guarded_inspection(self) -> None:
         from agent_console.inspection import InspectionUnavailable, read_session_snapshot

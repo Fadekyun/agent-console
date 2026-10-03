@@ -2022,7 +2022,7 @@ class SessionManager:
                     resolved_environment[key] = launcher_env[key]
             resolved_environment.update(overlay_env)
             for key, value in previous_snapshot["environment"].items():
-                if key.endswith("_CAPABILITY"):
+                if key == "AGENT_CONSOLE_EVIDENCE_CAPABILITY":
                     resolved_environment[key] = value
             previous_snapshot.update(environment=resolved_environment, revision=environment_revision)
             write_private(snapshot_path, previous_snapshot)

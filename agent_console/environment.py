@@ -207,7 +207,7 @@ class EnvironmentStore:
             write_private(self.path, data)
 
     def _resolve(self, data, project_id, baseline, credentials):
-        values = {k: v for k, v in baseline.items() if not (k.endswith("_CAPABILITY") or k.startswith(("AGENT_CONSOLE_SESSION_", "AGENT_CONSOLE_PARENT_", "AGENT_CONSOLE_PROJECT_", "AGENT_CONSOLE_LINKED_")))}
+        values = {k: v for k, v in baseline.items() if not ((k.startswith(("AGENT_CONSOLE_", "AGCONSOLE_")) and k.endswith("_CAPABILITY")) or k.startswith(("AGENT_CONSOLE_SESSION_", "AGENT_CONSOLE_PARENT_", "AGENT_CONSOLE_PROJECT_", "AGENT_CONSOLE_LINKED_")))}
         sources = {k: "host" for k in values}
         values.update(credentials)
         sources.update({k: "credential" for k in credentials})

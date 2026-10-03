@@ -111,8 +111,8 @@ class EnvironmentTests(unittest.TestCase):
         self.assertNotIn('STALE_TMUX_SECRET', actual)
 
     def test_resolver_never_inherits_parent_identity_or_capability(self):
-        values, _ = self.store.resolve(baseline={'AGENT_CONSOLE_SESSION_ID': 'parent', 'AGENT_CONSOLE_EVIDENCE_CAPABILITY': 'secret', 'AGENT_CONSOLE_STATE_DIR': '/state'})
-        self.assertEqual(values, {'AGENT_CONSOLE_STATE_DIR': '/state'})
+        values, _ = self.store.resolve(baseline={'AGENT_CONSOLE_SESSION_ID': 'parent', 'AGENT_CONSOLE_EVIDENCE_CAPABILITY': 'secret', 'AGENT_CONSOLE_STATE_DIR': '/state', 'SERVICE_CAPABILITY': 'host-value'})
+        self.assertEqual(values, {'AGENT_CONSOLE_STATE_DIR': '/state', 'SERVICE_CAPABILITY': 'host-value'})
 
 
 class EnvironmentApiTests(unittest.TestCase):
@@ -243,6 +243,26 @@ class EnvironmentLifecycleTests(unittest.TestCase):
                 with self.assertRaises(ValueError): self.manager.restart('env-parent')
                 stop.assert_not_called()
             self.assertTrue(self.manager.tmux.exists('env-parent'))
+
+    def test_user_capability_variable_rotates_deletes_and_suppresses_on_restart(self):
+        project = self.manager.create_project(name='Capability rotation')
+        self.manager.environment.put('SERVICE_CAPABILITY', value='first')
+        with patch.object(self.manager, '_launch_spec', return_value=LaunchSpec(['/bin/sleep', '90'], {}, [])):
+            session = self.manager.create(tool='shell', profile='general', name='env-capability', project_id=project['id'])
+        path = self.manager.settings.state_dir/'environment-launches'/f"{session['id']}.json"
+        own_capability = read_private(path)['environment']['AGENT_CONSOLE_EVIDENCE_CAPABILITY']
+        def restart_value():
+            self.manager.restart('env-capability')
+            values = read_private(path)['environment']
+            self.assertEqual(values['AGENT_CONSOLE_EVIDENCE_CAPABILITY'], own_capability)
+            return values.get('SERVICE_CAPABILITY')
+        self.manager.environment.put('SERVICE_CAPABILITY', value='rotated')
+        self.assertEqual(restart_value(), 'rotated')
+        self.manager.environment.delete('SERVICE_CAPABILITY')
+        self.assertIsNone(restart_value())
+        self.manager.environment.put('SERVICE_CAPABILITY', value='inherited')
+        self.manager.environment.put('SERVICE_CAPABILITY', state='suppressed', project_id=project['id'])
+        self.assertIsNone(restart_value())
 
     def test_mcp_and_harness_share_resolved_values_and_restart_removes_mcp(self):
         from agent_console.providers import TOOL_BINARIES
