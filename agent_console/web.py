@@ -769,6 +769,8 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
 
     from .skill_api import skill_routes
     app.include_router(skill_routes(session_manager, require_identity))
+    from .environment_api import environment_routes
+    app.include_router(environment_routes(session_manager, require_identity, STATIC_ROOT))
 
     @app.get("/api/skills")
     async def skills_api(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:

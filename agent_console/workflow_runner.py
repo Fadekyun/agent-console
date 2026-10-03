@@ -42,7 +42,7 @@ def prepare_launcher(manager,spec,attempt_id,session_id,name,profile):
     manifest=directory/'launch.json';manifest.write_text(json.dumps({'settings':settings,'argv':native,'output':str(output),'attempt_id':attempt_id}));manifest.chmod(0o600)
     source=str(Path(__file__).resolve().parent.parent)
     bootstrap=f'import sys; sys.path.insert(0,{source!r}); from agent_console.workflow_runner import run; run(sys.argv[1])'
-    return LaunchSpec(argv=[sys.executable,'-I','-c',bootstrap,str(manifest)],environment=spec.environment,secret_files=spec.secret_files)
+    return LaunchSpec(argv=[sys.executable,'-I','-c',bootstrap,str(manifest)],environment=spec.environment,secret_files=spec.secret_files,resolved_environment=spec.resolved_environment,environment_revision=spec.environment_revision)
 
 
 def run(manifest_path):

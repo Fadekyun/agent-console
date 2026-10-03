@@ -9,6 +9,7 @@ import secrets
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 import traceback
 import uuid
@@ -16,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .environment import EnvironmentStore, read_private, write_private
 from .auth import AuthRegistry
 from .admission import admission_lock
 from .config import Settings
@@ -114,6 +116,7 @@ class SessionManager:
         self.settings = settings or Settings.from_env()
         self.settings.ensure_state_dirs()
         self.auth = AuthRegistry(self.settings.config_dir or self.settings.state_dir / "config")
+        self.environment = EnvironmentStore(self.settings.config_dir or self.settings.state_dir / "config")
         self.database = Database(self.settings.database_path)
         self.database.migrate()
         try:
@@ -1255,7 +1258,9 @@ class SessionManager:
         adapter = provider_adapter(tool, self.auth)
         if not adapter.binary.is_file():
             raise FileNotFoundError(f"tool launcher is missing: {adapter.binary}")
-        return adapter.build_launch_spec(
+        resolved_environment, environment_revision = self.environment.resolve(project_id, secret_files=adapter.secret_files(context))
+        spec = adapter.build_launch_spec(
+            resolved_environment=resolved_environment,
             context=context,
             profile=profile,
             cwd=cwd,
@@ -1267,6 +1272,7 @@ class SessionManager:
             plan_reasoning_effort=plan_reasoning_effort,
             read_only=PROFILE_SCHEMA[profile]["read_write_capability"] == "read_only",
         )
+        return LaunchSpec(spec.argv, spec.environment, spec.secret_files, resolved_environment, environment_revision)
 
     def _launcher_args(
         self,
@@ -1327,14 +1333,21 @@ class SessionManager:
         merged.update(console_environment)
         if overlay_env:
             merged.update(overlay_env)
-        for key, value in sorted(merged.items()):
+        if spec.resolved_environment is None:
+            resolved, revision = self.environment.resolve(project_id, secret_files=spec.secret_files)
+        else:
+            resolved, revision = dict(spec.resolved_environment), spec.environment_revision
+        resolved.update(merged)
+        # The capability and managed values only live in the private environment
+        # snapshot, never executable shell text or process arguments.
+        public = {k: v for k, v in merged.items() if not k.endswith("_CAPABILITY")}
+        snapshot_path = self.settings.state_dir / "environment-launches" / f"{session_id}.json"
+        write_private(snapshot_path, {"environment": resolved, "revision": revision,
+                                      "launcher_keys": [*public, "TERM", "COLORTERM", "TMUX", "TMUX_PANE", "LINES", "COLUMNS"], "secret_files": [str(p) for p in spec.secret_files]})
+        for key, value in sorted(public.items()):
             lines.append(f"export {key}={shlex.quote(value)}\n")
-        for secret_file in spec.secret_files:
-            lines.append(f"test -r {shlex.quote(str(secret_file))}\n")
-            lines.append("set -a\n")
-            lines.append(f". {shlex.quote(str(secret_file))}\n")
-            lines.append("set +a\n")
-        command = "exec " + shlex.join(spec.argv)
+        bootstrap = Path(__file__).with_name("environment_bootstrap.py")
+        command = "exec " + shlex.join([sys.executable, "-I", str(bootstrap), str(snapshot_path), *spec.argv])
         if merged.get("AGENT_CONSOLE_CLAUDE_SKILLS_DIR"):
             command += ' --add-dir "$AGENT_CONSOLE_CLAUDE_SKILLS_DIR"'
         lines.append(command + "\n")
@@ -1624,6 +1637,8 @@ class SessionManager:
         worktree_created = False
         context_path = self.settings.state_dir / "contexts" / f"{name}.md"
         launcher_path = self.settings.state_dir / "launchers" / f"{name}.sh"
+        environment_path = self.settings.state_dir / "environment-launches" / f"{session_id}.json"
+        environment_backup = read_private(environment_path)
         context_backup = context_path.read_bytes() if context_path.exists() else None
         launcher_backup = launcher_path.read_bytes() if launcher_path.exists() else None
         context_created = False
@@ -1845,6 +1860,10 @@ class SessionManager:
             log.info("session=%s id=%s tool=%s profile=%s mode=%s provider=%s worktree=%s surface=%s",
                      name, session_id, tool, profile, agent_mode, provider, worktree, creator_surface)
         except Exception:
+            if environment_backup is not None:
+                write_private(environment_path, environment_backup)
+            else:
+                environment_path.unlink(missing_ok=True)
             if tmux_creation_started:
                 try:
                     self.tmux.kill(name)
@@ -1958,6 +1977,12 @@ class SessionManager:
                     f"discovery root. Remove assignments or use a tool that "
                     f"supports skill isolation (codex)."
                 )
+        auth_context = self.auth.get_context(tool, session.get("auth_context"))
+        adapter = provider_adapter(tool, self.auth)
+        resolved_environment, environment_revision = self.environment.resolve(
+            project_id, secret_files=adapter.secret_files(auth_context))
+        snapshot_path = self.settings.state_dir / "environment-launches" / f"{session['id']}.json"
+        previous_snapshot = read_private(snapshot_path)
         canonical_root = _resolve_canonical_root()
         isolated_root = self.settings.state_dir / "skills-isolated" / name
         effective = session_skills["materialized"]
@@ -1986,6 +2011,42 @@ class SessionManager:
                 line + argument if line.startswith("exec ") and argument not in line else line
                 for line in launcher_text.splitlines()
             ) + "\n"
+        if previous_snapshot is not None:
+            # Keep identity and provider-selected homes from the pinned launch;
+            # replace only the resolved variable layer on explicit restart.
+            for key in previous_snapshot.get("launcher_keys", []):
+                if key in launcher_env:
+                    resolved_environment[key] = launcher_env[key]
+            resolved_environment.update(overlay_env)
+            for key, value in previous_snapshot["environment"].items():
+                if key.endswith("_CAPABILITY"):
+                    resolved_environment[key] = value
+            previous_snapshot.update(environment=resolved_environment, revision=environment_revision)
+            write_private(snapshot_path, previous_snapshot)
+        else:
+            # Legacy launchers migrate on explicit restart. Existing command and
+            # pinned model/mode remain unchanged; credential files stop executing.
+            argv_line = next((line[5:] for line in launcher_text.splitlines() if line.startswith("exec ")), None)
+            if argv_line is None:
+                raise ValueError("Session launcher has no command")
+            argv = shlex.split(argv_line)
+            if '$AGENT_CONSOLE_CLAUDE_SKILLS_DIR' in argv:
+                argv = [overlay_env.get("AGENT_CONSOLE_CLAUDE_SKILLS_DIR", a) if a == '$AGENT_CONSOLE_CLAUDE_SKILLS_DIR' else a for a in argv]
+            spec = LaunchSpec(argv, launcher_env, adapter.secret_files(auth_context))
+            self._write_launcher(name, session["id"], spec,
+                parent_session_id=session.get("parent_session_id"), linked_plan_id=session.get("linked_plan_id"),
+                overlay_env=overlay_env, project_id=project_id)
+            launcher_text = launcher_path.read_text(encoding="utf-8")
+        if tool in {"pi", "hermes"}:
+            from .commandcode import session_mcp_servers, pi_mcp_config, hermes_mcp_servers, write_private_json
+            servers = session_mcp_servers(resolved_environment)
+            if tool == "pi":
+                write_private_json(Path(launcher_env["PI_CODING_AGENT_DIR"]) / "mcp.json", pi_mcp_config(servers))
+            else:
+                config_path = Path(launcher_env["HERMES_HOME"]) / "config.yaml"
+                native_config = json.loads(config_path.read_text())
+                native_config["mcp_servers"] = hermes_mcp_servers(servers)
+                write_private_json(config_path, native_config)
         launcher_path.write_text(launcher_text, encoding="utf-8")
         launcher_path.chmod(0o700)
         provider_adapter(tool, self.auth).configure_shared_skills(

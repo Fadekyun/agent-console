@@ -302,7 +302,9 @@ class SessionIntegrationTests(unittest.TestCase):
             self.assertEqual(session['model'], 'deepseek/deepseek-v4.1-flash')
             self.assertEqual(session['permission_mode'], 'unsupported')
             launcher = (self.manager.settings.state_dir / 'launchers/pi-context-test.sh').read_text()
-            self.assertIn('commandcode-main.env', launcher)
+            snapshot = self.manager.settings.state_dir / 'environment-launches' / f"{session['id']}.json"
+            self.assertIn('commandcode-main.env', snapshot.read_text())
+            self.assertNotIn('set -a', launcher)
             self.assertNotIn('fixture-key', launcher)
             self.assertIn('--append-system-prompt', launcher)
             with self.assertRaisesRegex(ValueError, 'catalogue'):

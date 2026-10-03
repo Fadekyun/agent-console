@@ -50,6 +50,8 @@ class LaunchSpec:
     argv: list[str]
     environment: dict[str, str]
     secret_files: list[Path]
+    resolved_environment: dict[str, str] | None = None
+    environment_revision: int | None = None
 
 
 class ProviderAdapter:
@@ -358,7 +360,7 @@ class CommandCodeAdapter(ProviderAdapter):
         environment = {"AGENT_CONSOLE_CONTEXT_FILE": str(context_path)}
         # MCP entries are generated per session from variable names only, so a
         # session never depends on a host-global hand-edited harness config.
-        mcp_servers = session_mcp_servers()
+        mcp_servers = session_mcp_servers(kwargs.get("resolved_environment"))
         if self.tool == "pi":
             write_private_json(root / "models.json", {"providers": {"commandcode": {
                 "baseUrl": context["base_url"], "api": "openai-completions",
@@ -368,8 +370,7 @@ class CommandCodeAdapter(ProviderAdapter):
             }}})
             ensure_pi_auth_env_reference(root / "auth.json")
             per_session_mcp = pi_mcp_config(mcp_servers)
-            if per_session_mcp["mcpServers"]:
-                write_private_json(root / "mcp.json", per_session_mcp)
+            write_private_json(root / "mcp.json", per_session_mcp)
             environment["PI_CODING_AGENT_DIR"] = str(root)
             argv = [str(self.binary), "--provider", "commandcode", "--model", model,
                     "--append-system-prompt", str(context_path)]

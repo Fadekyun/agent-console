@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 ROUTES = {
+    "/environment": ROOT / "web" / "static" / "environment.html",
     "/work": ROOT / "web" / "static" / "workbench.html",
     "/": ROOT / "web" / "static" / "index.html",
     "/desktop": ROOT / "web" / "static" / "index.html",
