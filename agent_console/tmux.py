@@ -59,6 +59,20 @@ class Tmux:
         command.extend(args)
         return command
 
+    @staticmethod
+    def session_target(name: str) -> str:
+        # Bare targets allow prefix/glob matches in tmux. A removed parent must
+        # never resolve to a surviving child whose name starts with its name.
+        return "=" + validate_session_name(name)
+
+    @staticmethod
+    def pane_target(name: str) -> str:
+        # Explicit session: disambiguates from window/pane names and indexes.
+        return Tmux.session_target(name) + ":"
+
+    def attach_command(self, name: str) -> list[str]:
+        return self.command("attach-session", "-t", self.session_target(name))
+
     def run(
         self,
         *args: str,
@@ -88,12 +102,12 @@ class Tmux:
         if type(lines) is not int or not -50 <= lines <= 50:
             raise ValueError("scroll lines must be an integer between -50 and 50")
         if lines == 0:
-            mode = self.run("display-message", "-p", "-t", name, "#{pane_in_mode}").stdout.strip()
+            mode = self.run("display-message", "-p", "-t", self.pane_target(name), "#{pane_in_mode}").stdout.strip()
             if mode == "1":
-                self.run("send-keys", "-t", name, "-X", "cancel")
+                self.run("send-keys", "-t", self.pane_target(name), "-X", "cancel")
             return
-        self.run("copy-mode", "-e", "-t", name)
-        self.run("send-keys", "-t", name, "-X", "-N", str(abs(lines)),
+        self.run("copy-mode", "-e", "-t", self.pane_target(name))
+        self.run("send-keys", "-t", self.pane_target(name), "-X", "-N", str(abs(lines)),
                  "scroll-up" if lines < 0 else "scroll-down")
 
     def _remove_owned_stale_socket(self) -> bool:
@@ -135,7 +149,7 @@ class Tmux:
 
     def exists(self, name: str) -> bool:
         validate_session_name(name)
-        return self.run("has-session", "-t", name, check=False).returncode == 0
+        return self.run("has-session", "-t", self.session_target(name), check=False).returncode == 0
 
     def create(self, name: str, cwd: Path, launcher: Path) -> None:
         validate_session_name(name)
@@ -144,38 +158,38 @@ class Tmux:
             self.socket_path.parent.chmod(0o700)
             self._remove_owned_stale_socket()
         self.run("new-session", "-d", "-s", name, "-c", str(cwd))
-        self.run("set-option", "-t", name, "detach-on-destroy", "on")
+        self.run("set-option", "-t", self.pane_target(name), "detach-on-destroy", "on")
         self._run_launcher(name, launcher)
 
     def _run_launcher(self, name: str, launcher: Path) -> None:
         validate_session_name(name)
-        self.run("send-keys", "-t", name, "-l", shlex.quote(str(launcher)))
-        self.run("send-keys", "-t", name, "Enter")
+        self.run("send-keys", "-t", self.pane_target(name), "-l", shlex.quote(str(launcher)))
+        self.run("send-keys", "-t", self.pane_target(name), "Enter")
 
     def interrupt(self, name: str) -> None:
         validate_session_name(name)
-        self.run("send-keys", "-t", name, "C-c")
+        self.run("send-keys", "-t", self.pane_target(name), "C-c")
 
     def restart(self, name: str, launcher: Path) -> None:
         validate_session_name(name)
         current_path = self.run(
-            "list-panes", "-t", name, "-F", "#{pane_current_path}"
+            "list-panes", "-t", self.pane_target(name), "-F", "#{pane_current_path}"
         ).stdout.splitlines()[0]
-        self.run("respawn-pane", "-k", "-t", name, "-c", current_path)
+        self.run("respawn-pane", "-k", "-t", self.pane_target(name), "-c", current_path)
         self._run_launcher(name, launcher)
 
     def rename(self, name: str, new_name: str) -> None:
         validate_session_name(name)
         validate_session_name(new_name)
-        self.run("rename-session", "-t", name, new_name)
+        self.run("rename-session", "-t", self.session_target(name), new_name)
 
     def kill(self, name: str) -> None:
         validate_session_name(name)
-        self.run("kill-session", "-t", name)
+        self.run("kill-session", "-t", self.session_target(name))
 
     def pane_pids(self, name: str) -> list[int]:
         validate_session_name(name)
-        result = self.run("list-panes", "-t", name, "-F", "#{pane_pid}", check=False)
+        result = self.run("list-panes", "-t", self.pane_target(name), "-F", "#{pane_pid}", check=False)
         if result.returncode != 0:
             return []
         return [int(value) for value in result.stdout.splitlines() if value.isdigit()]
@@ -191,7 +205,7 @@ class Tmux:
         if lines is not None and not 1 <= lines <= 1000:
             raise ValueError("capture lines must be between 1 and 1000")
         start = "-" if lines is None else f"-{lines}"
-        output = self.run("capture-pane", "-p", "-S", start, "-t", name).stdout
+        output = self.run("capture-pane", "-p", "-S", start, "-t", self.pane_target(name)).stdout
         encoded = output.encode("utf-8")
         if len(encoded) <= max_bytes:
             return output, False
@@ -200,11 +214,11 @@ class Tmux:
     def alternate_screen(self, name: str) -> bool:
         validate_session_name(name)
         result = self.run(
-            "display-message", "-p", "-t", name, "#{alternate_on}", check=False
+            "display-message", "-p", "-t", self.pane_target(name), "#{alternate_on}", check=False
         )
         return result.returncode == 0 and result.stdout.strip() == "1"
 
     def attach(self, name: str) -> None:
         validate_session_name(name)
-        args = self.command("attach-session", "-t", name)
+        args = self.attach_command(name)
         os.execvp(args[0], args)

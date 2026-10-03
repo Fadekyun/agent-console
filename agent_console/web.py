@@ -926,7 +926,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         master_fd, slave_fd = pty.openpty()
         fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
         process = subprocess.Popen(
-            tmux.command("attach-session", "-t", name),
+            tmux.attach_command(name),
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
