@@ -10,12 +10,14 @@
 </head>
 <body class="terminal-page" data-terminal-mode="type">
   <header class="terminal-header">
-    <a class="button compact" href="/">Dashboard</a><strong id="session-name"></strong><span id="connection" class="connection-state">Connecting…</span>
+    <a class="button compact" href="/">Dashboard</a><strong id="session-name"></strong><span id="connection" class="connection-state" role="status" aria-live="polite">Connecting…</span>
     <label class="compact-theme">Theme<select id="terminal-theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label><label class="compact-theme">Palette<select data-palette-select aria-label="Palette"><option value="forest">Forest</option><option value="ocean">Ocean</option><option value="violet">Violet</option></select></label>
   </header>
   <div class="terminal-controls">
     <button id="toggle-composer" aria-expanded="false" aria-controls="input-drawer" title="Optional input and paste controls">Input</button>
-    <button id="text-view">Copy / Read</button>
+    <button id="copy-selection" data-icon="copy" data-icon-only title="Copy selection or open selectable text">Copy selection</button>
+    <button id="paste-clipboard" data-icon="paste" data-icon-only title="Paste into a draft for review">Paste</button>
+    <button id="text-view" data-icon="output" data-icon-only title="Read and copy terminal output">Copy / Read</button>
     <details id="terminal-more"><summary>More</summary><div class="terminal-menu">
       <div class="mode-switch" aria-label="Terminal interaction mode"><button data-mode="scroll">Scroll</button><button data-mode="type" title="Type directly and scroll through output">Type &amp; scroll</button><button data-mode="select">Select</button></div>
       <div class="key-strip" aria-label="Terminal keys and controls">
@@ -29,13 +31,13 @@
   <div class="terminal-frame" role="application" aria-label="Terminal session"><div id="terminal"></div><button id="new-output" class="new-output" hidden aria-label="Scroll to bottom">Scroll to bottom</button></div>
   <div id="input-drawer" class="composer" hidden>
     <textarea aria-label="Compose input" id="composer" rows="1" placeholder="Compose input"></textarea>
-    <div class="composer-actions"><button id="paste-device">Paste from device</button><button id="send">Send</button><button id="send-enter" class="primary">Send + Enter</button></div>
+    <div class="composer-actions"><button id="paste-device" data-icon="paste" title="Paste into the draft without sending">Paste from device</button><button id="send">Send</button><button id="send-enter" class="primary">Send + Enter</button></div>
   </div>
 
-  <dialog id="peers-dialog"><div class="dialog-form"><div class="panel-heading"><div><h2>Peer sessions</h2><p class="muted">Insert into the composer; nothing is sent automatically.</p></div><button data-close="peers-dialog">Close</button></div><div id="peer-list" class="peer-list"></div></div></dialog>
-  <dialog id="text-dialog"><div class="dialog-form text-view"><div class="panel-heading"><div><h2>Selectable terminal text</h2><p id="text-scope" class="muted"></p></div><button data-close="text-dialog">Close</button></div><pre id="text-content" tabindex="0"></pre><div class="dialog-actions"><button id="text-page-up">Page up + refresh</button><button id="text-page-down">Page down + refresh</button><button id="text-refresh">Refresh</button><button id="copy-visible">Copy visible text</button><button id="copy-dom-selection" class="primary">Copy selection</button></div></div></dialog>
-  <dialog id="copy-sheet"><div class="dialog-form"><h2>Copy terminal selection</h2><p class="muted">Select the text below and use the system Copy action.</p><textarea id="copy-sheet-text" rows="10" readonly></textarea><div class="dialog-actions"><button data-close="copy-sheet">Close</button></div></div></dialog>
-  <dialog id="paste-sheet"><div class="dialog-form"><h2>Paste from device</h2><p class="muted">Clipboard access is unavailable or denied. Paste below using your device’s Paste action, then review it in the composer.</p><textarea id="paste-sheet-text" rows="6" placeholder="Paste here for review"></textarea><div class="dialog-actions"><button data-close="paste-sheet">Cancel</button><button id="use-manual-paste" class="primary">Use in composer</button></div></div></dialog>
+  <dialog id="peers-dialog" aria-labelledby="peers-title"><div class="dialog-form"><div class="panel-heading"><div><h2 id="peers-title">Peer sessions</h2><p class="muted">Insert into the composer; nothing is sent automatically.</p></div><button data-close="peers-dialog">Close</button></div><div id="peer-list" class="peer-list"></div></div></dialog>
+  <dialog id="text-dialog" aria-labelledby="text-title"><div class="dialog-form text-view"><div class="panel-heading"><div><h2 id="text-title">Selectable terminal text</h2><p id="text-scope" class="muted"></p></div><button data-close="text-dialog">Close</button></div><pre id="text-content" tabindex="0"></pre><div class="dialog-actions"><button id="text-page-up">Page up + refresh</button><button id="text-page-down">Page down + refresh</button><button id="text-refresh">Refresh</button><button id="copy-visible">Copy visible text</button><button id="copy-dom-selection" class="primary">Copy selection</button></div></div></dialog>
+  <dialog id="copy-sheet" aria-labelledby="copy-title"><div class="dialog-form"><h2 id="copy-title">Copy terminal selection</h2><p class="muted">Select the text below and use the system Copy action.</p><textarea id="copy-sheet-text" aria-label="Copy terminal text" rows="10" readonly></textarea><div class="dialog-actions"><button data-close="copy-sheet">Close</button></div></div></dialog>
+  <dialog id="paste-sheet" aria-labelledby="paste-title"><div class="dialog-form"><h2 id="paste-title">Paste from device</h2><p class="muted">Automatic clipboard reading is unavailable here. Click below and press Ctrl+V or Cmd+V, or touch and hold then choose Paste. Choose Use in composer to review the draft; nothing is sent.</p><textarea id="paste-sheet-text" aria-label="Manual paste" rows="6" placeholder="Click or touch and hold here, then Paste"></textarea><div class="dialog-actions"><button data-close="paste-sheet">Cancel</button><button id="use-manual-paste" class="primary">Use in composer</button></div></div></dialog>
   <textarea id="terminal-clipboard-fallback" class="visually-hidden" aria-hidden="true"></textarea>
   <script type="module" src="/static/terminal.js?v=14"></script>
 </body>

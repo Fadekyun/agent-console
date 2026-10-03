@@ -2,6 +2,9 @@ import { Terminal } from '/vendor/xterm.mjs';
 import { FitAddon } from '/vendor/addon-fit.mjs';
 import { initTheme, xtermTheme } from '/static/theme.js?v=10';
 
+// Clipboard controls keep their accessible text if icon enhancement is unavailable.
+import('/static/icons.js').catch(() => {});
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const name = new URLSearchParams(location.search).get('session');
@@ -238,10 +241,21 @@ async function copyText(value) {
     try { await navigator.clipboard.writeText(value); return true; } catch { /* fallback */ }
   }
   const fallback = $('#terminal-clipboard-fallback');
-  fallback.value = value; fallback.classList.remove('visually-hidden'); fallback.select();
+  const originalParent = fallback.parentNode, originalNext = fallback.nextSibling;
+  const active = document.activeElement, selection = window.getSelection();
+  const ranges = Array.from({ length: selection?.rangeCount || 0 }, (_, index) => selection.getRangeAt(index).cloneRange());
+  // A modal makes elements outside it inert, including the legacy copy textarea.
+  const modal = $('dialog[open]');
+  if (modal) modal.append(fallback);
+  fallback.value = value; fallback.classList.remove('visually-hidden'); fallback.focus({ preventScroll: true }); fallback.select();
   try { return document.execCommand?.('copy') || false; }
   catch { return false; }
-  finally { fallback.classList.add('visually-hidden'); fallback.value = ''; }
+  finally {
+    fallback.classList.add('visually-hidden'); fallback.value = '';
+    originalParent.insertBefore(fallback, originalNext);
+    active?.focus({ preventScroll: true });
+    if (selection) { selection.removeAllRanges(); ranges.forEach(range => selection.addRange(range)); }
+  }
 }
 
 function showCopySheet(value) {
@@ -252,7 +266,7 @@ function showCopySheet(value) {
 
 async function copySelection() {
   const selected = terminal.getSelection();
-  if (!selected) { setStatus('Select terminal text first'); return; }
+  if (!selected) { await refreshTextView(); return; }
   if (await copyText(selected)) { setStatus('Selection copied'); return; }
   showCopySheet(selected);
 }
@@ -359,7 +373,21 @@ terminal.onBinary((value) => {
     socket.send(Uint8Array.from(value, character => character.charCodeAt(0)));
   }
 });
-terminal.onSelectionChange(() => { /* xterm selection is secondary to selectable Text View */ });
+// Native paste events work on HTTP. Stage pasted text before xterm can transmit it,
+// including embedded dock terminals; normal paste in draft/manual textareas stays native.
+document.addEventListener('paste', event => {
+  if (!event.target.closest?.('#terminal') || !event.clipboardData) return;
+  const text = event.clipboardData.getData('text/plain');
+  event.preventDefault(); event.stopImmediatePropagation();
+  if (text) { insertComposer(text); setStatus('Pasted into composer; review before sending'); }
+}, true);
+// Let the browser's native Copy command run when output is selected; Ctrl-C
+// without a selection keeps its normal terminal interrupt meaning.
+terminal.attachCustomKeyEventHandler(event => {
+  if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'v') return false;
+  if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'c' && terminal.hasSelection()) return false;
+  return true;
+});
 terminal.onScroll(() => {
   if (historyMode) return;
   const atBottomNow = atBottom();
@@ -462,12 +490,16 @@ $('#copy-visible').onclick = async () => {
 // before click runs. Keyboard activation retains the browser selection.
 $('#copy-dom-selection').onpointerdown = event => event.preventDefault();
 $('#copy-dom-selection').onclick = copyDomSelection;
+// Preserve terminal/browser selection and the draft insertion caret on pointer use.
+$('#copy-selection').onpointerdown = event => event.preventDefault();
+$('#copy-selection').onclick = copySelection;
+$('#paste-clipboard').onclick = pasteFromDevice;
 $('#paste-device').onclick = pasteFromDevice;
 $('#peers').onclick = openPeers;
 $('#send').onclick = () => submit(false);
 $('#send-enter').onclick = () => submit(true);
 newOutput.onclick = () => { leaveHistory(); terminal.scrollToBottom(); following = true; hasUnread = false; newOutput.hidden = true; newOutput.classList.remove('has-unread'); };
-$('#use-manual-paste').onclick = () => { insertComposer($('#paste-sheet-text').value); $('#paste-sheet').close(); setStatus('Pasted into composer; review before sending'); };
+$('#use-manual-paste').onclick = () => { const text = $('#paste-sheet-text').value; $('#paste-sheet').close(); insertComposer(text); setStatus('Pasted into composer; review before sending'); };
 composer.addEventListener('input', () => { saveDraft(); autoSizeComposer(); });
 composer.addEventListener('keydown', (event) => {
   if (!coarsePointer && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(true); }
