@@ -342,6 +342,6 @@ dialog::backdrop { background: rgb(0 0 0 / .58); } .dialog-form, dialog form { d
 
 /* Native sibling tab/close controls keep distinct keyboard and touch targets. */
 .terminal-tab-item { display: flex; align-items: center; flex: 0 0 auto; min-width: 150px; max-width: 260px; border-radius: 8px; }
-.terminal-tab-item .terminal-tab { flex: 1; min-width: 0; max-width: none; }
+.terminal-tab-item .terminal-tab { flex: 1; min-width: 0; max-width: none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .terminal-tab-item .terminal-tab-close { flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; padding: 10px; border-color: transparent; background: transparent; color: var(--muted); }
 .terminal-tab-item .terminal-tab-close:hover { background: var(--danger-soft); color: var(--danger); }
