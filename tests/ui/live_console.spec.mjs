@@ -43,6 +43,7 @@ test.describe('live Agent Console dogfood', () => {
       const root = page.locator('.tree-node').filter({ hasText: name }).first();
       await root.locator('[data-delegate]').click();
       await page.locator('#delegate-form select[name="tool"]').selectOption('shell');
+      await page.locator('#delegate-form select[name="profile"]').selectOption('general');
       await page.locator('#delegate-form input[name="name"]').fill(childName);
       await page.locator('#delegate-form textarea[name="task"]').fill('Disposable read-only live delegation test');
       await page.locator('#delegate-form button[type="submit"]').click();

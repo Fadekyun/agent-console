@@ -1,3 +1,4 @@
+import { projectActions } from '/static/project-actions.js?v=1';
 import { initTheme } from '/static/theme.js?v=10';
 import { skillActionMessage, skillToolDiagnostic } from '/static/skill-diagnostics.js?v=1';
 
@@ -854,7 +855,7 @@ function projectCard(project) {
   const desc = document.createElement('p'); desc.textContent = project.description || '';
   const actions = document.createElement('div'); actions.className = 'dialog-actions';
   const viewBtn = document.createElement('button'); viewBtn.textContent = 'View sessions'; viewBtn.onclick = () => openProjectDetail(project.id, project.name);
-  actions.append(viewBtn);
+  actions.append(viewBtn, projectActions(project, {api, refresh: renderProjects}));
   card.append(header, meta, desc, actions);
   return card;
 }
