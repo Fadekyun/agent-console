@@ -80,3 +80,24 @@ The original design and v2 implementation plan were compared with current source
 Current CLI/environment/capacity/control/inspection validation: **75 passed, 131 subtests passed**. New workflow tests cover 60 managed-marker/route cases, reject before manager construction or request reads, and never silently generate authorization hashes/keys. Owner child tests use real isolated tmux sessions; name/ID parents inherit project/repository and missing parents do not launch. Managed child requests remain on the capability endpoint, and incomplete reporting context cannot fall back to a local writer. See selected-release-entrypoints.md for operator examples.
 
 Physical-device, unavailable native Claude, non-Linux runner and remote publication/CI limits remain explicitly bounded; they are not represented as executed verification. Source publication remains separate from the user-authorized local port-3210 deployment.
+
+Additional final review found and fixed stopped-name reuse creating parent cycles.
+The shared admission guard resolves the final reused identity under lock and
+rejects self/ancestor placement before launch. Rejection leaves the complete
+session database and existing context, launcher, environment, skills and overlay
+files unchanged. Both manager and authenticated child API regressions exercise
+this behavior. Invalid non-text workflow policy modes now reject consistently
+through the shared service and owner CLI without a traceback or policy mutation.
+
+Canonical guide rollout is complete: Workbench, Coordination and Release `.2`,
+with four remaining guides `.1`. Fresh coder/orchestrator/reviewer/release sessions
+verified all seven copied package hashes against the reviewed mirror; fixtures
+were stopped and hidden. Evidence: `handoffs/console-guides-20261003-parity/`.
+
+Final integrated backend validation after all fixes: **235 passed, 141 subtests
+passed** in 119 seconds. Suites: core, workbench launch, workflow engine, parent
+cycles, child capacity, owner workflow/project/environment CLI, environment,
+inspection, session control and version. Log: `/tmp/console-final-parity-tests.log`.
+The only warning is the existing Starlette/httpx test-client deprecation. The
+v0.27 changes do not change UI interaction code; the previously recorded 82
+browser checks and live desktop/phone/insecure-IP acceptance remain applicable.

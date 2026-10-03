@@ -4,15 +4,15 @@ v0.21.0 adds live tree awareness (`session relatives --current`, relative output
 
 The seven guides are maintained in the canonical skills workspace on n100, `/home/fadekyun/codex/skills`, and mirrored into the configured Console skills library (current `/home/agentstage/codex/skills`; the separate staging mirror is `/home/agentpreview/codex/skills`). Edit the canonical packages, not generated session copies. These packages use portable YAML with namespaced Console metadata; they are not a new plugin system.
 
-| Package | Verified revision | Release-candidate revision | Selection |
+| Package | Verified revision | Introduced in | Selection |
 | --- | --- | --- | --- |
-| agent-console-workbench | 2026-10-03.1 | 2026-10-03.2 (pending rollout) | Shared session basics, navigation, configuration and continuation |
-| agent-console-results | 2026-10-03.1 | 2026-10-03.1 | Shared ready/final results, selected artifacts, delivery and consumption |
-| agent-console-coding | 2026-10-03.1 | 2026-10-03.1 | coder, bugfix |
-| agent-console-coordination | 2026-10-03.1 | 2026-10-03.2 (pending rollout) | orchestrator, planner |
-| agent-console-verification | 2026-10-03.1 | 2026-10-03.1 | reviewer, verifier |
-| agent-console-release | 2026-10-03.1 | 2026-10-03.2 (pending rollout) | release |
-| agent-console-skills | 2026-10-03.1 | 2026-10-03.1 | orchestrator; General remains compatible for an explicit assignment |
+| agent-console-workbench | 2026-10-03.2 | 0.27.0 | Shared session basics, navigation, configuration and continuation |
+| agent-console-results | 2026-10-03.1 | 0.26.0 | Shared ready/final results, selected artifacts, delivery and consumption |
+| agent-console-coding | 2026-10-03.1 | 0.26.0 | coder, bugfix |
+| agent-console-coordination | 2026-10-03.2 | 0.27.0 | orchestrator, planner |
+| agent-console-verification | 2026-10-03.1 | 0.26.0 | reviewer, verifier |
+| agent-console-release | 2026-10-03.2 | 0.27.0 | release |
+| agent-console-skills | 2026-10-03.1 | 0.26.0 | orchestrator; General remains compatible for an explicit assignment |
 
 Role compatibility is checked before launch. A guide does not expand the profile's permissions. For example, coordination guidance lets a planner propose useful steps without authorizing implementation. Existing unrelated infrastructure `agent-console-ops` guidance is preserved.
 
@@ -75,16 +75,19 @@ Canonical guide changes are independently reversible by restoring their reviewed
 previous package versions and refreshing future assignments; a code rollback
 must not silently rewrite the library or old delivery receipts.
 
-## Owner-CLI guide candidate — 2026-10-03.2
+## Owner-CLI guide revision — 2026-10-03.2
 
-Workbench, Coordination and Release have validated `.2` drafts for the owner
-workflow/connection/release CLI and direct owner `session create --parent` parity.
-The other four packages remain `.1`. **Canonical/mirror application and new-session
-delivery of `.2` remain pending** until the parent rollout records them; validation
-of drafts alone is not rollout evidence. Use [the implemented CLI reference](selected-release-entrypoints.md#local-owner-workflows-connections-and-releases)
-for exact commands and request schemas in the meantime.
+Workbench, Coordination and Release now include owner workflow/connection/release
+CLI and direct owner `session create --parent` guidance. The other four packages
+remain `.1`. Canonical and mirror updates passed drift checks, package validation
+and content-bound review. Four disposable native session profiles received all
+seven packages; their copied hashes matched the current canonical mirror. Only
+those fixtures were stopped and hidden. Existing snapshots were preserved.
 
-Apply only after selecting the corresponding service release, with canonical
-source drift checks and rollback copies. Preserve operator changes, validate the
-packages, refresh affected content-bound reviews, mirror through the normal sync
-path and check a new session's receipt. Never rewrite active session snapshots.
+Evidence is retained in `handoffs/console-guides-20261003-parity/` in the parent
+workspace. Canonical and mirror rollback copies are under
+`.console-guide-backups/20261003-135016`. The owner commands require Console
+0.27.0; see [the CLI reference](selected-release-entrypoints.md#local-owner-workflows-connections-and-releases)
+for exact commands and request schemas. Future updates must preserve operator
+changes, validate packages, refresh content-bound reviews and check actual new
+session delivery. Never rewrite active session snapshots.
