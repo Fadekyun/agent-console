@@ -697,11 +697,32 @@ $('#copy-visible').onclick = async () => {
 };
 // Moving pointer focus to this button otherwise collapses the text selection
 // before click runs. Keyboard activation retains the browser selection.
-$('#copy-dom-selection').onpointerdown = event => event.preventDefault();
-$('#copy-dom-selection').onclick = copyDomSelection;
+function selectionCopyAction(button, action) {
+  let touchActivated = false, touchPointer = null;
+  button.onpointerdown = event => {
+    touchActivated = false;
+    touchPointer = event.pointerType === 'touch' && event.isPrimary ? event.pointerId : null;
+    if (event.pointerType === 'mouse') event.preventDefault();
+  };
+  // After dragging text, mobile browsers can omit the compatibility click.
+  // Activate on a completed tap, then ignore its optional click exactly once.
+  button.onpointerup = event => {
+    if (event.pointerType !== 'touch' || event.pointerId !== touchPointer) return;
+    touchPointer = null;
+    if (!button.contains(document.elementFromPoint(event.clientX, event.clientY))) return;
+    touchActivated = true; event.preventDefault(); action();
+  };
+  button.onpointercancel = () => { touchActivated = false; touchPointer = null; };
+  button.onclick = event => {
+    const alreadyActivated = touchActivated && event.detail !== 0;
+    touchActivated = false;
+    if (alreadyActivated) { event.preventDefault(); return; }
+    action();
+  };
+}
+selectionCopyAction($('#copy-dom-selection'), copyDomSelection);
 // Preserve terminal/browser selection and the draft insertion caret on pointer use.
-$('#copy-selection').onpointerdown = event => event.preventDefault();
-$('#copy-selection').onclick = copySelection;
+selectionCopyAction($('#copy-selection'), copySelection);
 $('#paste-clipboard').onclick = pasteFromDevice;
 $('#paste-device').onclick = pasteFromDevice;
 $('#peers').onclick = openPeers;
