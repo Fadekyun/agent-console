@@ -191,17 +191,18 @@ for(const mobile of [false,true]) test(`${mobile?'mobile':'desktop'} initializes
 });
 
 test('refresh preserves an attention draft and successful save releases it',async({page})=>{
+  await page.clock.install();
   const {requests}=await fixture(page);await page.goto('/desktop');
   await page.locator('.session-row').filter({hasText:'first'}).click();
   await page.locator('#attention-form [name=note]').fill('Unfinished note');
   await page.locator('#attention-form [name=state]').selectOption('ready_for_review');
-  await page.locator('#refresh').click();await expect(page.locator('#refresh')).toBeEnabled();
+  await page.clock.fastForward(10000);
   await expect(page.locator('#attention-form [name=note]')).toHaveValue('Unfinished note');
   await expect(page.locator('#attention-form [name=state]')).toHaveValue('ready_for_review');
   await page.locator('#attention-form button[type=submit]').click();
   await expect(page.locator('#attention-status')).toHaveText('State updated');
   expect(requests.find(r=>r.path.endsWith('/attention')).body).toEqual({state:'ready_for_review',note:'Unfinished note'});
-  await page.locator('#refresh').click();await expect(page.locator('#refresh')).toBeEnabled();
+  await page.clock.fastForward(10000);
   await expect(page.locator('#attention-form [name=note]')).toHaveValue('');
 });
 

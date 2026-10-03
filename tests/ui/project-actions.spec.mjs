@@ -23,7 +23,7 @@ test('project editing saves name, repository, description and status with one pe
   const dialog=page.getByRole('dialog',{name:'Edit project'});
   await page.getByLabel('Name',{exact:true}).fill('Renamed project');
   await page.getByLabel('Description').fill('Updated description');
-  await page.getByLabel('Status',{exact:true}).selectOption('paused');
+  await page.getByRole('combobox',{name:'Status',exact:true}).selectOption('paused');
   await page.evaluate(()=>{window.delayRequest=true;});
   await page.getByRole('button',{name:'Save project'}).click();
   await expect(page.getByRole('button',{name:'Save project'})).toBeDisabled();
