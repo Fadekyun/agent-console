@@ -1,4 +1,4 @@
-import { initTheme } from '/static/theme.js?v=8';
+import { initTheme } from '/static/theme.js?v=10';
 import { skillActionMessage, skillToolDiagnostic } from '/static/skill-diagnostics.js?v=1';
 
 const $ = (selector, root = document) => root.querySelector(selector);

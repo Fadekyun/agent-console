@@ -1,6 +1,6 @@
 import { Terminal } from '/vendor/xterm.mjs';
 import { FitAddon } from '/vendor/addon-fit.mjs';
-import { initTheme, xtermTheme } from '/static/theme.js?v=8';
+import { initTheme, xtermTheme } from '/static/theme.js?v=10';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -473,7 +473,7 @@ composer.addEventListener('keydown', (event) => {
   if (!coarsePointer && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(true); }
 });
 
-initTheme($('#terminal-theme'), () => { terminal.options.theme = xtermTheme(); resize(); });
+initTheme($('#terminal-theme'), () => { terminal.options.theme = xtermTheme(); });
 saveDraft();
 try { showComposer(sessionStorage.getItem(`${draftKey}:open`) === 'true'); } catch {}
 setMode(mode, false); syncVisualViewport(); autoSizeComposer(); autoReconnectEnabled = true; cancelReconnect(); connect(); loadBrief(true);

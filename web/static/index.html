@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang="en" data-theme="system">
-<head>
+<head><script src="/static/theme-bootstrap.js?v=1"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>Agent Console</title>
   <script>
-    document.documentElement.dataset.theme=localStorage.getItem('agent-console-theme')||'system';
-    if(location.pathname==='/'){const v=localStorage.getItem('agent-console-layout')||'auto';if(v==='mobile'||(v==='auto'&&matchMedia('(max-width:760px)').matches))location.replace('/mobile'+location.search+location.hash);}
+
+    try { if(location.pathname==='/'){const v=localStorage.getItem('agent-console-layout')||'auto';if(v==='mobile'||(v==='auto'&&matchMedia('(max-width:760px)').matches))location.replace('/mobile'+location.search+location.hash);} } catch { /* Layout defaults remain usable without storage. */ }
   </script>
   <link rel="stylesheet" href="/static/styles.css?v=9">
 </head>
@@ -25,6 +25,7 @@
       </nav>
       <div class="sidebar-footer">
         <label class="theme-field"><span class="nav-label">Theme</span><select id="theme-select" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        <label class="theme-field"><span class="nav-label">Palette</span><select data-palette-select aria-label="Palette"><option value="forest">Forest</option><option value="ocean">Ocean</option><option value="violet">Violet</option></select></label>
         <button id="rail-toggle" class="nav-button" aria-label="Collapse navigation"><span aria-hidden="true">⇤</span><span class="nav-label">Collapse</span></button>
       </div>
     </aside>

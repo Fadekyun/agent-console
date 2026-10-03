@@ -1,4 +1,4 @@
-import { initTheme } from '/static/theme.js?v=8';
+import { initTheme } from '/static/theme.js?v=10';
 import { skillActionMessage, skillToolDiagnostic } from '/static/skill-diagnostics.js?v=1';
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const form=$('#mobile-new'); let identity; let currentModels=[]; let loadModelsReq=0; let pending; let currentPlanId;
