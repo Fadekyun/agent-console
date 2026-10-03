@@ -70,6 +70,7 @@ test('touch Select drag is not cancelled by browser panning',async({page},info)=
   await page.evaluate(()=>{window.__copyAttempts=0;document.execCommand=()=>{window.__copyAttempts++;return false;};Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined});});
   await page.locator('#copy-selection').tap();
   await expect(page.locator('#copy-sheet-text')).toHaveValue('COPYTHIS');
+  await expect(page.locator('#copy-sheet-text')).toBeFocused();
   await page.locator('[data-close="copy-sheet"]').tap();
   expect(await page.evaluate(()=>window.__copyAttempts)).toBe(1);
   await page.locator('#paste-clipboard').tap();await expect(page.locator('#paste-sheet-text')).toBeFocused();

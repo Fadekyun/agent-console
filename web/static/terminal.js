@@ -702,7 +702,7 @@ function selectionCopyAction(button, action) {
   button.onpointerdown = event => {
     touchActivated = false;
     touchPointer = event.pointerType === 'touch' && event.isPrimary ? event.pointerId : null;
-    if (event.pointerType === 'mouse') event.preventDefault();
+    event.preventDefault();
   };
   // After dragging text, mobile browsers can omit the compatibility click.
   // Activate on a completed tap, then ignore its optional click exactly once.
