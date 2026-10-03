@@ -188,7 +188,8 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
       const children=(childrenByParent.get(current.id)||[]).filter(n=>shown.has(n.id)),heading=el('div',null,'node-heading');
       heading.append(a);if(current.hidden)heading.append(el('small','Hidden','muted'));
       if(children.length){
-        const toggle=el('button',collapsedBranches.has(current.id)?'▸':'▾','branch-toggle');
+        const toggle=el('button',collapsedBranches.has(current.id)?'Expand children':'Collapse children','branch-toggle');
+        toggle.dataset.icon=collapsedBranches.has(current.id)?'chevron-right':'chevron-down';toggle.setAttribute('data-icon-only','');
         toggle.setAttribute('aria-label',`Toggle children of ${current.title}`);toggle.setAttribute('aria-expanded',String(!collapsedBranches.has(current.id)));
         toggle.onclick=()=>{if(collapsedBranches.has(current.id))collapsedBranches.delete(current.id);else collapsedBranches.add(current.id);try{localStorage.setItem('workbench-collapsed-branches',JSON.stringify([...collapsedBranches].slice(-500)));}catch{}renderTree(session,selectedId);[...tree.querySelectorAll('.branch-toggle')].find(b=>b.closest('[data-node]').dataset.node===current.id)?.focus({preventScroll:true});};
         heading.append(toggle);
