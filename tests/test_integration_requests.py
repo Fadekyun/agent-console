@@ -556,6 +556,44 @@ class IntegrationRequestTests(unittest.TestCase):
                 "failed", "invalid_provider_event_sequence"
             ))
 
+    def test_exited_child_resolves_cleanup_race_but_unreadable_group_stays_unknown(self) -> None:
+        script = (
+            "import json,sys,time; sys.stdin.buffer.read(); "
+            "print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'invalid'}}),flush=True); "
+            "time.sleep(.2)"
+        )
+        for index, uncertain in enumerate((False, True)):
+            request_id = str(index + 2) + REQUEST_ID[1:]
+            self.accept_without_tmux(self.request(request_id=request_id))
+            row = self.service._lookup(request_id)
+            with patch('agent_console.task_runner.terminate_owned_group', return_value=False) as terminate:
+                if uncertain:
+                    with patch('agent_console.task_runner._active_group_members', return_value=None):
+                        run_request(row['id'], settings=self.settings, argv_override=[sys.executable, '-c', script], env_override={}, ack_timeout=2, run_timeout=5)
+                else:
+                    run_request(row['id'], settings=self.settings, argv_override=[sys.executable, '-c', script], env_override={}, ack_timeout=2, run_timeout=5)
+            terminate.assert_called_once()
+            result = self.service._lookup(request_id)
+            self.assertEqual(result['reason_code'], 'termination_unconfirmed' if uncertain else 'invalid_provider_event_sequence')
+            self.assertEqual(bool(result['admission_held']), uncertain)
+            # Permit the next independent synthetic request after testing the held
+            # state; no real child remains (the fixture exited and was reaped).
+            with self.manager.database.connect() as conn:
+                conn.execute('UPDATE integration_requests SET admission_held=0 WHERE id=?', (row['id'],))
+
+    def test_concurrent_accepted_recovery_uses_one_settled_launch_lease(self) -> None:
+        self.accept_without_tmux()
+        with patch.object(self.manager.tmux, 'create') as create:
+            self.service.reconcile(REQUEST_ID)
+            create.assert_not_called()
+            with self.manager.database.connect() as conn:
+                conn.execute("UPDATE integration_requests SET updated_at='2000-01-01T00:00:00+00:00' WHERE request_key=?", (REQUEST_ID,))
+            threads = [threading.Thread(target=self.service.reconcile, args=(REQUEST_ID,)) for _ in range(20)]
+            for thread in threads: thread.start()
+            for thread in threads: thread.join()
+            create.assert_called_once()
+        self.assertEqual(self.row()['state'], 'accepted')
+
     def test_pipe_flood_is_bounded_and_stale_identity_is_not_killed(self) -> None:
         self.accept_without_tmux()
         result = run_request(
