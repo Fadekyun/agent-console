@@ -34,7 +34,7 @@ test('multiline terminal drafts grow and retain their content across viewport ch
   await page.setViewportSize({width:360,height:180});await expect(composer).toHaveValue(draft);
   expect((await page.locator('.terminal-frame').boundingBox()).height).toBeGreaterThanOrEqual(24);
   expect((await inViewport(page.locator('#send-enter'))).height).toBeGreaterThanOrEqual(44);
-  await page.setViewportSize({width:360,height:800});expect((await composer.boundingBox()).height).toBeGreaterThan(initial+40);
+  await page.setViewportSize({width:360,height:800});await expect.poll(async()=>(await composer.boundingBox()).height).toBeGreaterThan(initial+40);
   await page.locator('#send-enter').click();expect(await page.evaluate(()=>window.__layoutSent)).toEqual([draft+'\r']);
   await expect(composer).toHaveValue('');
 });
