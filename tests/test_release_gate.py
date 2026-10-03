@@ -691,7 +691,7 @@ class ReleaseGateWebTests(unittest.TestCase):
 
         os.environ["AGENT_CONSOLE_TAILSCALE_LOGIN"] = "test@example.com"
         from agent_console.web import create_app
-        self.client = TestClient(create_app(self.manager), base_url="http://localhost")
+        self.client = TestClient(create_app(self.manager), client=("127.0.0.1", 50000), base_url="http://localhost")
         self.headers = {"Tailscale-User-Login": "test@example.com", "Host": "localhost"}
 
     def tearDown(self) -> None:

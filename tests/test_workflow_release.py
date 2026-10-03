@@ -180,7 +180,7 @@ Path(request['response_path']).write_text(json.dumps({'outcome':outcome,'candida
         from agent_console.web import create_app
         settings=patch.multiple(web,EXPECTED_LOGIN='test@example.com',TRUSTED_HOSTS=['testserver'])
         settings.start();self.addCleanup(settings.stop)
-        client=TestClient(create_app(self.manager));headers={'Tailscale-User-Login':'test@example.com'}
+        client=TestClient(create_app(self.manager), client=("127.0.0.1", 50000));headers={'Tailscale-User-Login':'test@example.com'}
         self.assertEqual(client.get('/api/workflow/release-targets').status_code,403)
         self.assertEqual(client.post('/api/workflow/releases/authorize',json={}).status_code,403)
         targets=client.get('/api/workflow/release-targets',headers=headers).json()

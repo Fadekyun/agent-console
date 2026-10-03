@@ -13,7 +13,6 @@ import subprocess
 import termios
 from collections import defaultdict
 from contextlib import ExitStack, asynccontextmanager, suppress
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +23,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 
+from .request_identity import (AuthContext, IdentityDenied, allowed_origins, authorize_browser_origin,
+                               authorize_identity, proxy_networks)
 from .config import Settings
 from .database import Database
 from .logging_config import configure_logging, configure_uvicorn_logging
@@ -102,10 +103,11 @@ TRUSTED_HOSTS = [
 ]
 
 
-@dataclass(frozen=True)
-class AuthContext:
-    actor: str
-    access_surface: str
+TRUSTED_PROXY_NETWORKS = proxy_networks(os.getenv(
+    "AGENT_CONSOLE_TRUSTED_PROXY_CIDRS", "127.0.0.1/32,::1/128"))
+ALLOWED_ORIGINS = allowed_origins(os.getenv(
+    "AGENT_CONSOLE_ALLOWED_ORIGINS",
+    "http://localhost:3210,http://127.0.0.1:3210"))
 
 
 class CreateSessionRequest(BaseModel):
@@ -232,57 +234,25 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
     app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 
-    def require_identity(
-        request: Request,
-        tailscale_user_login: str | None = Header(default=None),
-    ) -> AuthContext:
-        if not EXPECTED_LOGIN:
-            raise HTTPException(status_code=503, detail="Tailscale login allowlist is not configured")
-        login = (tailscale_user_login or "").strip().lower()
-        if login:
-            if login == EXPECTED_LOGIN:
-                return AuthContext(actor=login, access_surface="tailscale")
-            session_manager.database.audit(
-                "authentication.denied",
-                login,
-                "denied",
-                actor=login,
-                surface="web",
-            )
-            raise HTTPException(status_code=403, detail="Tailscale identity is not allowed")
-        client_host = request.client.host if request.client else ""
-        try:
-            local = ipaddress.ip_address(client_host) in LAN_NETWORK
-        except ValueError:
-            local = False
-        if not local:
-            session_manager.database.audit(
-                "authentication.denied",
-                client_host or None,
-                "denied",
-                actor=client_host or "unknown",
-                surface="web",
-            )
-            raise HTTPException(status_code=403, detail="Tailscale identity or trusted LAN is required")
-        return AuthContext(actor=client_host, access_surface="local-lan")
+    def identity_for(connection):
+        return authorize_identity(connection, expected_login=EXPECTED_LOGIN,
+                                  lan_network=LAN_NETWORK, trusted_proxies=TRUSTED_PROXY_NETWORKS)
 
-    # Presence reads use the existing identity policy without authentication audit
-    # writes or any session/database manager call on this inspection route.
-    def presence_identity(request: Request, tailscale_user_login: str | None = Header(default=None)):
-        if not EXPECTED_LOGIN:
-            raise HTTPException(status_code=503, detail="Presence identity unavailable")
-        login = (tailscale_user_login or "").strip().lower()
-        if login:
-            if login != EXPECTED_LOGIN:
-                raise HTTPException(status_code=403, detail="Presence identity denied")
-            return AuthContext(actor=login, access_surface="tailscale")
+    def require_identity(request: Request) -> AuthContext:
         try:
-            local = ipaddress.ip_address(request.client.host if request.client else "") in LAN_NETWORK
-        except ValueError:
-            local = False
-        if not local:
-            raise HTTPException(status_code=403, detail="Presence identity denied")
-        return AuthContext(actor=request.client.host, access_surface="local-lan")
+            return identity_for(request)
+        except IdentityDenied as exc:
+            if exc.status == 403:
+                peer = request.client.host if request.client else "unknown"
+                session_manager.database.audit("authentication.denied", peer, "denied", actor=peer, surface="web")
+            raise HTTPException(status_code=exc.status, detail=exc.detail) from None
+
+    # Presence reads share policy without manager/database side effects.
+    def presence_identity(request: Request):
+        try:
+            return identity_for(request)
+        except IdentityDenied as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail) from None
 
     from .presence_routes import install as install_presence
     install_presence(app, presence_identity)
@@ -922,21 +892,15 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
 
     @app.websocket("/ws/sessions/{name}")
     async def session_terminal(websocket: WebSocket, name: str) -> None:
-        login = (websocket.headers.get("tailscale-user-login") or "").strip().lower()
-        client_host = websocket.client.host if websocket.client else ""
-        if login:
-            allowed = bool(EXPECTED_LOGIN and login == EXPECTED_LOGIN)
-            actor = login
-        else:
-            try:
-                allowed = ipaddress.ip_address(client_host) in LAN_NETWORK
-            except ValueError:
-                allowed = False
-            actor = client_host
-        if not allowed:
-            log.warning("ws session=%s actor=%s denied", name, actor)
-            await websocket.close(code=4403, reason="Tailscale identity or trusted LAN is required")
+        try:
+            authorize_browser_origin(websocket, ALLOWED_ORIGINS)
+            identity = identity_for(websocket)
+        except IdentityDenied as exc:
+            peer = websocket.client.host if websocket.client else "unknown"
+            log.warning("ws session=%s peer=%s denied", name, peer)
+            await websocket.close(code=4000 + exc.status, reason=exc.detail)
             return
+        actor = identity.actor
         try:
             name = validate_session_name(name)
         except ValueError:

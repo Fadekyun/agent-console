@@ -1549,7 +1549,7 @@ class WaitProtocolTests(unittest.TestCase):
         os.environ["AGENT_CONSOLE_TAILSCALE_LOGIN"] = "test@example.com"
         from fastapi.testclient import TestClient
         from agent_console.web import create_app
-        client = TestClient(create_app(self.manager), base_url="http://localhost")
+        client = TestClient(create_app(self.manager), client=("127.0.0.1", 50000), base_url="http://localhost")
         headers = {"Tailscale-User-Login": "test@example.com"}
 
         parent = self.manager.create(

@@ -142,7 +142,7 @@ class WebTests(unittest.TestCase):
         self.manager = SessionManager(settings)
         codex_home = self.manager.auth.codex_home("default")
         (codex_home / "auth.json").write_text("{}\n", encoding="utf-8")
-        self.client = TestClient(create_app(self.manager))
+        self.client = TestClient(create_app(self.manager), client=("127.0.0.1", 50000))
         self.headers = {"Tailscale-User-Login": "test@example.com"}
 
     def tearDown(self) -> None:
@@ -412,7 +412,7 @@ class WebTests(unittest.TestCase):
         with self.assertRaises(InspectionUnavailable):
             read_session_snapshot(database)
         with patch("agent_console.web.Settings.from_env", return_value=self.manager.settings):
-            with TestClient(create_app(self.manager)):
+            with TestClient(create_app(self.manager), client=("127.0.0.1", 50000)):
                 self.assertTrue(read_session_snapshot(database)["ok"])
         with self.assertRaises(InspectionUnavailable):
             read_session_snapshot(database)
