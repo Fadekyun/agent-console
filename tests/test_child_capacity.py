@@ -79,7 +79,8 @@ class ChildCapacityTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
             return response.json()
         with patch.dict(os.environ, {'AGENT_CONSOLE_REPORTING_URL':'http://fixture.invalid',
-                'AGENT_CONSOLE_SESSION_ID':parent['id']}), \
+                'AGENT_CONSOLE_SESSION_ID':parent['id'],
+                'AGENT_CONSOLE_EVIDENCE_CAPABILITY':'fixture-capability'}), \
                 patch('agent_console.session_client.request', side_effect=transport), \
                 patch('agent_console.cli.SessionManager', side_effect=AssertionError('no local writer fallback')), \
                 patch('agent_console.cli.emit', side_effect=emitted.append):
@@ -96,8 +97,8 @@ class ChildCapacityTests(unittest.TestCase):
         parent = self.manager.create(tool='shell', profile='planner', name='cli-parent',
             project_id=project['id'], repository=str(self.workspace), creator_surface='web')
         emitted = []
-        markers = {key: '' for key in ('AGENT_CONSOLE_REPORTING_URL',
-            'AGENT_CONSOLE_SESSION_ID', 'AGENT_CONSOLE_EVIDENCE_CAPABILITY')}
+        from agent_console.managed_context import MARKERS
+        markers = dict.fromkeys(MARKERS, '')
         with patch.dict(os.environ, markers), patch.object(cli, 'SessionManager', return_value=self.manager), \
                 patch.object(cli, 'emit', side_effect=emitted.append):
             for number, ref in enumerate((parent['id'], parent['tmux_name'])):
@@ -120,7 +121,8 @@ class ChildCapacityTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
             return response.json()
         with patch.dict(os.environ, {'AGENT_CONSOLE_REPORTING_URL':'http://fixture.invalid',
-                'AGENT_CONSOLE_SESSION_ID':parent['id']}), \
+                'AGENT_CONSOLE_SESSION_ID':parent['id'],
+                'AGENT_CONSOLE_EVIDENCE_CAPABILITY':'fixture-capability'}), \
                 patch('agent_console.session_client.request', side_effect=transport), \
                 patch.object(cli, 'SessionManager', side_effect=AssertionError('no local writer')), \
                 patch.object(cli, 'emit', side_effect=emitted.append):

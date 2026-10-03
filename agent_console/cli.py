@@ -17,6 +17,7 @@ from .secrets_store import migrate_openrouter_secret, secret_status, set_openrou
 from .skills import approve_superpower, doctor_skills, get_effective_skills, list_superpower_approvals, revoke_superpower, sync_skills
 from .validation import PROFILES, TOOLS
 from .inspection_views import inspection_route, read_route
+from .managed_context import has_managed_markers, managed_context
 
 
 def emit(value: Any) -> None:
@@ -322,14 +323,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         route = inspection_route(args)
+        context = managed_context() if args.command in {"session", "delegate"} else None
         if args.command in {"project", "environment"}:
-            if any(os.getenv(key) for key in ("AGENT_CONSOLE_REPORTING_URL", "AGENT_CONSOLE_SESSION_ID", "AGENT_CONSOLE_EVIDENCE_CAPABILITY")):
+            if has_managed_markers():
                 raise PermissionError("project and environment owner commands are unsupported in managed sessions; use a local human owner terminal")
             from .owner_cli import run
             emit(run(args, SessionManager()))
             return 0
         if route is not None:
-            if os.getenv("AGENT_CONSOLE_REPORTING_URL") and route[0] == "session" and len(route) == 2:
+            if context is not None and route[0] == "session" and len(route) == 2:
                 from .session_client import managed_read
                 result = managed_read(args, route)
             else:
@@ -420,13 +422,10 @@ def main(argv: list[str] | None = None) -> int:
                 print("agentctl: integration operation rejected", file=sys.stderr)
             return exit_code
         from .session_client import handles, run as run_session_control
-        if handles(args) and any(os.getenv(key) for key in ("AGENT_CONSOLE_REPORTING_URL", "AGENT_CONSOLE_SESSION_ID", "AGENT_CONSOLE_EVIDENCE_CAPABILITY")):
-            if not os.getenv("AGENT_CONSOLE_REPORTING_URL"):
-                raise PermissionError("managed session reporting URL required; no local writer fallback")
-            if handles(args):
-                result = run_session_control(args)
-                emit(result)
-                return result.get("exit_code", 0) if isinstance(result, dict) else 0
+        if handles(args) and context is not None:
+            result = run_session_control(args)
+            emit(result)
+            return result.get("exit_code", 0) if isinstance(result, dict) else 0
         manager = SessionManager()
         if args.command == "auth":
             if args.auth_command == "login":

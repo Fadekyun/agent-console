@@ -5,6 +5,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+from .managed_context import managed_context
 
 
 NETWORK_PERMISSION_ERROR = ("Console session network access was denied by the sandbox. "
@@ -18,14 +19,11 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def request(command, payload):
-    capability = os.getenv('AGENT_CONSOLE_EVIDENCE_CAPABILITY')
-    identity = os.getenv('AGENT_CONSOLE_SESSION_ID')
-    if not capability or not identity:
-        raise PermissionError('managed session reporting capability required')
-    url = os.environ['AGENT_CONSOLE_REPORTING_URL'].rstrip('/') + '/api/agent-sessions'
+    context = managed_context(required=True)
+    url = context.reporting_url + '/api/agent-sessions'
     req = urllib.request.Request(url, data=json.dumps({'command':command,'payload':payload}).encode(),
-             headers={'Content-Type':'application/json', 'Authorization':'Bearer '+capability,
-                      'X-Agent-Console-Session':identity})
+             headers={'Content-Type':'application/json', 'Authorization':'Bearer '+context.capability,
+                      'X-Agent-Console-Session':context.session_id})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
     try:
         with opener.open(req, timeout=45) as response:

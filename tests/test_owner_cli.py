@@ -13,7 +13,7 @@ from agent_console import cli, session_client
 from agent_console.config import Settings
 from agent_console.manager import SessionManager
 
-MARKERS = ('AGENT_CONSOLE_REPORTING_URL', 'AGENT_CONSOLE_SESSION_ID', 'AGENT_CONSOLE_EVIDENCE_CAPABILITY')
+from agent_console.managed_context import MARKERS
 
 
 class OwnerCliTests(unittest.TestCase):

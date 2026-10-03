@@ -147,7 +147,9 @@ class SessionControlTests(unittest.TestCase):
                 validate_child(parent,**{**valid,**override})
 
     def test_cli_attention_and_inspection_never_instantiate_writer(self):
-        with patch.dict(os.environ,{'AGENT_CONSOLE_REPORTING_URL':'http://localhost:3210'}), \
+        with patch.dict(os.environ,{'AGENT_CONSOLE_REPORTING_URL':'http://localhost:3210',
+                                    'AGENT_CONSOLE_SESSION_ID':'fixture-session',
+                                    'AGENT_CONSOLE_EVIDENCE_CAPABILITY':'fixture-capability'}), \
              patch('agent_console.cli.SessionManager',side_effect=AssertionError('writer opened')), \
              patch('agent_console.session_client.request',return_value={'ok':True}) as request, \
              patch('agent_console.cli.emit'):

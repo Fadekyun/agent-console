@@ -22,7 +22,7 @@ from agent_console.config import Settings
 from agent_console.database import Database
 from agent_console.inspection import InspectionUnavailable
 from agent_console.inspection_views import (READ_ROUTES, inspection_route, InspectionViews,
-    TmuxObservation, _bounded_run, _read_file)
+    TmuxObservation, _bounded_run, _read_file, read_route)
 
 
 def fingerprint(root):
@@ -62,6 +62,19 @@ class CliInspectionTests(unittest.TestCase):
         with redirect_stdout(out), redirect_stderr(error):
             code = cli.main(argv)
         return code, out.getvalue(), error.getvalue()
+
+    def invoke_views(self, argv):
+        """Exercise offline relative views directly, without managed CLI routing.
+
+        ID/name-only fixtures identify the current row for these view algorithms;
+        the public CLI must reject that incomplete reporting context.
+        """
+        args = cli.parser().parse_args(argv)
+        try:
+            result = read_route(args, inspection_route(args))
+            return 0, json.dumps(result), ""
+        except (InspectionUnavailable, ValueError, FileNotFoundError, PermissionError) as exc:
+            return 2, "", str(exc)
 
     def test_every_parsed_leaf_has_only_the_exact_read_routes(self):
         found, excluded = set(), []
@@ -107,7 +120,7 @@ class CliInspectionTests(unittest.TestCase):
         self.add_relative('unrelated', None)
         with patch.dict(os.environ, {'AGENT_CONSOLE_SESSION_ID': 'b', 'AGENT_CONSOLE_SESSION_NAME': 'stale'}):
             before = fingerprint(self.root)
-            code, out, error = self.invoke(['session', 'relatives', '--current'])
+            code, out, error = self.invoke_views(['session', 'relatives', '--current'])
             self.assertEqual(code, 0, error)
             result = json.loads(out)
             self.assertEqual(result['root_id'], 's')
@@ -119,10 +132,10 @@ class CliInspectionTests(unittest.TestCase):
             self.add_relative('e', 'd')
             self.writer.execute("UPDATE sessions SET tmux_name='renamed-b' WHERE id='b'")
             self.writer.commit()
-            result = json.loads(self.invoke(['session', 'relatives', '--current'])[1])
+            result = json.loads(self.invoke_views(['session', 'relatives', '--current'])[1])
             self.assertEqual(result['relations']['descendant'], ['d', 'e'])
             self.assertEqual(next(m['tmux_name'] for m in result['members'] if m['is_current']), 'renamed-b')
-            code, out, error = self.invoke(['session', 'tree', '--current', '--json'])
+            code, out, error = self.invoke_views(['session', 'tree', '--current', '--json'])
             self.assertEqual(code, 0, error)
             self.assertEqual(len(json.loads(out)['roots']), 1)
             self.assertNotIn('unrelated', out)
@@ -135,31 +148,31 @@ class CliInspectionTests(unittest.TestCase):
         self.writer.execute("UPDATE sessions SET archived_transcript=? WHERE id='b'", (str(archive),))
         self.writer.commit()
         with patch.dict(os.environ, {'AGENT_CONSOLE_SESSION_ID': 's'}):
-            self.assertEqual(self.invoke(['session', 'review', '--relative', 'child', '--json'])[0], 2)
+            self.assertEqual(self.invoke_views(['session', 'review', '--relative', 'child', '--json'])[0], 2)
             for selector in [['--relative', 'child', '--index', '1'], ['--session-id', 'b']]:
-                code, out, error = self.invoke(['session', 'review', *selector, '--lines', '1', '--json'])
+                code, out, error = self.invoke_views(['session', 'review', *selector, '--lines', '1', '--json'])
                 self.assertEqual(code, 0, error)
                 result = json.loads(out)
                 self.assertEqual(result['content'], 'latest\n')
                 self.assertEqual(result['source'], 'archived-transcript')
-            self.assertEqual(self.invoke(['session', 'review', '--relative', 'parent'])[0], 2)
-            self.assertEqual(self.invoke(['session', 'review', '--relative', 'child', '--index', '0'])[0], 2)
-            self.assertEqual(self.invoke(['session', 'review', 'one', '--relative', 'child'])[0], 2)
+            self.assertEqual(self.invoke_views(['session', 'review', '--relative', 'parent'])[0], 2)
+            self.assertEqual(self.invoke_views(['session', 'review', '--relative', 'child', '--index', '0'])[0], 2)
+            self.assertEqual(self.invoke_views(['session', 'review', 'one', '--relative', 'child'])[0], 2)
             self.add_relative('outside', None)
-            self.assertEqual(self.invoke(['session', 'review', '--session-id', 'outside'])[0], 2)
+            self.assertEqual(self.invoke_views(['session', 'review', '--session-id', 'outside'])[0], 2)
 
     def test_relatives_ancestor_order_limits_and_corrupt_tree(self):
         self.add_relative('b', 's')
         self.add_relative('c', 'b')
         with patch.dict(os.environ, {'AGENT_CONSOLE_SESSION_ID': 'c'}):
-            result = json.loads(self.invoke(['session', 'relatives', '--current'])[1])
+            result = json.loads(self.invoke_views(['session', 'relatives', '--current'])[1])
             self.assertEqual(result['relations']['ancestor'], ['b', 's'])
-            self.assertEqual(self.invoke(['session', 'review', '--relative', 'ancestor', '--index', '2'])[0], 0)
+            self.assertEqual(self.invoke_views(['session', 'review', '--relative', 'ancestor', '--index', '2'])[0], 0)
             with patch('agent_console.session_relatives.MAX_MEMBERS', 2):
-                self.assertEqual(self.invoke(['session', 'relatives', '--current'])[0], 2)
+                self.assertEqual(self.invoke_views(['session', 'relatives', '--current'])[0], 2)
             self.writer.execute("UPDATE sessions SET parent_session_id='c' WHERE id='s'")
             self.writer.commit()
-            self.assertEqual(self.invoke(['session', 'relatives', '--current'])[0], 2)
+            self.assertEqual(self.invoke_views(['session', 'relatives', '--current'])[0], 2)
 
     def test_integration_status_and_submit_still_use_writer_service(self):
         for verb, method in [("plan-status", "status"), ("plan-request", "submit")]:

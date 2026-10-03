@@ -6,7 +6,6 @@ This surface must not run inside a managed agent session, even for inspection.
 import argparse
 import json
 from functools import partial
-import os
 from pathlib import Path
 import sys
 
@@ -19,8 +18,7 @@ from .workflow_dispatch_api import (
 )
 from .workflow_release_api import Authorize, Preview, Start
 
-MARKERS = ('AGENT_CONSOLE_REPORTING_URL', 'AGENT_CONSOLE_SESSION_ID',
-           'AGENT_CONSOLE_EVIDENCE_CAPABILITY')
+from .managed_context import MARKERS, has_managed_markers
 MAX_PAYLOAD_BYTES = 256 * 1024
 
 
@@ -94,7 +92,7 @@ def payload(args):
 def run(args, manager_factory=None):
     # Check before reading payloads or creating a manager, including read routes:
     # local managers/services migrate stores and therefore are not agent readers.
-    if any(os.getenv(key) for key in MARKERS):
+    if has_managed_markers():
         raise PermissionError('workflow manage is unsupported in managed sessions; use a local human owner terminal')
     data = payload(args)
     if manager_factory is None:
