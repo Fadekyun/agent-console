@@ -665,9 +665,9 @@ test('structured attention is explicit, filterable, and separate from mechanical
   const row = page.locator('#active-sessions .session-row').filter({ hasText: 'codex-root' });
   await row.click();
   await expect(page.locator('#session-inspector')).toBeVisible();
-  await page.locator('#attention-controls').evaluate(e=>{e.open=true;});await page.locator('#attention-form select[name="state"]').selectOption('blocked');
-  await page.locator('#attention-controls').evaluate(e=>{e.open=true;});await page.locator('#attention-form textarea[name="note"]').fill('Waiting for reviewed deployment choice');
-  await page.locator('#attention-controls').evaluate(e=>{e.open=true;});await page.locator('#attention-form button[type="submit"]').click();
+  await page.locator('#attention-form select[name="state"]').selectOption('blocked');
+  await page.locator('#attention-form textarea[name="note"]').fill('Waiting for reviewed deployment choice');
+  await page.locator('#attention-form button[type="submit"]').click();
   await expect(page.locator('#session-inspector')).toContainText('Waiting for reviewed deployment choice');
   await expect(row).toContainText('Blocked');
   await page.locator('[data-attention-filter="blocked"]').click();
