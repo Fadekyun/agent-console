@@ -23,7 +23,7 @@ const managedVisibility = isEmbedded && new URLSearchParams(location.search).get
 let viewVisible = !managedVisibility;
 const coarsePointer = matchMedia('(pointer: coarse)').matches;
 if (isEmbedded) document.body.classList.add('terminal-embedded');
-const terminal = new Terminal({ cursorBlink: true, scrollback: 10000, fontSize: coarsePointer ? 13 : 14, theme: xtermTheme() });
+const terminal = new Terminal({ cursorBlink: true, scrollback: 10000, fontSize: coarsePointer ? 13 : 14, macOptionClickForcesSelection: true, theme: xtermTheme() });
 const fit = new FitAddon();
 terminal.loadAddon(fit); terminal.open($('#terminal'));
 
@@ -169,6 +169,7 @@ window.addEventListener('message', (event) => {
   if (managedVisibility && event.data?.type === 'agent-console:terminal-visibility' && typeof event.data.visible === 'boolean') {
     if (viewVisible === event.data.visible) return;
     viewVisible = event.data.visible;
+    if (!viewVisible) cancelDragSelection();
     if (viewVisible) { autoReconnectEnabled = true; cancelReconnect(); connect(); }
     else {
       connectionGeneration++; clipboardContext++;
@@ -314,6 +315,7 @@ async function connect() {
 }
 
 function setMode(selected, focus = true) {
+  cancelDragSelection();
   mode = ['scroll', 'type', 'select'].includes(selected) ? selected : 'scroll';
   document.body.dataset.terminalMode = mode;
   terminal.options.disableStdin = mode !== 'type';
@@ -534,10 +536,12 @@ terminal.onBinary((value) => {
     socket.send(Uint8Array.from(value, character => character.charCodeAt(0)));
   }
 });
-// Native paste events work on HTTP. Stage pasted text before xterm can transmit it,
-// including embedded dock terminals; normal paste in draft/manual textareas stays native.
+// Let xterm handle native paste in typing mode, including bracketed paste and
+// HTTP origins. The toolbar Paste action remains an explicit draft workflow.
+// Read-only interaction modes stage native paste instead of silently dropping it.
 document.addEventListener('paste', event => {
   if (!event.target.closest?.('#terminal') || !event.clipboardData) return;
+  if (mode === 'type') return;
   const text = event.clipboardData.getData('text/plain');
   event.preventDefault(); event.stopImmediatePropagation();
   if (text) { insertComposer(text); setStatus('Pasted into composer; review before sending'); }
@@ -545,10 +549,55 @@ document.addEventListener('paste', event => {
 // Let the browser's native Copy command run when output is selected; Ctrl-C
 // without a selection keeps its normal terminal interrupt meaning.
 terminal.attachCustomKeyEventHandler(event => {
+  if (event.ctrlKey && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'c') {
+    event.preventDefault();
+    if (event.type === 'keydown') copySelection();
+    return false;
+  }
   if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'v') return false;
   if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'c' && terminal.hasSelection()) return false;
   return true;
 });
+// A TUI can own mouse reporting even when stdin is disabled. Explicit Select
+// mode uses xterm's public cell-selection API so drag never reaches the TUI.
+const selectionSurface = $('#terminal');
+let selectionDrag = null;
+function cancelDragSelection() {
+  const pointer = selectionDrag?.id;
+  selectionDrag = null;
+  if (pointer !== undefined && selectionSurface.hasPointerCapture(pointer)) selectionSurface.releasePointerCapture(pointer);
+}
+function selectionCell(event) {
+  const bounds = $('.xterm-screen').getBoundingClientRect();
+  const column = Math.max(0, Math.min(terminal.cols, Math.round((event.clientX - bounds.left) * terminal.cols / bounds.width)));
+  const row = Math.max(0, Math.min(terminal.rows - 1, Math.floor((event.clientY - bounds.top) * terminal.rows / bounds.height)));
+  return (terminal.buffer.active.viewportY + row) * terminal.cols + column;
+}
+function updateDragSelection(event) {
+  const end = selectionCell(event), start = Math.min(selectionDrag.anchor, end);
+  terminal.select(start % terminal.cols, Math.floor(start / terminal.cols), Math.abs(end - selectionDrag.anchor));
+}
+selectionSurface.addEventListener('pointerdown', event => {
+  if (mode !== 'select' || event.button !== 0 || !event.isPrimary) return;
+  // Ordinary mouse selection retains xterm's word/line selection and auto-scroll.
+  if (event.pointerType === 'mouse' && terminal.modes.mouseTrackingMode === 'none') return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  selectionDrag = {id: event.pointerId, anchor: selectionCell(event)};
+  selectionSurface.setPointerCapture(event.pointerId);
+  terminal.focus(); updateDragSelection(event);
+}, true);
+selectionSurface.addEventListener('pointermove', event => {
+  if (!selectionDrag || selectionDrag.id !== event.pointerId) return;
+  event.preventDefault(); event.stopImmediatePropagation(); updateDragSelection(event);
+}, true);
+selectionSurface.addEventListener('pointerup', event => {
+  if (!selectionDrag || selectionDrag.id !== event.pointerId) return;
+  event.preventDefault(); event.stopImmediatePropagation(); updateDragSelection(event);
+  selectionDrag = null;
+  if (selectionSurface.hasPointerCapture(event.pointerId)) selectionSurface.releasePointerCapture(event.pointerId);
+}, true);
+for (const type of ['pointercancel', 'lostpointercapture']) selectionSurface.addEventListener(type, cancelDragSelection);
+window.addEventListener('blur', cancelDragSelection);
 terminal.onScroll(() => {
   if (historyMode) return;
   const atBottomNow = atBottom();

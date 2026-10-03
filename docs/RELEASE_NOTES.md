@@ -1,3 +1,11 @@
+## 0.28.8 — unreleased, 2026-10-04 (#141)
+
+- Impact: native keyboard/context-menu paste in typing mode reaches the terminal through xterm, retaining bracketed paste. Toolbar Paste still stages a draft for review. Explicit Select mode supports pointer dragging even when a TUI owns mouse reporting, with desktop copy shortcuts and touch gesture capture; normal TUI mouse input and unselected Ctrl-C remain intact.
+- Navigation: remove repeated Workbench branding, preserve distinct instance labels, and provide consistent Work/Skills/Settings destinations and active states at every width. Keep the skip link on the current page. Full-control navigation remains reachable on phones and short screens, with explicit accessible names in the collapsed rail.
+- Configuration/migration: none. Refresh the page. Direct terminal paste now behaves like terminal input; use the toolbar Paste button for draft review. macOS Option-drag can select text while a TUI owns the mouse.
+- Verification: genuine mouse dragging with mouse-enabled TUI output, native clipboard keyboard shortcuts on localhost and insecure HTTP, bracketed paste and Ctrl-C, touch gesture selection, responsive navigation/branding and skip-link regressions. Full CI and disposable live-session acceptance gate deployment. Physical iOS/Android clipboard menus remain a separate verification boundary.
+- Rollback: select retained v0.28.7 through its schema guard and restart web only; preserve databases, drafts and running harnesses.
+
 ## 0.28.7 — unreleased, 2026-10-03 (#141)
 
 - Impact: terminal options use one fixed-size chevron that points down when closed and up when open, with an accessible label and expanded state. Removed the duplicate Copy / Read toolbar button: the remaining Copy control copies highlighted text or opens selectable output when nothing is highlighted. Paging, refresh, selection copying and clipboard fallbacks remain available.

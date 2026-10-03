@@ -304,3 +304,9 @@ This document tracks the planned and completed development work for Agent Consol
 - Implemented for trial: opt-in Work home, phone full-screen terminal, explicit manual child sessions, draft/reconnect fixes and independent version switching.
 - Deployment and verification contract: [STAGING_WORKBENCH.md](STAGING_WORKBENCH.md).
 - Follow-up: adaptive suggestions/scheduling, durable results/inbox, exact effective-skill provenance and separately approved migration/cutover. Current console remains available throughout.
+
+### Native terminal clipboard and navigation follow-up (#141, 2026-10-04)
+
+- Fixed direct terminal paste being silently rerouted to a draft and Select-mode dragging being blocked by TUI mouse reporting. Preserve bracketed paste, terminal interrupts, and explicit toolbar draft review.
+- Simplified repeated Workbench branding and restored consistent responsive navigation, active destinations, skip-link focus, and full-control navigation reachability.
+- Further audit findings to address: context-keyed New session draft recovery, stable identity for Workbench output/skill reads, and stale project-detail response guards.

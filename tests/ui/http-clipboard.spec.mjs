@@ -66,16 +66,17 @@ test('HTTP copy fallback preserves text selection and focus',async({page})=>{
   expect(await page.evaluate(()=>getSelection().toString())).toContain('HTTP clipboard text');
 });
 
-test('HTTP native keyboard paste stages clipboard text instead of terminal input',async({page},info)=>{
+test('HTTP native keyboard paste reaches the terminal with bracketed paste intact',async({page},info)=>{
   test.skip(info.project.name!=='desktop','Keyboard paste is a desktop check.');
   const writes=await open(page);await page.locator('#copy-selection').click();
   await expect(page.locator('#text-content')).toContainText('HTTP clipboard text');
   await page.locator('#copy-visible').click();
   await expect(page.locator('#connection')).toHaveText('Visible text copied');
   await page.locator('[data-close="text-dialog"]').click();
+  await page.evaluate(()=>new Promise(resolve=>window.__terminal.write('\x1b[?2004h',resolve)));
   await page.locator('.xterm-helper-textarea').focus();await expect(page.locator('.xterm-helper-textarea')).toBeFocused();await page.keyboard.press('Control+V');
-  await expect(page.locator('#composer')).toHaveValue('HTTP clipboard text\nNever auto-send\n');
-  expect(writes).toEqual([]);
+  await expect.poll(()=>writes).toEqual(['\x1b[200~HTTP clipboard text\rNever auto-send\r\x1b[201~']);
+  await expect(page.locator('#composer')).toHaveValue('');
 });
 
 test('HTTP selected terminal text has a selectable fallback without losing the selection',async({page},info)=>{
