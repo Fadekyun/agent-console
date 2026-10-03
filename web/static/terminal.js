@@ -46,14 +46,16 @@ let nativeScrolled = false;
 let pendingScroll = 0, scrollTimer = null;
 let hasUnread = false;
 let briefLoaded = false;
+let draftRevision = 0, clipboardContext = 0, pastePending = false;
 let reconnectTimer = null;
 let reconnectAttempt = 0;
 const MAX_RECONNECT_ATTEMPTS = 30;
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 30000;
 let autoReconnectEnabled = true;
-function saveDraft() { $('#toggle-composer').textContent = composer.value ? 'Input · draft' : 'Input'; try { if (draftKey) sessionStorage.setItem(draftKey, composer.value); } catch { /* continue without persistence */ } }
+function saveDraft() { draftRevision++; $('#toggle-composer').textContent = composer.value ? 'Input · draft' : 'Input'; try { if (draftKey) sessionStorage.setItem(draftKey, composer.value); } catch { /* continue without persistence */ } }
 function showComposer(open, focus = false) {
+  if (!open) clipboardContext++;
   $('#input-drawer').hidden = !open;
   $('#toggle-composer').setAttribute('aria-expanded', String(open));
   try { if (draftKey) sessionStorage.setItem(`${draftKey}:open`, String(open)); } catch {}
@@ -168,7 +170,7 @@ window.addEventListener('message', (event) => {
     viewVisible = event.data.visible;
     if (viewVisible) { autoReconnectEnabled = true; cancelReconnect(); connect(); }
     else {
-      connectionGeneration++;
+      connectionGeneration++; clipboardContext++;
       saveDraft(); if (historyMode || nativeScrolled) leaveHistory(); autoReconnectEnabled = false; cancelReconnect();
       if (socket) { socket.onclose = null; socket.onerror = null; socket.onmessage = null; socket.close(); socket = null; }
       setStatus('Terminal closed · session still running');
@@ -357,10 +359,11 @@ function submit(addEnter) {
   } catch (error) { setStatus(error.message); showComposer(true); }
 }
 
-async function copyText(value) {
+async function copyText(value, stillCurrent) {
   if (window.isSecureContext && navigator.clipboard?.writeText) {
     try { await navigator.clipboard.writeText(value); return true; } catch { /* fallback */ }
   }
+  if (!stillCurrent()) return null;
   const fallback = $('#terminal-clipboard-fallback');
   const originalParent = fallback.parentNode, originalNext = fallback.nextSibling;
   const active = document.activeElement, selection = window.getSelection();
@@ -379,17 +382,32 @@ async function copyText(value) {
   }
 }
 
-function showCopySheet(value) {
+function showCopySheet(value, title = 'Copy terminal selection') {
+  $('#copy-title').textContent = title;
+  $('#copy-sheet-text').setAttribute('aria-label', title === 'Copy session name' ? 'Copy session name' : 'Copy terminal text');
   $('#copy-sheet-text').value = value;
   $('#copy-sheet').showModal();
   $('#copy-sheet-text').focus(); $('#copy-sheet-text').select();
 }
 
+// Permission prompts may outlive their originating dialog or terminal view.
+function clipboardIsCurrent() {
+  const context = clipboardContext, modal = $('dialog[open]');
+  return () => context === clipboardContext && viewVisible && modal === $('dialog[open]');
+}
+
+async function copyAndReport(value, message, title) {
+  const stillCurrent = clipboardIsCurrent();
+  const copied = await copyText(value, stillCurrent);
+  if (!stillCurrent()) return;
+  if (copied) setStatus(message);
+  else showCopySheet(value, title);
+}
+
 async function copySelection() {
   const selected = terminal.getSelection();
   if (!selected) { await refreshTextView(); return; }
-  if (await copyText(selected)) { setStatus('Selection copied'); return; }
-  showCopySheet(selected);
+  await copyAndReport(selected, 'Selection copied');
 }
 
 async function loadBrief(silent = false) {
@@ -438,20 +456,38 @@ async function refreshTextView(direction = null) {
 async function copyDomSelection() {
   const selected = window.getSelection()?.toString() || '';
   if (!selected) { setStatus('Select text in Text View first'); return; }
-  if (await copyText(selected)) setStatus('Selection copied');
-  else showCopySheet(selected);
+  await copyAndReport(selected, 'Selection copied');
 }
 
 async function pasteFromDevice() {
-  if (window.isSecureContext && navigator.clipboard?.readText) {
-    try {
-      const value = await navigator.clipboard.readText();
-      insertComposer(value); setStatus('Pasted into composer; review before sending'); return;
-    } catch { /* manual fallback */ }
+  if (pastePending) return;
+  const revision = draftRevision, sameContext = clipboardIsCurrent();
+  const start = composer.selectionStart, end = composer.selectionEnd;
+  const stillCurrent = () => {
+    if (!sameContext()) return false;
+    if (revision !== draftRevision || start !== composer.selectionStart || end !== composer.selectionEnd) {
+      setStatus('Draft changed while reading clipboard; paste again when ready'); return false;
+    }
+    return true;
+  };
+  pastePending = true;
+  ['#paste-clipboard', '#paste-device'].forEach(selector => { $(selector).disabled = true; });
+  try {
+    if (window.isSecureContext && navigator.clipboard?.readText) {
+      try {
+        const value = await navigator.clipboard.readText();
+        if (!stillCurrent()) return;
+        insertComposer(value); setStatus('Pasted into composer; review before sending'); return;
+      } catch { /* manual fallback */ }
+    }
+    if (!stillCurrent()) return;
+    $('#paste-sheet-text').value = '';
+    $('#paste-sheet').showModal();
+    $('#paste-sheet-text').focus();
+  } finally {
+    pastePending = false;
+    ['#paste-clipboard', '#paste-device'].forEach(selector => { $(selector).disabled = false; });
   }
-  $('#paste-sheet-text').value = '';
-  $('#paste-sheet').showModal();
-  $('#paste-sheet-text').focus();
 }
 
 function makePeerRow(session) {
@@ -464,7 +500,7 @@ function makePeerRow(session) {
   const choices = [
     ['Insert name', () => insertComposer(session.tmux_name)],
     ['Insert review command', () => insertComposer(`agentctl session review ${session.tmux_name}`)],
-    ['Copy name', async () => setStatus(await copyText(session.tmux_name) ? 'Session name copied' : 'Copy blocked by browser')],
+    ['Copy name', () => copyAndReport(session.tmux_name, 'Session name copied', 'Copy session name')],
     ['Open terminal', () => window.open(`/terminal?session=${encodeURIComponent(session.tmux_name)}`, '_blank', 'noopener')],
   ];
   for (const [label, handler] of choices) {
@@ -591,6 +627,7 @@ $$('[data-mode]').forEach((button) => button.onclick = () => { $('#terminal-more
 $$('[data-key]').forEach((button) => button.onclick = () => {
   try { send(JSON.parse(`"${button.dataset.key}"`)); } catch (error) { setStatus(error.message); }
 });
+$$('dialog').forEach(dialog => dialog.addEventListener('close', () => { clipboardContext++; }));
 $$('[data-close]').forEach((button) => button.onclick = () => document.getElementById(button.dataset.close).close());
 reconnect.onclick = () => { autoReconnectEnabled = true; cancelReconnect(); connect(); };
 $('#detach').onclick = () => {
@@ -607,8 +644,7 @@ $('#text-page-up').onclick = () => refreshTextView('up');
 $('#text-page-down').onclick = () => refreshTextView('down');
 $('#copy-visible').onclick = async () => {
   const text = $('#text-content').textContent;
-  if (await copyText(text)) setStatus('Visible text copied');
-  else showCopySheet(text);
+  await copyAndReport(text, 'Visible text copied');
 };
 // Moving pointer focus to this button otherwise collapses the text selection
 // before click runs. Keyboard activation retains the browser selection.
@@ -626,7 +662,7 @@ newOutput.onclick = () => { leaveHistory(); terminal.scrollToBottom(); following
 $('#use-manual-paste').onclick = () => { const text = $('#paste-sheet-text').value; $('#paste-sheet').close(); insertComposer(text); setStatus('Pasted into composer; review before sending'); };
 composer.addEventListener('input', () => { saveDraft(); autoSizeComposer(); });
 composer.addEventListener('keydown', (event) => {
-  if (!coarsePointer && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(true); }
+  if (!coarsePointer && event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); submit(true); }
 });
 
 initTheme($('#terminal-theme'), () => { terminal.options.theme = xtermTheme(); });

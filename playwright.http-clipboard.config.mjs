@@ -4,7 +4,7 @@ import config from './playwright.config.mjs';
 const port = Number(process.env.AGCONSOLE_UI_TEST_PORT || 4192);
 export default {
   ...config,
-  testMatch: 'http-clipboard.spec.mjs',
+  testMatch: ['http-clipboard.spec.mjs', 'clipboard-recovery.spec.mjs', 'secondary-clipboard.spec.mjs'],
   timeout: 180000,
   outputDir: 'test-results/http-clipboard',
   webServer: {...config.webServer, port, env: {AGCONSOLE_UI_TEST_PORT: String(port)}},
