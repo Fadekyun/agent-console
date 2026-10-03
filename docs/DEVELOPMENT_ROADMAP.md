@@ -3,7 +3,9 @@
 - Implemented: compact accessible SVG controls, named dialogs, keyboard terminal close, HTTP-IP clipboard fallback, and project editing/deletion in full desktop/mobile controls.
 - Implemented: default unlimited per-parent children, active-only capacity accounting, and owner project/environment CLI commands with safe secret input and managed-session authority checks.
 - Implemented: environment scope race protection, profile/attention/plan request guards, mobile duplicate-submit prevention and group navigation, recovered bootstrap, paginated release candidates, and truthful skill-sync diagnostics.
-- Retained web controls: advanced workflow policy/control, connection editing/delivery and release operations. Their complete CLI parity is a future addition, not a claim of this release.
+- Implemented: local owner `workflow manage` policy/review/control/reconciliation, connection attachment/dependencies/delivery, and exact-candidate release commands share the web request schemas. Structured input uses bounded JSON files/stdin; managed sessions cannot open these local writer routes.
+- Implemented: local owner `session create --parent` accepts a name or durable ID and inherits project/repository like human Add session, while managed callers retain delegation restrictions.
+- Guide rollout: all seven `.1` revisions are verified; Workbench, Coordination and Release `.2` owner-CLI drafts are validated release candidates, with canonical/mirror rollout and delivery still pending.
 - Verification: OVERHAUL_VERIFICATION_20261003.md; physical mobile keyboards and native non-Linux adapters require suitable devices/runners.
 
 ## Console usability, role/skill delivery, environment and maintenance — 2026-10-03 (#141)

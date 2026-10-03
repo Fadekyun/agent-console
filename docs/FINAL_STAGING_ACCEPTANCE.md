@@ -1,5 +1,7 @@
 # Staging revamp acceptance — 2026-10-02
 
+This is the historical 2026-10-02 staging acceptance record. Subsequent accepted changes and current verification are recorded in [the 2026-10-03 overhaul audit](OVERHAUL_VERIFICATION_20261003.md). Stable creation ordering now replaces attention/activity priority ordering; attention stays visible without moving work cards. Direct human Add session and single-action recipe/continuation launches supersede the earlier mandatory proposal/preview sequence. These are intentional usability changes, not missing original features.
+
 Scope: implement #90, #140 and #6 together, publish the development branch and
 make the implementation available as a separate staging console. The current
 console remains independently usable. Main-branch merge, current-console cutover

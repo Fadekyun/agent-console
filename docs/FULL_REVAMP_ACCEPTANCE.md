@@ -1,5 +1,7 @@
 # Full staging revamp completion audit
 
+This is the historical 2026-10-02 staging acceptance record. Subsequent accepted changes and current verification are recorded in [the 2026-10-03 overhaul audit](OVERHAUL_VERIFICATION_20261003.md). Stable creation ordering now replaces attention/activity priority ordering; attention stays visible without moving work cards. Direct human Add session and single-action recipe/continuation launches supersede the earlier mandatory proposal/preview sequence. These are intentional usability changes, not missing original features.
+
 Objective: finish issues #90, #140 and #6, update development documentation, push the implementation and deploy it fully to staging while retaining the current console. The first staging slice at 09ae3be is progress, not completion. Recheck each item against current source, tests, published branch and runtime before closing the goal.
 
 ## #90 — workbench

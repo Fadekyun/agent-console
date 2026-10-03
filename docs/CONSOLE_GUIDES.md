@@ -2,17 +2,17 @@
 
 v0.21.0 adds live tree awareness (`session relatives --current`, relative output reads) without mandatory result publication or child waits. Existing sessions can use the commands immediately; new launches receive the instructions. Routine work remains simple: manual child sessions are direct, scheduled work is optional, and recipe/continuation launch validation runs without a second approval screen. Workbench, Coding and Coordination reuse existing authorization and do not prescribe a review chain. New guide revisions apply to future sessions or explicit restarts.
 
-The seven guides are maintained in the canonical skills workspace on n100, `/home/fadekyun/codex/skills`, and mirrored into staging's `/home/agentpreview/codex/skills`. Edit the canonical packages, not generated session copies. These packages use portable YAML with namespaced Console metadata; they are not a new plugin system.
+The seven guides are maintained in the canonical skills workspace on n100, `/home/fadekyun/codex/skills`, and mirrored into the configured Console skills library (current `/home/agentstage/codex/skills`; the separate staging mirror is `/home/agentpreview/codex/skills`). Edit the canonical packages, not generated session copies. These packages use portable YAML with namespaced Console metadata; they are not a new plugin system.
 
-| Package | Revision | Staging selection |
-| --- | --- | --- |
-| agent-console-workbench | 2026-10-02.7 | Shared session basics, navigation, configuration and continuation |
-| agent-console-results | 2026-10-02.4 | Shared ready/final results, selected artifacts, delivery and consumption |
-| agent-console-coding | 2026-10-02.3 | coder, bugfix |
-| agent-console-coordination | 2026-10-02.3 | orchestrator, planner |
-| agent-console-verification | 2026-10-02.1 | reviewer, verifier |
-| agent-console-release | 2026-10-02.1 | release |
-| agent-console-skills | 2026-10-02.3 | orchestrator; General remains compatible for an explicit assignment |
+| Package | Verified revision | Release-candidate revision | Selection |
+| --- | --- | --- | --- |
+| agent-console-workbench | 2026-10-03.1 | 2026-10-03.2 (pending rollout) | Shared session basics, navigation, configuration and continuation |
+| agent-console-results | 2026-10-03.1 | 2026-10-03.1 | Shared ready/final results, selected artifacts, delivery and consumption |
+| agent-console-coding | 2026-10-03.1 | 2026-10-03.1 | coder, bugfix |
+| agent-console-coordination | 2026-10-03.1 | 2026-10-03.2 (pending rollout) | orchestrator, planner |
+| agent-console-verification | 2026-10-03.1 | 2026-10-03.1 | reviewer, verifier |
+| agent-console-release | 2026-10-03.1 | 2026-10-03.2 (pending rollout) | release |
+| agent-console-skills | 2026-10-03.1 | 2026-10-03.1 | orchestrator; General remains compatible for an explicit assignment |
 
 Role compatibility is checked before launch. A guide does not expand the profile's permissions. For example, coordination guidance lets a planner propose useful steps without authorizing implementation. Existing unrelated infrastructure `agent-console-ops` guidance is preserved.
 
@@ -43,31 +43,23 @@ The package hash also includes supporting files and permissions and differs from
 
 ## Rollback and remaining work
 
-Unassign a new staging guide to remove it from future role sessions; existing session snapshots and delivery histories remain intact. Remove a newly installed canonical/mirror package only after checking that it is still the exact owned version and is no longer assigned. Current-console mirror and assignments were not changed. Selecting an older staging source does not undo canonical package or assignment changes.
+Unassign a new staging guide to remove it from future role sessions; existing session snapshots and delivery histories remain intact. Remove a newly installed canonical/mirror package only after checking that it is still the exact owned version and is no longer assigned. The 2026-10-03 rollout updated the configured current-console mirror and reviewed assignments separately from the code selection. Selecting an older source does not undo canonical package or assignment changes.
 
-The complete cross-harness discovery/version matrix and remaining Workbench acceptance checks are tracked in [the full audit](FULL_REVAMP_ACCEPTANCE.md). Guide completion does not close those requirements. Git import behavior added in 0.19 is documented in [Git imports](SKILL_GIT_IMPORTS.md).
+Historical cross-harness discovery and Workbench acceptance are recorded in [the full staging audit](FULL_REVAMP_ACCEPTANCE.md); current tested versions and deployment limits are in [the overhaul audit](OVERHAUL_VERIFICATION_20261003.md). Discovery proves availability, not model use. Git import behavior added in 0.19 is documented in [Git imports](SKILL_GIT_IMPORTS.md).
 
-All seven current packages were also discovered by actual native Codex, Claude, OpenCode, Pi and Hermes readers in clean fixture homes; see [the native matrix](NATIVE_SKILL_MATRIX.md). The maintenance guide now documents package validation, profile validation, unassignment and the per-harness inspection control. No model invocation is inferred from discovery.
+All seven then-current 2026-10-02 packages were also discovered by actual native Codex, Claude, OpenCode, Pi and Hermes readers in clean fixture homes; see [the native matrix](NATIVE_SKILL_MATRIX.md). The maintenance guide now documents package validation, profile validation, unassignment and the per-harness inspection control. No model invocation is inferred from discovery.
 
 ## Capability-session guide revision — issue #141
 
-The seven current mirrored packages were read against the new implementation.
-Their existing single-session default, untrusted peer-output treatment, immutable
-handoffs, and separate release authorization remain valid. Two instructions need
-correction: Verification currently tells every reviewer to open a workflow inbox,
-and Skills still treats a native harness's extra skill sources as an assignment
-isolation limitation. Workbench and Coordination need the distinction between an
-operator's Add-session link and agent-originated delegated authority.
+All seven packages were updated to **2026-10-03.1** in the canonical n100
+workspace and configured mirror, with drift checks, backups, validation and
+content-bound reviews. Four disposable native session profiles verified all
+seven copied package hashes and delivery receipts. Existing snapshots were not
+rewritten. Evidence is retained in `handoffs/console-guides-20261003/` in the
+parent workspace and summarized in [the overhaul audit](OVERHAUL_VERIFICATION_20261003.md).
+The following table records the applied capability-related changes.
 
-Apply the following **pending canonical revisions** on n100 after the new service
-is selected. They are update instructions, not a claim that host packages were
-modified by the code change. Use the canonical source, preserve operator changes,
-and bump each package's `agent-console/revision` to `2026-10-03.1` after applying
-its relevant update. Validate all seven packages, refresh content-bound reviews
-where applicable, mirror the reviewed packages through the normal sync process,
-and verify new-session delivery. Do not rewrite active session snapshots.
-
-| Package | Exact content to add or replace |
+| Package | Applied content change in .1 |
 | --- | --- |
 | Workbench | Add under tree awareness: “Every role can inspect bounded peers in its project through the session capability endpoint. Unassigned sessions inspect their own tree. If tmux observation fails, live status is unknown; stored metadata and saved transcripts remain readable. `agentctl session attention --current --state ready_for_review` reports completion without requiring database writes. A stopped or unobserved process is not proof of success.” |
 | Results | Add under Reporting and recovery: “Session inspection, own attention and authorized descendant control also use the session capability. This does not grant environment management or release execution. Workflow publication remains optional for ordinary work. Never use direct database writes to recover a failed reporting request.” |
@@ -82,3 +74,17 @@ limits, and code rollback are documented in [Session capabilities](SESSION_CAPAB
 Canonical guide changes are independently reversible by restoring their reviewed
 previous package versions and refreshing future assignments; a code rollback
 must not silently rewrite the library or old delivery receipts.
+
+## Owner-CLI guide candidate — 2026-10-03.2
+
+Workbench, Coordination and Release have validated `.2` drafts for the owner
+workflow/connection/release CLI and direct owner `session create --parent` parity.
+The other four packages remain `.1`. **Canonical/mirror application and new-session
+delivery of `.2` remain pending** until the parent rollout records them; validation
+of drafts alone is not rollout evidence. Use [the implemented CLI reference](selected-release-entrypoints.md#local-owner-workflows-connections-and-releases)
+for exact commands and request schemas in the meantime.
+
+Apply only after selecting the corresponding service release, with canonical
+source drift checks and rollback copies. Preserve operator changes, validate the
+packages, refresh affected content-bound reviews, mirror through the normal sync
+path and check a new session's receipt. Never rewrite active session snapshots.

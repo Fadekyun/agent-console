@@ -1,6 +1,6 @@
 # Recipes, configuration and continuation
 
-Work → Recipes lists reusable task/settings templates. New session → Save a reusable recipe creates one without opening a terminal. Edit and removal require the displayed recipe revision; removal preserves existing work. Using a recipe opens an editable draft, then Review launch shows resolved settings, selected skill hashes and warnings. Launch session is explicit. No LLM runs to suggest recipes.
+Work → Recipes lists reusable task/settings templates. New session → Save a reusable recipe creates one without opening a terminal. Edit and removal require the displayed recipe revision; removal preserves existing work. Using a recipe opens an editable draft. Start session (or Continue work for a continuation) validates the configuration and launches with one explicit action; there is no compulsory second approval screen. Preview configuration remains optional and shows resolved settings, selected skill hashes and warnings before Launch session. No LLM runs to suggest recipes.
 
 Preview and creation share `SessionManager.prepare_launch`, including project repository resolution, role/mode capability, account readiness, model validation and allow/ask/deny skill policy. A launch hash binds the task, normalized configuration, role content hash, selected skills, launcher fingerprint/version and continuation input. Editing a form invalidates its preview; changed settings between preview and creation fail before native launch.
 
