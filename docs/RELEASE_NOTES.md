@@ -1,3 +1,10 @@
+## 0.25.0 — unreleased, 2026-10-03 (#141)
+
+- Impact: stable session ordering, root-first Open work and reliable Add session during refresh; Forest/Ocean/Violet palettes with System/Light/Dark appearance; write-only global/project environment settings shared by harness launches and MCP adapters; project-scoped peer inspection and descendant control through session capabilities; refreshed role guidance and native skill delivery; isolated candidate dependencies and canaries with configuration-preserving maintenance.
+- Configuration/migration: environment settings use private files under config/environment and state/environment-launches. Existing sessions retain their launch environment and skills until an explicit restart. Customized roles are preserved with bundled update diagnostics. New releases use a private .runtime; legacy release dependencies remain available. Proxy identity sources and browser origins must reflect the installed ingress; see security.md. Keep current session databases, skill receipts, and runtime configuration.
+- Verification: component and integrated results, candidate identity, live deployment evidence, and platform limitations are recorded in OVERHAUL_VERIFICATION_20261003.md. Linux runtime and desktop/phone Chromium checks are required before selection; macOS/WSL2/Docker adapters are not claimed as native-platform verified here.
+- Rollback: retain the prior selected release, runner, maintenance helper, runtime configuration, and a consistent pre-cutover database backup. Select the former release only after the schema guard passes, restore its runner/configuration, then restart the web service. Never restore a stale DB over new operational records. Environment and guide changes persist independently; older code cannot manage the new environment settings. Running tmux sessions must be retained.
+
 ## 0.24.1 — unreleased, 2026-10-03 (#90)
 
 - Impact: Add session remains visible in eligible session tree rows, with muted text and hover/focus highlighting; rows no longer jump when the pointer enters.

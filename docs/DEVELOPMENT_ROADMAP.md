@@ -1,3 +1,12 @@
+## Console usability, role/skill delivery, environment and maintenance — 2026-10-03 (#141)
+
+- Implemented: stable session cards/tree nodes, root-first opening, pointer-safe Add session, preserved focus/scroll, and simple shared palettes.
+- Implemented: project-scoped bounded session reads for every role, explicit descendant controls, no read-only delegation escalation, customized profile diagnostics, and native selected-skill adapters.
+- Implemented: private write-only global/project environment UI/API, deterministic precedence, suppression, multiline values, quotas, project cleanup, and shared process/MCP launch resolution.
+- Implemented: preserved installer configuration, candidate-local Python dependencies, private identity-checked canaries, durable session comparison, and systemd/LaunchAgent/WSL2/Docker maintenance paths.
+- Verification and deployment status: OVERHAUL_VERIFICATION_20261003.md. Native macOS/WSL2/Docker execution and broken local Claude executable remain explicit verification gaps until suitable runners/binary are available.
+- Retired by operator scope: obsolete inference gateway issues #63, #65–70, #72–73. AI routing/self-improvement stays deferred; ordinary sessions require no workflow publication or review chain.
+
 ## Persistent Add session controls — 2026-10-03 (#90)
 
 - Completed in v0.24.1. Eligible tree rows always show Add session; hover and keyboard focus highlight the control without changing row height. Existing mobile touch targets and child creation behavior are preserved.
