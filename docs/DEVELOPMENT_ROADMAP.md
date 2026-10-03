@@ -1,3 +1,10 @@
+## Theme, clipboard and continuing UI audit — 2026-10-03 (#141)
+
+- Fixed: low-contrast hovered primary controls and focus rings; theme/palette selectors hidden in embedded and phone terminals; unthemed links/mobile surfaces.
+- Fixed: delayed clipboard permission results replacing newer drafts or reopening dismissed views, repeated Paste and missing selectable Copy fallbacks. IME confirmation remains composition rather than submission.
+- Fixed: cross-session Results refresh and connection skill receipt races; result draft preservation/error locality; stale full-control creation/delegation/review responses.
+- Verification covers real localhost clipboard access and separate insecure-HTTP fallback tests; rendered interaction colors supplement token contrast tests. Physical-device and cross-browser checks remain external verification work.
+
 ## Session identity and responsive audit — 2026-10-03 (#141)
 
 - Fixed: concurrent rename/reconciliation duplicate identities, occupied-name metadata overwrite, missing-file rename failures, and false stopped status after tmux observation failures. Staged metadata and bounded terminal calls reduce partial rename failures; websocket attachment and scroll stay bound to the intended identity.

@@ -8,12 +8,12 @@
 
     try { if(location.pathname==='/'){const v=localStorage.getItem('agent-console-layout')||'auto';if(v==='mobile'||(v==='auto'&&matchMedia('(max-width:760px)').matches))location.replace('/mobile'+location.search+location.hash);} } catch { /* Layout defaults remain usable without storage. */ }
   </script>
-  <link rel="stylesheet" href="/static/styles.css?v=0.28.5">
+  <link rel="stylesheet" href="/static/styles.css?v=0.28.6">
 </head>
 <body class="app-page">
   <div class="app-shell">
     <aside class="sidebar" aria-label="Primary navigation">
-      <div class="brand"><span class="brand-mark">AC</span><span class="nav-label"><strong>Agent Console</strong><small>v0.28.5</small></span></div>
+      <div class="brand"><span class="brand-mark">AC</span><span class="nav-label"><strong>Agent Console</strong><small>v0.28.6</small></span></div>
       <nav class="nav-list">
         <button class="nav-button" data-view="sessions"><span data-icon="sessions" aria-hidden="true"></span><span class="nav-label">Sessions</span></button>
         <button class="nav-button" data-view="projects"><span data-icon="projects" aria-hidden="true"></span><span class="nav-label">Projects</span></button>
@@ -229,7 +229,7 @@
     </form>
   </dialog>
 
-  <script type="module" src="/static/app.js?v=0.28.5"></script>
+  <script type="module" src="/static/app.js?v=0.28.6"></script>
 <script type="module" src="/static/icons.js?v=1"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 import { setupWorkflow } from '/static/workflow-workbench.js';
-import { setupConnections } from '/static/connections-workbench.js';
+import { setupConnections } from '/static/connections-workbench.js?v=0.28.6';
 import { setupReleases } from '/static/release-workbench.js';
 function requestKey(){return Array.from(crypto.getRandomValues(new Uint8Array(16)),value=>value.toString(16).padStart(2,'0')).join('');}
 export function setupResults({api,el,message,sessions,editStep,openSession}) {

@@ -1,6 +1,6 @@
 import { setupLaunches } from '/static/launch-workbench.js?v=0.28.5';
 import { setupOverview } from '/static/work-overview.js?v=0.28.5';
-import { setupResults } from '/static/results-workbench.js';
+import { setupResults } from '/static/results-workbench.js?v=0.28.6';
 import { setupSkills } from '/static/skill-workbench.js';
 import { initTheme } from '/static/theme.js?v=10';
 const $ = (s, root = document) => root.querySelector(s);

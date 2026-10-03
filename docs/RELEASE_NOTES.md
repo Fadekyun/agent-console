@@ -1,3 +1,12 @@
+## 0.28.6 — unreleased, 2026-10-03 (#141)
+
+- Impact: theme controls remain available from terminal More on phones and embedded terminals; primary hover, keyboard focus, links and mobile surfaces use readable palette colors. Forest, Ocean and Violet continue to support System, Light and Dark appearance.
+- Clipboard: localhost copy/read and insecure-HTTP fallbacks are covered separately. Pending clipboard permission responses cannot overwrite newer input or reopen dismissed views; repeated Paste is guarded. Unavailable copy APIs expose selectable text, including peer names and mobile plan commands. Desktop IME confirmation Enter does not send the draft.
+- UI: delayed Results mutations and connection skill inspection retain their original session context. Publishing errors remain beside the form; unrelated input acknowledgments preserve an unsent result draft. Delayed full-control session creation, delegation and review responses cannot replace newer navigation or dialogs.
+- Configuration/migration: none. Refresh browser assets. Clipboard availability depends on browser permissions and origin; plain LAN HTTP uses manual/native fallbacks. No database or harness changes.
+- Verification: independently reviewed browser regressions exercise rendered contrast, theme persistence, short-screen menu reachability, real localhost clipboard access, insecure-HTTP copy/paste, denied permissions, IME composition and delayed response races. Full CI and owned live acceptance gate deployment. Physical mobile keyboards and non-Chromium browsers remain unverified.
+- Rollback: select retained v0.28.5 through its schema guard and restart web only. Preserve session databases and running harnesses. Previous code retains the UI defects described above.
+
 ## 0.28.5 — unreleased, 2026-10-03 (#141)
 
 - Impact: session navigation, terminal reconnection and inspector drafts follow durable identity across automatic renames and reused names. Concurrent rename/refresh no longer creates a second unmanaged record; occupied names and unreadable metadata fail before changing the terminal. Failed tmux observations report an error instead of marking all sessions stopped. Terminal attachment, scroll controls and client limits retain the connected session identity.
