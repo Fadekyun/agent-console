@@ -1,5 +1,5 @@
 import { setupLaunches } from '/static/launch-workbench.js';
-import { setupOverview } from '/static/work-overview.js';
+import { setupOverview } from '/static/work-overview.js?v=0.28.4';
 import { setupResults } from '/static/results-workbench.js';
 import { setupSkills } from '/static/skill-workbench.js';
 import { initTheme } from '/static/theme.js?v=10';

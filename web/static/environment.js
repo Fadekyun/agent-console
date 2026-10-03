@@ -47,7 +47,13 @@ function render(data, scope, token) {
     for (const [label, action] of [
       ['Replace', () => { if (!editable(scope, token)) return; $('environment-name').value = item.name; valueInput().focus(); }],
       ...(item.state === 'suppressed' ? [] : [[item.state === 'enabled' ? 'Disable' : 'Enable', () => change(item.name, {state: item.state === 'enabled' ? 'disabled' : 'enabled'}, scope, token)]]),
-      ['Delete', () => change(item.name, null, scope, token)]
+      ['Delete', () => {
+        if (!editable(scope, token)) return;
+        const label = scope ? `project ${$('environment-scope').selectedOptions[0].textContent}` : 'global defaults';
+        if (confirm(`Delete ${item.name} from ${label}? Stored values cannot be recovered. Deleting an override restores any inherited value.`)) {
+          change(item.name, null, scope, token);
+        }
+      }]
     ]) { const button = text('button', label); button.type = 'button'; button.dataset.environmentAction = ''; button.onclick = action; row.append(button); }
     entries.append(row);
   }

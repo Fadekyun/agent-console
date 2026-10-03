@@ -5,15 +5,15 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
   function keepFocus(root){const active=document.activeElement;if(!root.contains(active))return()=>{};const href=active.getAttribute('href'),text=active.textContent,node=active.closest('[data-node]')?.dataset.node;return()=>{if(document.activeElement===document.body)[...root.querySelectorAll('a,button,summary')].find(n=>n.getAttribute('href')===href&&n.textContent===text&&n.closest('[data-node]')?.dataset.node===node)?.focus({preventScroll:true});};}
   function creation(node){return node.created_at||sessionsById.get(node.native_id)?.created_at||'';}
   function stableOrder(a,b){return creation(a).localeCompare(creation(b))||a.id.localeCompare(b.id);}
-  // Reconcile tree rows in place so focused Add controls and drawer scroll survive polling.
+  // Reconcile tree rows and work cards in place so controls retain identity across polling.
   function reconcile(old,next){
     for(const attr of [...old.attributes])if(!next.hasAttribute(attr.name))old.removeAttribute(attr.name);
     for(const attr of next.attributes)if(old.getAttribute(attr.name)!==attr.value)old.setAttribute(attr.name,attr.value);
-    old.onclick=next.onclick;
+    old.onclick=next.onclick;old.ontoggle=next.ontoggle;
     if(!next.children.length){if(old.textContent!==next.textContent)old.textContent=next.textContent;return old;}
     const available=[...old.children];let cursor=old.firstElementChild;
     for(const child of [...next.children]){
-      const match=available.find(n=>n.tagName===child.tagName&&n.className===child.className);
+      const match=available.find(n=>n.tagName===child.tagName&&n.className===child.className&&n.dataset.node===child.dataset.node);
       const updated=match?reconcile(match,child):child;
       if(match)available.splice(available.indexOf(match),1);
       if(updated!==cursor)old.insertBefore(updated,cursor);
@@ -37,7 +37,18 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
   }
   function nodeFor(session){indexWork();return nodesById.get(state.work?.aliases?.[session.id]||session.id);}
   let renderKey='',historyOpen=null,historyLimit=20,activeLimit=20,searchTimer;
-  const pending=new Set(),cardCache=new Map();
+  const pending=new Set();
+  // A polling update can also change card geometry. Finish the current pointer
+  // activation before applying it, then reconcile the latest response in place.
+  const workList=$('#work-list');let heldPointer=null;
+  workList.addEventListener('pointerdown',event=>{heldPointer=event.pointerId;});
+  function releasePointer(event){
+    if(heldPointer===null||event.pointerId!==undefined&&event.pointerId!==heldPointer)return;
+    heldPointer=null;setTimeout(renderWork,0);
+  }
+  document.addEventListener('pointerup',releasePointer);
+  document.addEventListener('pointercancel',releasePointer);
+  window.addEventListener('blur',()=>releasePointer({}));
   function changedFilters(){historyOpen=null;historyLimit=activeLimit=20;save();renderWork();}
   async function mutate(node,action){
     indexWork();const session=sessionsById.get(node.native_id);if(!session)return;
@@ -80,15 +91,23 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
     return Object.entries(fields).every(([key,field])=>!$('#filter-'+key).value||node[field]===$('#filter-'+key).value);
   }
   function renderWork(){
-    if(!state.work||$('#work-view').hidden)return;
+    if(!state.work)return;
+    // Settings is also a direct route; readiness must not depend on visiting Work first.
+    const readiness=state.work.readiness;
+    const warningsKey=JSON.stringify(readiness.warnings),readinessPanel=$('#readiness-summary').parentElement;
+    if(readiness.warnings.length&&readinessPanel.dataset.warnings!==warningsKey)readinessPanel.open=true;
+    readinessPanel.dataset.warnings=warningsKey;
+    $('#readiness-summary').textContent=readiness.ready?'System ready':`${readiness.warnings.length} readiness warning${readiness.warnings.length===1?'':'s'}`;
+    $('#readiness-details').replaceChildren(...readiness.warnings.map(w=>el('p',w)));
+    if($('#work-view').hidden||heldPointer!==null)return;
     indexWork();filterOptions();
-    const {nodes,groups,readiness}=state.work,root=$('#work-list');
+    const {nodes,groups}=state.work,root=workList.cloneNode(false);
     const includeHidden=$('#include-hidden')?.checked||false,show=$('#state-filter').value,allNodes=$('#filter-scope').value==='all';
     const query=$('#search').value.trim(),filtered=query||keys.some(k=>k!=='scope'&&$('#filter-'+k).value);
     const expanded=historyOpen??(show!=='active'||!!filtered);
     const key=JSON.stringify([nodes,groups,readiness.ready,readiness.warnings,query,show,keys.map(k=>$('#filter-'+k).value),includeHidden,expanded,historyLimit,activeLimit,[...pending]]);
     if(key===renderKey)return;renderKey=key;
-    const restoreFocus=keepFocus(root);root.replaceChildren();
+    const restoreFocus=keepFocus(workList);
     const visible=node=>includeHidden||!node.hidden||node.mechanical==='running'||node.waiting;
     const strip=$('#attention-strip');strip.replaceChildren();
     const attention=nodes.filter(n=>visible(n)&&n.needs_attention);
@@ -112,11 +131,9 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
       }
     }
     entries.sort((a,b)=>creation(nodesById.get(b.group.root_id)).localeCompare(creation(nodesById.get(a.group.root_id)))||a.group.root_id.localeCompare(b.group.root_id)||stableOrder(a.node,b.node));
-    const current=entries.filter(e=>e.active),history=entries.filter(e=>!e.active),sections=new Map(),usedCards=new Set();
+    const current=entries.filter(e=>e.active),history=entries.filter(e=>!e.active),sections=new Map();
     function appendCard(entry,target){
-      const {node,group,members,eligible}=entry,cardKey=JSON.stringify([node,group,members,eligible.map(n=>n.id),query,allNodes,[...pending]]);
-      usedCards.add(node.id);const cached=cardCache.get(node.id);
-      if(cached?.key===cardKey){target.append(cached.card);return;}
+      const {node,group,members,eligible}=entry;
       const card=el('article',null,'card');card.dataset.node=node.id;
       card.append(el('h3',node.title.length>100?node.title.slice(0,97)+'…':node.title),statuses(node));
       if(node.hidden)card.append(el('p','Hidden session · shown as context for its children','small muted'));
@@ -140,7 +157,7 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
       if(focus.reviewable&&reviewNative?.managed&&reviewNative.execution_kind!=='integration-plan'){
         const button=el('button','Mark reviewed');button.disabled=pending.has(`${reviewNative.id}:review`);button.onclick=()=>mutate(focus,'review');actions.append(button);
       }
-      card.append(actions);target.append(card);cardCache.set(node.id,{key:cardKey,card});
+      card.append(actions);target.append(card);
     }
     for(const entry of current.slice(0,activeLimit)){
       if(!sections.has('active')){const section=el('section',null,'work-section'),cards=el('div',null,'cards');section.append(el('h2','Active work'),cards);root.append(section);sections.set('active',cards);}
@@ -151,18 +168,13 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
       const panel=el('details',null,'work-history'),count=history.reduce((n,e)=>n+e.members.filter(m=>m.needs_attention).length,0);
       panel.id='work-history';panel.open=expanded;
       panel.append(el('summary',`History · ${history.length} ${allNodes?'sessions':'work groups'}${count?' · '+count+' need attention':''}`));
-      panel.addEventListener('toggle',()=>{if(panel.open!==(historyOpen??(show!=='active'||!!filtered))){historyOpen=panel.open;renderWork();}});
+      panel.ontoggle=event=>{const open=event.currentTarget.open;if(open!==(historyOpen??(show!=='active'||!!filtered))){historyOpen=open;renderWork();}};
       if(expanded){const cards=el('div',null,'cards');for(const entry of history.slice(0,historyLimit))appendCard(entry,cards);panel.append(cards);
         if(history.length>historyLimit){const more=el('button',`Show more history (${history.length-historyLimit} remaining)`);more.onclick=()=>{historyLimit+=20;renderWork();};panel.append(more);}}
       root.append(panel);
     }
-    if(!entries.length)root.append(el('p',nodes.length?'No work matches these filters. Include hidden to find sessions you have hidden.':'Your staging workspace is ready. Start a session to begin.','empty'));
-    for(const id of cardCache.keys())if(!usedCards.has(id))cardCache.delete(id);
-    const warningsKey=JSON.stringify(readiness.warnings),readinessPanel=$('#readiness-summary').parentElement;
-    if(readiness.warnings.length&&readinessPanel.dataset.warnings!==warningsKey)readinessPanel.open=true;
-    readinessPanel.dataset.warnings=warningsKey;
-    $('#readiness-summary').textContent=readiness.ready?'System ready':`${readiness.warnings.length} readiness warning${readiness.warnings.length===1?'':'s'}`;
-    $('#readiness-details').replaceChildren(...readiness.warnings.map(w=>el('p',w)));
+    if(!entries.length)root.append(el('p',nodes.length?'No work matches these filters. Include hidden to find sessions you have hidden.':'Your workspace is ready. Start a session to begin.','empty'));
+    reconcile(workList,root);
     restoreFocus();
   }
   let collapsedBranches=new Set(),lastSelection=null;

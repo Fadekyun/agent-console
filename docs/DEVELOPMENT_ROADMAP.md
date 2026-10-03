@@ -1,3 +1,9 @@
+## Deep interaction audit — 2026-10-03 (#141)
+
+- Addressed: session More menus clipped by table scrolling, keyboard propagation and refresh replacement; terminal menu viewport limits, touch targets and delayed connection focus; Open work pointer continuity, long Workbench title overflow and direct Settings readiness; confirmation for write-only environment deletion.
+- Verification emphasizes reachable controls and unchanged intended targets over basic visibility assertions. The dedicated insecure-HTTP clipboard suite runs in CI.
+- Deferred design work: context-specific new-session drafts, Workbench project picker, and consolidated secondary navigation.
+
 ## Publication acceptance fixes — 2026-10-03 (#141)
 
 - Implemented: environment drafts survive failed writes and clear after successful writes, including refresh failures; corrected CI whitespace findings.

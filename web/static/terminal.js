@@ -61,12 +61,39 @@ function showComposer(open, focus = false) {
 $('#resume-typing').onclick = () => setMode('type');
 $('#toggle-composer').onclick = () => showComposer($('#input-drawer').hidden, true);
 new MutationObserver(() => { reconnect.hidden = reconnect.disabled; }).observe(reconnect, {attributes:true, attributeFilter:['disabled']});
-$('#terminal-more').addEventListener('keydown', event => {
-  if (event.key === 'Escape') { $('#terminal-more').open = false; $('#terminal-more > summary').focus(); }
+const more = $('#terminal-more');
+const moreMenu = $('.terminal-menu');
+function fitMoreMenu() {
+  if (!more.open) return;
+  const viewport = window.visualViewport;
+  const bottom = (viewport?.offsetTop || 0) + (viewport?.height || innerHeight);
+  const bounds = $('.terminal-controls').getBoundingClientRect();
+  const available = Math.max(0, bottom - bounds.bottom);
+  // Leave a margin where possible, without clipping a 44px control in a short iframe.
+  const gap = Math.min(7, Math.max(0, available - 46));
+  moreMenu.style.top = `${bounds.bottom}px`;
+  moreMenu.style.maxHeight = `${Math.max(0, available - gap)}px`;
+  moreMenu.style.padding = `${Math.min(12, Math.max(0, (available - gap - 46) / 2))}px`;
+}
+function closeMore(restoreFocus = false) {
+  more.open = false;
+  if (restoreFocus) $('#terminal-more > summary').focus();
+}
+more.addEventListener('toggle', fitMoreMenu);
+// Capture before xterm: dismissing an open menu must not send Escape to the agent.
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && more.open && !document.querySelector('dialog[open]')) {
+    event.preventDefault(); event.stopPropagation(); closeMore(true);
+  }
+}, true);
+more.addEventListener('focusout', event => {
+  if (event.relatedTarget && !more.contains(event.relatedTarget)) closeMore();
 });
 document.addEventListener('pointerdown', event => {
-  if (!$('#terminal-more').contains(event.target)) $('#terminal-more').open = false;
+  if (!more.contains(event.target)) closeMore();
 });
+window.addEventListener('blur', () => closeMore());
+new ResizeObserver(fitMoreMenu).observe($('.terminal-controls'));
 window.addEventListener('pagehide', saveDraft);
 
 function setStatus(message) {
@@ -140,7 +167,7 @@ function resize() {
 function syncVisualViewport() {
   const height = window.visualViewport?.height || window.innerHeight;
   document.documentElement.style.setProperty('--visual-height', `${Math.round(height)}px`);
-  resize();
+  resize(); fitMoreMenu();
 }
 
 function scheduleReconnect() {
@@ -171,7 +198,7 @@ function connect() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   socket = new WebSocket(`${protocol}//${location.host}/ws/sessions/${encodeURIComponent(name)}`);
   socket.binaryType = 'arraybuffer'; setStatus('Connecting…'); reconnect.disabled = true;
-  socket.onopen = () => { cancelReconnect(); socket.send(JSON.stringify({type:'scroll',lines:0})); nativeScrolled = false; historyMode = false; setStatus('Connected'); resize(); if (following) terminal.scrollToBottom(); if (focusOnConnect && mode === 'type' && document.activeElement !== composer) terminal.focus(); focusOnConnect = false; };
+  socket.onopen = () => { cancelReconnect(); socket.send(JSON.stringify({type:'scroll',lines:0})); nativeScrolled = false; historyMode = false; setStatus('Connected'); resize(); if (following) terminal.scrollToBottom(); if (focusOnConnect && mode === 'type' && !more.open && !document.querySelector('dialog[open]') && (document.activeElement === document.body || $('#terminal').contains(document.activeElement))) terminal.focus(); focusOnConnect = false; };
   socket.onmessage = (event) => {
     const output = typeof event.data === 'string' ? event.data : decoder.decode(event.data, { stream: true });
     terminal.write(output, () => {
@@ -353,6 +380,7 @@ function makePeerRow(session) {
 }
 
 async function openPeers() {
+  closeMore(true);
   const list = $('#peer-list'); list.innerHTML = '<p class="empty">Loading peer sessions…</p>';
   $('#peers-dialog').showModal();
   try {

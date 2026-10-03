@@ -43,7 +43,8 @@ const attentionLabels = {
   blocked: 'Blocked',
   ready_for_review: 'Ready for review',
 };
-const attentionPriority = { blocked: 0, needs_input: 1, ready_for_review: 2, normal: 3 };
+let inspectorReturnFocus = null;
+let inspectorReturnSession = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
@@ -220,6 +221,12 @@ async function waitForChildren(name, button) {
 }
 
 function renderInspector(session) {
+  const opening = inspector.hidden;
+  if (opening || state.selectedSession !== session.tmux_name) {
+    const opener = document.activeElement;
+    inspectorReturnFocus = opener.closest('.session-row')?.dataset.session === session.tmux_name ? opener : null;
+    inspectorReturnSession = session.tmux_name;
+  }
   state.selectedSession = session.tmux_name;
   $('#inspector-name').textContent = session.tmux_name;
   $('#inspector-content').innerHTML = `
@@ -246,32 +253,46 @@ function renderInspector(session) {
   attentionForm.elements.note.value = draft?.note ?? session.attention_note ?? '';
   attentionForm.dataset.session = session.tmux_name; $('#attention-status').textContent = '';
   $('button[type="submit"]', attentionForm).disabled = attentionPending.has(session.tmux_name);
-  const actions = $('#inspector-actions'); actions.replaceChildren();
-  const addButton = (label, handler, className = '') => {
-    const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.className = className; button.onclick = handler; actions.append(button); return button;
-  };
-  if (session.actions.includes('attach')) addButton('Open terminal dock', () => openTerminal(session.tmux_name), 'primary');
-  if (session.actions.includes('attach')) addButton('Open dedicated terminal', () => window.open(`/terminal?session=${encodeURIComponent(session.tmux_name)}`, '_blank', 'noopener'));
-  addButton('Copy name', () => copyName(session.tmux_name));
-  addButton('Review output', () => showReview(session.tmux_name));
-  if (session.running) addButton('Delegate', () => openDelegate(session));
-  if (session.total_child_count) {
-    const waitBtn = addButton('Wait for children', () => waitForChildren(session.tmux_name, waitBtn));
-  }
-  for (const [operation, label] of [['interrupt', 'Interrupt'], ['restart', 'Restart agent'], ['kill', 'Kill']]) {
-    if (!session.actions.includes(operation)) continue;
-    const button = addButton(label, () => lifecycle(session, operation, button), operation === 'kill' ? 'danger' : '');
+  const actions = $('#inspector-actions');
+  const actionSignature = JSON.stringify([session.id, session.tmux_name, session.running, session.actions, !!session.total_child_count]);
+  if (actions.dataset.sessionActions !== actionSignature) {
+    actions.dataset.sessionActions = actionSignature;
+    actions.replaceChildren();
+    const latest = () => state.sessions.find(item => item.id === session.id && item.tmux_name === session.tmux_name) || session;
+    const addButton = (label, handler, className = '') => {
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.className = className; button.onclick = handler; actions.append(button); return button;
+    };
+    if (session.actions.includes('attach')) addButton('Open terminal dock', () => openTerminal(session.tmux_name), 'primary');
+    if (session.actions.includes('attach')) addButton('Open dedicated terminal', () => window.open(`/terminal?session=${encodeURIComponent(session.tmux_name)}`, '_blank', 'noopener'));
+    addButton('Copy name', () => copyName(session.tmux_name));
+    addButton('Review output', () => showReview(session.tmux_name));
+    if (session.running) addButton('Delegate', () => openDelegate(latest()));
+    if (session.total_child_count) {
+      const waitBtn = addButton('Wait for children', () => waitForChildren(session.tmux_name, waitBtn));
+    }
+    for (const [operation, label] of [['interrupt', 'Interrupt'], ['restart', 'Restart agent'], ['kill', 'Kill']]) {
+      if (!session.actions.includes(operation)) continue;
+      const button = addButton(label, () => lifecycle(latest(), operation, button), operation === 'kill' ? 'danger' : '');
+    }
   }
   inspector.hidden = false;
   renderWaitStatus(session);
   renderSessions();
+  if (opening) $('#inspector-close').focus({ preventScroll: true });
 }
 
-function closeInspector() {
+function closeInspector(restoreFocus = true) {
   inspector.hidden = true; state.selectedSession = null; renderSessions();
+  if (restoreFocus) {
+    const row = $$('.session-row').find(node => node.dataset.session === inspectorReturnSession);
+    const target = inspectorReturnFocus?.isConnected ? inspectorReturnFocus : row;
+    target?.focus({ preventScroll: true });
+  }
 }
+
 
 function selectView(view, updateHash = true) {
+  closeSessionMenu();
   state.view = viewTitles[view] ? view : 'sessions';
   $$('[data-view-panel]').forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== state.view; });
   $$('[data-view]').forEach((button) => {
@@ -369,29 +390,118 @@ async function openDelegate(session) {
   delegateDialog.showModal();
 }
 
+let openSessionMenu = null;
+
+function positionSessionMenu() {
+  if (!openSessionMenu) return;
+  const { summary, popover } = openSessionMenu;
+  const anchor = summary.getBoundingClientRect();
+  const margin = 8, gap = 5;
+  popover.style.maxHeight = `${Math.max(44, window.innerHeight - margin * 2)}px`;
+  const box = popover.getBoundingClientRect();
+  const below = window.innerHeight - anchor.bottom - gap - margin;
+  const above = anchor.top - gap - margin;
+  const top = box.height <= below || below >= above ? anchor.bottom + gap : anchor.top - gap - box.height;
+  popover.style.left = `${Math.max(margin, Math.min(anchor.right - box.width, window.innerWidth - box.width - margin))}px`;
+  popover.style.top = `${Math.max(margin, Math.min(top, window.innerHeight - box.height - margin))}px`;
+}
+
+function closeSessionMenu(restoreFocus = false) {
+  if (!openSessionMenu) return;
+  const { menu, summary } = openSessionMenu;
+  openSessionMenu = null;
+  menu.open = false;
+  summary.setAttribute('aria-expanded', 'false');
+  if (restoreFocus && summary.isConnected) summary.focus({ preventScroll: true });
+}
+
+function showSessionMenu(menu) {
+  closeSessionMenu();
+  const summary = $('summary', menu), popover = $('.action-menu-popover', menu);
+  menu.open = true;
+  summary.setAttribute('aria-expanded', 'true');
+  openSessionMenu = { menu, summary, popover, name: menu.dataset.session, id: menu.dataset.sessionId };
+  positionSessionMenu();
+}
+
+document.addEventListener('pointerdown', event => {
+  if (openSessionMenu && !openSessionMenu.menu.contains(event.target)) closeSessionMenu();
+});
+document.addEventListener('keydown', event => {
+  if (!openSessionMenu) return;
+  if (event.key === 'Escape') {
+    event.preventDefault(); event.stopImmediatePropagation(); closeSessionMenu(true); return;
+  }
+  if (!openSessionMenu.menu.contains(event.target)) return;
+  const buttons = $$('button:not(:disabled)', openSessionMenu.popover);
+  const index = buttons.indexOf(document.activeElement);
+  let next;
+  if (event.key === 'ArrowDown') next = buttons[(index + 1) % buttons.length];
+  if (event.key === 'ArrowUp') next = index < 0 ? buttons.at(-1) : buttons[(index + buttons.length - 1) % buttons.length];
+  if (event.key === 'Home') next = buttons[0];
+  if (event.key === 'End') next = buttons.at(-1);
+  if (next) { event.preventDefault(); event.stopImmediatePropagation(); next.focus(); }
+}, true);
+document.addEventListener('focusin', event => {
+  if (openSessionMenu && !openSessionMenu.menu.contains(event.target)) closeSessionMenu();
+});
+window.addEventListener('resize', positionSessionMenu);
+window.addEventListener('scroll', positionSessionMenu, true);
+
 function renderSession(session, historyRow = false) {
   const row = document.createElement('tr'); row.className = 'session-row'; row.tabIndex = 0;
+  const latest = () => state.sessions.find(item => item.id === session.id && item.tmux_name === session.tmux_name) || session;
+  row.dataset.session = session.tmux_name;
+  row.dataset.menuActions = JSON.stringify([session.running, session.actions]);
   if (state.selectedSession === session.tmux_name) row.classList.add('selected');
   const attach = session.actions.includes('attach') ? '<button class="primary compact" data-attach>Attach</button>' : '';
   row.innerHTML = `<td><div class="state-stack">${attentionBadge(session)}<span class="badge ${session.running ? 'live' : 'stopped'}">${escapeHtml(session.live_state || (session.running ? 'tmux live' : 'stopped'))}</span></div></td><th scope="row"><span class="session-name">${escapeHtml(session.tmux_name)}</span>${session.attention_note ? `<span class="row-note">${escapeHtml(session.attention_note)}</span>` : ''}</th><td>${escapeHtml(session.tool || 'legacy')}<span class="subtle">${escapeHtml(session.agent_mode || session.provider || 'native')}</span></td><td>${escapeHtml(session.profile || 'legacy')}</td><td class="repo-cell" title="${escapeHtml(session.repository || session.worktree || 'No repository')}">${escapeHtml(session.repository || session.worktree || '—')}</td><td title="${escapeHtml(session.last_activity || '')}">${formatActivity(session.last_activity)}</td><td>${session.attached_clients}</td><td><div class="session-actions">${attach}<details class="action-menu"><summary aria-label="More actions">•••</summary><div class="action-menu-popover"><button data-copy-name>Copy name</button><button data-review>Review output</button>${session.running ? '<button data-delegate>Delegate</button>' : ''}${actionButton(session, 'interrupt', 'Interrupt')}${actionButton(session, 'restart', 'Restart agent')}${actionButton(session, 'kill', 'Kill', 'danger')}</div></details></div></td>`;
+  const menu = $('.action-menu', row), summary = $('summary', menu);
+  menu.dataset.session = session.tmux_name;
+  menu.dataset.sessionId = session.id;
+  summary.setAttribute('aria-expanded', 'false');
+  summary.addEventListener('click', event => {
+    event.preventDefault();
+    if (menu.open) closeSessionMenu(); else showSessionMenu(menu);
+  });
+  $('.action-menu-popover', menu).addEventListener('click', event => {
+    if (event.target.closest('button')) closeSessionMenu();
+  });
   $('[data-attach]', row)?.addEventListener('click', () => openTerminal(session.tmux_name));
   $('[data-copy-name]', row).onclick = () => copyName(session.tmux_name);
   $('[data-review]', row).onclick = () => showReview(session.tmux_name);
-  $('[data-delegate]', row)?.addEventListener('click', () => openDelegate(session));
-  $$('[data-action]', row).forEach((button) => button.addEventListener('click', () => lifecycle(session, button.dataset.action, button)));
-  row.addEventListener('click', (event) => { if (!event.target.closest('button,a,summary,details')) renderInspector(session); });
-  row.addEventListener('keydown', (event) => { if (event.key === 'Enter') renderInspector(session); });
+  $('[data-delegate]', row)?.addEventListener('click', () => openDelegate(latest()));
+  $$('[data-action]', row).forEach((button) => button.addEventListener('click', () => lifecycle(latest(), button.dataset.action, button)));
+  row.addEventListener('click', (event) => { if (!event.target.closest('button,a,summary,details')) renderInspector(latest()); });
+  row.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && event.target === row) {
+      event.preventDefault(); event.stopPropagation(); renderInspector(latest());
+    }
+  });
   if (historyRow) row.classList.add('history-row');
   return row;
 }
 
+function stableSessionOrder(a, b) {
+  if (a.running !== b.running) return a.running ? -1 : 1;
+  return String(a.created_at || '').localeCompare(String(b.created_at || '')) ||
+    String(a.id || a.tmux_name).localeCompare(String(b.id || b.tmux_name));
+}
+
 function renderSessions() {
-  const filtered = state.sessions.filter(sessionMatches).sort((a, b) => {
-    if (a.running !== b.running) return a.running ? -1 : 1;
-    const attention = (attentionPriority[a.attention_state || 'normal'] ?? 9) - (attentionPriority[b.attention_state || 'normal'] ?? 9);
-    if (attention) return attention;
-    return String(b.last_activity || '').localeCompare(String(a.last_activity || ''));
-  });
+  // Keep the actual pointer/keyboard target mounted while a menu is being used.
+  // A visually identical replacement still loses a click held across a poll.
+  if (openSessionMenu) {
+    const current = state.sessions.find(session => session.tmux_name === openSessionMenu.name);
+    const row = openSessionMenu.menu.closest('tr');
+    const availableActions = current ? JSON.stringify([current.running, current.actions]) : null;
+    if (current && current.id === openSessionMenu.id && sessionMatches(current) && row.dataset.menuActions === availableActions) {
+      positionSessionMenu();
+      return;
+    }
+    closeSessionMenu(true);
+  }
+  const filtered = state.sessions.filter(sessionMatches).sort(stableSessionOrder);
   const active = filtered.filter((session) => session.running); const stopped = filtered.filter((session) => !session.running);
   activeEl.replaceChildren(...active.map((session) => renderSession(session)));
   if (!active.length) activeEl.innerHTML = '<tr><td colspan="8" class="empty">No active sessions match these filters.</td></tr>';
@@ -1085,7 +1195,7 @@ async function refresh() {
   if (request !== refreshRequest) return;
   if (state.selectedSession) {
     const selected = sessions.find((item) => item.tmux_name === state.selectedSession);
-    if (selected) renderInspector(selected); else closeInspector();
+    if (selected) renderInspector(selected); else closeInspector(false);
   }
 }
 
@@ -1196,13 +1306,16 @@ $('#terminal-dock-handle').addEventListener('pointerdown', (event) => {
 
 window.addEventListener('keydown', (event) => {
   const target = event.target;
-  if (target.closest('input,textarea,select,button,dialog,[contenteditable="true"],.terminal-dock')) return;
-  const active = state.sessions.filter(sessionMatches).filter((session) => session.running);
-  const currentIndex = Math.max(0, active.findIndex((session) => session.tmux_name === state.selectedSession));
+  if (event.key === 'Escape' && !inspector.hidden && !$$('dialog').some(dialog => dialog.open) && !target.closest('.terminal-dock')) {
+    event.preventDefault(); closeInspector(); return;
+  }
+  if (target.closest('input,textarea,select,button,dialog,[contenteditable="true"],.terminal-dock,.action-menu')) return;
+  const active = state.sessions.filter(sessionMatches).filter((session) => session.running).sort(stableSessionOrder);
+  const currentName = target.closest('.session-row')?.dataset.session || state.selectedSession;
+  const currentIndex = Math.max(0, active.findIndex((session) => session.tmux_name === currentName));
   if (event.key === '/') { event.preventDefault(); $('#filter-search').focus(); }
   else if (event.key.toLowerCase() === 'n') selectView('new');
   else if (event.key.toLowerCase() === 't' && state.selectedSession) openTerminal(state.selectedSession);
-  else if (event.key === 'Escape' && !inspector.hidden) closeInspector();
   else if (event.key === 'ArrowDown' && active.length) { event.preventDefault(); renderInspector(active[Math.min(active.length - 1, currentIndex + 1)]); }
   else if (event.key === 'ArrowUp' && active.length) { event.preventDefault(); renderInspector(active[Math.max(0, currentIndex - 1)]); }
   else if (event.key === 'Enter' && state.selectedSession) {

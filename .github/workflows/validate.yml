@@ -40,6 +40,8 @@ jobs:
       - name: JavaScript syntax
         run: for file in web/static/*.js; do node --input-type=module --check < "$file" || exit; done
       - run: npm run test:ui
+      - name: Insecure HTTP clipboard regressions
+        run: npx playwright test --config playwright.http-clipboard.config.mjs
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

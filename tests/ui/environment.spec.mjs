@@ -164,3 +164,25 @@ test('late successful save cannot clear a draft belonging to a new scope',async(
   await expect(page.locator('#environment-value')).toHaveValue('synthetic-new-scope-value');
   await expect(page.locator('#environment-message')).not.toContainText('Environment saved');
 });
+
+for (const scope of ['', 'a']) test(`environment deletion requires confirmation in ${scope || 'global'} scope`, async ({page}) => {
+  await scopes(page); const deletions=[];
+  await page.route('**/api/environment**', async route => {
+    if (route.request().method()==='DELETE') deletions.push(route.request().url());
+    await route.fulfill({json:environmentData('APP_KEY')});
+  });
+  await page.goto('/environment' + (scope ? '?project_id='+scope : ''));
+  await expect(page.locator('#environment-entries')).toContainText('APP_KEY');
+  await page.locator('#environment-value').fill('unsaved-synthetic-draft');
+  let prompt='';
+  page.once('dialog',async dialog=>{prompt=dialog.message();await dialog.dismiss();});
+  await page.getByRole('button',{name:'Delete',exact:true}).click();
+  expect(prompt).toContain('Delete APP_KEY');expect(prompt).toContain(scope?'project A':'global defaults');
+  expect(prompt).toContain('cannot be recovered');expect(deletions).toEqual([]);
+  await expect(page.locator('#environment-value')).toHaveValue('unsaved-synthetic-draft');
+  page.once('dialog',dialog=>dialog.accept());
+  await page.getByRole('button',{name:'Delete',exact:true}).click();
+  await expect.poll(()=>deletions.length).toBe(1);
+  expect(new URL(deletions[0]).searchParams.get('project_id')).toBe(scope || null);
+  await expect(page.locator('#environment-value')).toHaveValue('unsaved-synthetic-draft');
+});

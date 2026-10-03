@@ -1,3 +1,3 @@
 """N100 Agent Console session-management core."""
 
-__version__ = "0.28.3"
+__version__ = "0.28.4"

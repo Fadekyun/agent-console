@@ -63,7 +63,7 @@ label { display: grid; gap: 5px; font-size: .86rem; }
 .session-actions { align-self: start; justify-content: flex-end; flex-wrap: wrap; }
 .action-menu { position: relative; } .action-menu summary { min-height: 44px; display: flex; align-items: center; list-style: none; cursor: pointer; border: 1px solid var(--border-strong); border-radius: 9px; padding: 9px 12px; }
 .action-menu summary::-webkit-details-marker { display: none; } .action-menu[open] .action-menu-popover { display: grid; }
-.action-menu-popover { display: none; position: absolute; z-index: 15; right: 0; top: calc(100% + 5px); min-width: 175px; gap: 5px; padding: 7px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); box-shadow: var(--shadow); }
+.action-menu-popover { display: none; position: fixed; z-index: 60; right: auto; max-width: calc(100vw - 16px); overflow-y: auto; overscroll-behavior: contain; min-width: 175px; gap: 5px; padding: 7px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); box-shadow: var(--shadow); }
 .action-menu-popover button { justify-content: flex-start; }
 .history { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px; } .history summary { cursor: pointer; font-weight: 700; padding: 10px 2px; }
 .history .session-list { margin-top: 8px; opacity: .86; } .count { margin-left: 5px; }
@@ -331,11 +331,11 @@ dialog::backdrop { background: rgb(0 0 0 / .58); } .dialog-form, dialog form { d
 .terminal-embedded .composer { grid-row:3; }
 .terminal-controls > button, #terminal-more > summary { min-height:40px; padding:7px 10px; font-size:.82rem; }
 #terminal-more > summary { cursor:pointer; border:1px solid var(--border); border-radius:7px; }
-.terminal-menu { position:absolute; left:7px; right:7px; top:100%; max-height:60dvh; overflow:auto; padding:12px; border:1px solid var(--border); background:var(--surface); box-shadow:var(--shadow); }
+.terminal-menu { position:fixed; left:7px; right:7px; top:0; max-height:calc(var(--visual-height, 100dvh) - 60px); overflow:auto; padding:12px; border:1px solid var(--border); background:var(--surface); box-shadow:var(--shadow); }
 .terminal-menu .mode-switch { display:flex; flex-wrap:wrap; margin-bottom:10px; }
 .terminal-menu .key-strip, .terminal-embedded .terminal-menu .key-strip { display:flex; flex-wrap:wrap; overflow:visible; }
 #reconnect { margin-left:auto; }
-@media(max-width:760px){.terminal-controls > button,#terminal-more > summary { min-height:44px; }}
+@media(max-width:760px),(pointer:coarse){.terminal-controls > button,#terminal-more > summary,.terminal-menu .mode-switch button,.terminal-controls .terminal-menu .key-strip button { min-width:44px; min-height:44px; }}
 
 /* The containing workbench owns expansion; an iframe cannot expand its layout. */
 .terminal-embedded #fullscreen { display:none; }

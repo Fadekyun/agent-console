@@ -1,3 +1,10 @@
+## 0.28.4 — unreleased, 2026-10-03 (#141)
+
+- Impact: session More menus remain reachable through scrolling, polling and keyboard use; desktop row order stays stable, and inspector Escape/focus behavior preserves drafts. Terminal More fits short screens, uses touch-sized controls and no longer loses focus to a delayed connection or sends dismissal Escape to the agent. Workbench preserves held Open work clicks, wraps long names and shows readiness on direct Settings navigation. Environment deletion asks for confirmation. Updated asset URLs and instance-neutral wording avoid stale interface behavior; insecure-HTTP clipboard checks now run in CI.
+- Configuration/migration: none. Refresh browser assets; session data, launch settings and running harnesses remain unchanged.
+- Verification: new browser regressions exercise hit testing, keyboard behavior, delayed connections, polling, narrow/short viewports, direct navigation and destructive-action cancellation. Full CI and owned live fixtures validate the integrated candidate.
+- Rollback: select retained v0.28.3 through its schema guard and restart web only. Preserve databases and running sessions. Prior releases retain the menu and navigation defects described above.
+
 ## 0.28.3 — unreleased, 2026-10-03 (#141)
 
 - Impact: Workbench Refresh remains visible and touch accessible on narrow screens, including after a failed initial settings load.

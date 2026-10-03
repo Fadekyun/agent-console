@@ -421,7 +421,7 @@ test('empty work and keyboard tree focus survive refresh without touching the te
   await fixture(page);let sessions=[];
   const root={id:'root',tmux_name:'session-one',tool:'shell',profile:'coder',repository:'/tmp/repo',running:true,managed:true,attention_state:'normal',actions:['attach','kill']};
   await page.route('**/api/workbench?*',route=>route.fulfill({json:workbenchData(sessions)}));
-  await page.goto('/work');await expect(page.getByText('Your staging workspace is ready. Start a session to begin.',{exact:true})).toBeVisible();
+  await page.goto('/work');await expect(page.getByText('Your workspace is ready. Start a session to begin.',{exact:true})).toBeVisible();
   await expect(page.locator('#attention-strip')).toBeHidden();
   sessions=[root,{...root,id:'child',tmux_name:'session-child',parent_session_id:'root'}];await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await page.getByRole('link',{name:'Open work',exact:true}).click();
