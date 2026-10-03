@@ -188,6 +188,24 @@ class EnvironmentStore:
             write_private(self.path, data)
         return self.describe(project_id)
 
+    def clear_project(self, project_id):
+        """Remove scoped values during an explicitly authorized project deletion.
+
+        Callers serialize project existence checks with database mutations before
+        entering this lock, so a waiting API edit cannot recreate an orphan scope.
+        """
+        if project_id is None:
+            raise ValueError("A project identity is required")
+        scope = self.scope(project_id)
+        with self._lock():
+            data = self._read()
+            if scope not in data["scopes"]:
+                return
+            del data["scopes"][scope]
+            data.setdefault("scope_revisions", {}).pop(scope, None)
+            data["revision"] += 1
+            write_private(self.path, data)
+
     def _resolve(self, data, project_id, baseline, credentials):
         values = {k: v for k, v in baseline.items() if not (k.endswith("_CAPABILITY") or k.startswith(("AGENT_CONSOLE_SESSION_", "AGENT_CONSOLE_PARENT_", "AGENT_CONSOLE_PROJECT_", "AGENT_CONSOLE_LINKED_")))}
         sources = {k: "host" for k in values}

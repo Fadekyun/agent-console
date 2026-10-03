@@ -148,6 +148,50 @@ class EnvironmentApiTests(unittest.TestCase):
             self.assertNotIn('private-sentinel', response.text)
         self.assertNotIn(b'private-sentinel', self.manager.database.path.read_bytes())
 
+    def test_project_deletion_clears_only_its_private_scope(self):
+        project = self.manager.create_project(name='Temporary environment')
+        other = self.manager.create_project(name='Keep environment')
+        self.manager.environment.put('APP_KEY', value='global')
+        self.manager.environment.put('APP_KEY', value='delete-secret', project_id=project['id'])
+        self.manager.environment.put('APP_KEY', value='keep-secret', project_id=other['id'])
+        self.manager.delete_project(project['id'])
+        data = self.manager.environment.path.read_text()
+        self.assertNotIn('delete-secret', data)
+        self.assertNotIn('project:' + project['id'], data)
+        self.assertEqual(self.manager.environment.resolve(other['id'], baseline={})[0]['APP_KEY'], 'keep-secret')
+        self.assertEqual(self.manager.environment.resolve(baseline={})[0]['APP_KEY'], 'global')
+
+    def test_failed_scope_clear_rolls_back_project_deletion(self):
+        project = self.manager.create_project(name='Preserve after storage failure')
+        with patch.object(self.manager.environment, 'clear_project', side_effect=OSError('private store unavailable')):
+            with self.assertRaises(OSError): self.manager.delete_project(project['id'])
+        self.assertEqual(self.manager.get_project(project['id'])['name'], project['name'])
+
+    def test_waiting_environment_write_rechecks_deleted_project(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        project = self.manager.create_project(name='Concurrent delete')
+        self.manager.environment.put('APP_KEY', value='old', project_id=project['id'])
+        entered, proceed = Event(), Event()
+        clear = self.manager.environment.clear_project
+        def paused_clear(project_id):
+            entered.set()
+            self.assertTrue(proceed.wait(10))
+            clear(project_id)
+        with patch.object(self.manager.environment, 'clear_project', side_effect=paused_clear):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                deleting = pool.submit(self.manager.delete_project, project['id'])
+                self.assertTrue(entered.wait(10))
+                updating = pool.submit(self.client.put, '/api/environment/APP_KEY?project_id=' + project['id'],
+                                       headers=self.headers, json={'value': 'new-secret'})
+                proceed.set()
+                deleting.result(timeout=10)
+                # The standalone router fixture has no global KeyError handler.
+                with self.assertRaisesRegex(KeyError, 'Project does not exist'):
+                    updating.result(timeout=10)
+        self.assertNotIn('new-secret', self.manager.environment.path.read_text())
+        self.assertNotIn('project:' + project['id'], self.manager.environment.path.read_text())
+
     def test_launcher_keeps_values_and_capabilities_out_of_script(self):
         self.manager.environment.put('APP_SECRET', value='private-sentinel')
         script = self.manager._write_launcher('fixture', 'sess-fixture', LaunchSpec([sys.executable, '-c', 'pass'], {}, []), evidence_capability='private-capability')

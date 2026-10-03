@@ -862,6 +862,7 @@ class SessionManager:
         self, project_id: str, *, actor: str = "system", surface: str = "CLI",
     ) -> None:
         with self.database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM projects WHERE id=?", (project_id,)
             ).fetchone()
@@ -876,6 +877,7 @@ class SessionManager:
                     f"unassign them before deletion"
                 )
             conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
+            self.environment.clear_project(project_id)
         self.database.audit(
             "project.deleted", project_id, "success", actor=actor, surface=surface,
             details={"name": row["name"]},
