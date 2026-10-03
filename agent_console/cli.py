@@ -344,6 +344,10 @@ def main(argv: list[str] | None = None) -> int:
                 emit(result)
             return 0
         if args.command == "workflow":
+            if args.workflow_command == "manage":
+                from .operator_workflow_cli import run as run_owner_workflow
+                emit(run_owner_workflow(args, manager_factory=SessionManager))
+                return 0
             from .workflow_cli import run as run_workflow_command
             emit(run_workflow_command(args))
             return 0

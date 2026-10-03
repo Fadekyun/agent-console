@@ -10,6 +10,8 @@ from .workflow_service import WorkflowService
 def add_commands(commands):
     root=commands.add_parser('workflow')
     sub=root.add_subparsers(dest='workflow_command',required=True)
+    from .operator_workflow_cli import add_commands as add_owner_workflow_commands
+    add_owner_workflow_commands(sub)
     proposal=sub.add_parser('propose');proposal.add_argument('--current',action='store_true',required=True)
     for key in ['task','reason','expected-output','tool','profile','request-key']:proposal.add_argument('--'+key,required=True)
     proposal.add_argument('--repository');proposal.add_argument('--action',choices=['read','write','test'])
@@ -35,6 +37,9 @@ def add_commands(commands):
 
 
 def run(args,manager=None):
+    if args.workflow_command=='manage':
+        from .operator_workflow_cli import run as run_owner
+        return run_owner(args, manager_factory=(lambda: manager) if manager is not None else None)
     if manager is None and os.getenv('AGENT_CONSOLE_REPORTING_URL'):
         return remote_run(args)
     if manager is None:
