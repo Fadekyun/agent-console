@@ -102,7 +102,7 @@ def run(args, manager_factory=None):
         manager_factory = SessionManager
     try:
         return dispatch(args, data, manager_factory())
-    except (KeyError, ValueError, PermissionError, RuntimeError, OSError):
+    except (KeyError, ValueError, TypeError, PermissionError, RuntimeError, OSError):
         # Service errors can quote untrusted configuration values or native output.
         raise ValueError('Workflow request rejected; inspect current state and check the payload, authority, expected version, preview hash and request key') from None
 

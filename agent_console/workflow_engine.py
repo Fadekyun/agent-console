@@ -59,7 +59,7 @@ class WorkflowEngine:
     def configure(self,identity,*,policy,expected_version,actor):
         root=self.root(identity)
         if set(policy)!=set(DEFAULT_POLICY):raise ValueError('review the complete workflow envelope')
-        if policy['mode'] not in {'suggestions','auto'}:raise ValueError('choose suggestions or auto')
+        if not isinstance(policy['mode'],str) or policy['mode'] not in {'suggestions','auto'}:raise ValueError('choose suggestions or auto')
         for key,maximum in [('max_concurrent',16),('max_total',100),('max_depth',10),('max_reruns',10)]:
             if type(policy[key]) is not int or not (0 if key=='max_reruns' else 1)<=policy[key]<=maximum:
                 raise ValueError('invalid workflow limit: '+key)

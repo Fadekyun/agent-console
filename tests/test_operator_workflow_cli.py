@@ -212,6 +212,17 @@ class OperatorWorkflowCliTests(unittest.TestCase):
                 cli.main(['workflow','manage',*words])
             self.assertNotIn('credential-sentinel', err.getvalue())
 
+    def test_invalid_policy_mode_rejected_without_mutation_or_traceback(self):
+        for mode in ([], {}, None, True):
+            with self.subTest(mode=mode):
+                policy = {**DEFAULT_POLICY, 'mode':mode}
+                with self.assertRaisesRegex(ValueError, 'choose suggestions or auto'):
+                    self.engine.configure('root', policy=policy, expected_version=0, actor='test')
+                code, out, err = self.invoke(['policy','root'], {'policy':policy, 'expected_version':0})
+                self.assertEqual(code, 2)
+                self.assertNotIn('Traceback', out+err)
+                self.assertEqual(self.engine.policy('root')['version'], 0)
+
     def test_existing_agent_parser_is_unchanged(self):
         args = cli.parser().parse_args(['workflow','propose','--current','--task','Task','--reason','Why',
             '--expected-output','Result','--tool','codex','--profile','general','--request-key','explicit'])
