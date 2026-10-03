@@ -7,7 +7,11 @@ import('/static/icons.js').catch(() => {});
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const name = new URLSearchParams(location.search).get('session');
+let name = new URLSearchParams(location.search).get('session');
+const initialName = name;
+let sessionId = new URLSearchParams(location.search).get('session_id');
+let identityRequest = null, connectionGeneration = 0, draftInitialized = false;
+let draftKey = null;
 if (!name) location.href = '/';
 $('#session-name').textContent = name;
 document.title = `Agent Terminal - ${name}`;
@@ -48,13 +52,11 @@ const MAX_RECONNECT_ATTEMPTS = 30;
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 30000;
 let autoReconnectEnabled = true;
-const draftKey = `agent-console:composer:${name}`;
-try { const draft = sessionStorage.getItem(draftKey); if (draft !== null) { composer.value = draft; briefLoaded = true; } } catch { /* storage may be disabled */ }
-function saveDraft() { $('#toggle-composer').textContent = composer.value ? 'Input · draft' : 'Input'; try { sessionStorage.setItem(draftKey, composer.value); } catch { /* continue without persistence */ } }
+function saveDraft() { $('#toggle-composer').textContent = composer.value ? 'Input · draft' : 'Input'; try { if (draftKey) sessionStorage.setItem(draftKey, composer.value); } catch { /* continue without persistence */ } }
 function showComposer(open, focus = false) {
   $('#input-drawer').hidden = !open;
   $('#toggle-composer').setAttribute('aria-expanded', String(open));
-  try { sessionStorage.setItem(`${draftKey}:open`, String(open)); } catch {}
+  try { if (draftKey) sessionStorage.setItem(`${draftKey}:open`, String(open)); } catch {}
   autoSizeComposer();
   if (focus) { if (open) composer.focus(); else if (mode === 'type') terminal.focus(); }
 }
@@ -93,8 +95,61 @@ document.addEventListener('pointerdown', event => {
   if (!more.contains(event.target)) closeMore();
 });
 window.addEventListener('blur', () => closeMore());
-new ResizeObserver(fitMoreMenu).observe($('.terminal-controls'));
+new ResizeObserver(() => { fitMoreMenu(); autoSizeComposer(); }).observe($('.terminal-controls'));
 window.addEventListener('pagehide', saveDraft);
+window.addEventListener('focus', () => {
+  if (draftInitialized && viewVisible) refreshIdentity().catch(error => setStatus(error.message));
+});
+
+async function refreshIdentity() {
+  if (identityRequest) return identityRequest;
+  identityRequest = (async () => {
+    const response = await fetch('/api/sessions?state=all', { cache: 'no-store' });
+    if (!response.ok) throw new Error('Session identity unavailable; retry when the connection recovers');
+    const sessions = await response.json();
+    if (!Array.isArray(sessions)) throw new Error('Session identity unavailable; retry when the connection recovers');
+    const current = sessions.find(session => sessionId ? session.id === sessionId : session.tmux_name === name);
+    if (!current?.id || !current.tmux_name) throw new Error('Original session is no longer available');
+    sessionId = current.id;
+    name = current.tmux_name;
+    $('#session-name').textContent = name;
+    document.title = `Agent Terminal - ${name}`;
+    terminalFrame?.setAttribute('aria-label', `Terminal session ${name}`);
+    const url = new URL(location.href); url.searchParams.set('session', name); url.searchParams.set('session_id', sessionId);
+    history.replaceState(history.state, '', url);
+    return current;
+  })();
+  try { return await identityRequest; } finally { identityRequest = null; }
+}
+function sessionPath(action) {
+  return `/api/sessions/${encodeURIComponent(name)}/${action}${action.includes('?') ? '&' : '?'}session_id=${encodeURIComponent(sessionId)}`;
+}
+function initializeDraft() {
+  if (draftInitialized) return;
+  draftInitialized = true;
+  draftKey = `agent-console:composer:id:${sessionId}`;
+  try {
+    const draft = sessionStorage.getItem(draftKey);
+    if (draft !== null && !composer.value) { composer.value = draft; briefLoaded = true; }
+    const originalKey = sessionStorage.getItem(`${draftKey}:legacy-source`) || `agent-console:composer:${initialName}`;
+    const legacyKey = sessionStorage.getItem(originalKey) ? originalKey : `agent-console:composer:${name}`;
+    const legacy = sessionStorage.getItem(legacyKey);
+    const restore = $('#restore-legacy-draft');
+    if (!draft && legacy) {
+      sessionStorage.setItem(`${draftKey}:legacy-source`, legacyKey);
+      restore.hidden = false;
+      restore.title = `Restore an older draft saved as ${legacyKey.slice('agent-console:composer:'.length)}; review before sending`;
+      restore.onclick = () => {
+        insertComposer(legacy); briefLoaded = true; restore.hidden = true;
+        try { sessionStorage.removeItem(legacyKey); sessionStorage.removeItem(`${legacyKey}:open`); sessionStorage.removeItem(`${draftKey}:legacy-source`); } catch { /* storage may become unavailable */ }
+        setStatus('Older draft restored; review before sending');
+      };
+    }
+    showComposer(sessionStorage.getItem(`${draftKey}:open`) === 'true' || !$('#input-drawer').hidden);
+  } catch { /* drafts still work when storage is unavailable */ }
+  saveDraft();
+}
+
 
 function setStatus(message) {
   connection.textContent = message;
@@ -105,11 +160,15 @@ window.addEventListener('message', (event) => {
   if (!isEmbedded) return;
   if (event.origin !== window.location.origin) return;
   if (event.source !== window.parent) return;
+  if (event.data?.type === 'agent-console:refresh-identity' && event.data.session_id === sessionId) {
+    refreshIdentity().catch(error => setStatus(error.message)); return;
+  }
   if (managedVisibility && event.data?.type === 'agent-console:terminal-visibility' && typeof event.data.visible === 'boolean') {
     if (viewVisible === event.data.visible) return;
     viewVisible = event.data.visible;
     if (viewVisible) { autoReconnectEnabled = true; cancelReconnect(); connect(); }
     else {
+      connectionGeneration++;
       saveDraft(); if (historyMode || nativeScrolled) leaveHistory(); autoReconnectEnabled = false; cancelReconnect();
       if (socket) { socket.onclose = null; socket.onerror = null; socket.onmessage = null; socket.close(); socket = null; }
       setStatus('Terminal closed · session still running');
@@ -167,7 +226,7 @@ function resize() {
 function syncVisualViewport() {
   const height = window.visualViewport?.height || window.innerHeight;
   document.documentElement.style.setProperty('--visual-height', `${Math.round(height)}px`);
-  resize(); fitMoreMenu();
+  autoSizeComposer(); fitMoreMenu();
 }
 
 function scheduleReconnect() {
@@ -191,12 +250,23 @@ function cancelReconnect() {
   reconnectAttempt = 0;
 }
 
-function connect() {
+async function connect() {
   if (!viewVisible) return;
+  const generation = ++connectionGeneration;
+  reconnect.disabled = true;
+  try { await refreshIdentity(); }
+  catch (error) {
+    if (generation === connectionGeneration && viewVisible) { setStatus(error.message); reconnect.disabled = false; }
+    return;
+  }
+  if (generation !== connectionGeneration || !viewVisible) return;
+  const firstConnection = !draftInitialized;
+  initializeDraft();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  if (socket) { socket.onclose = null; socket.onerror = null; socket.onmessage = null; socket.close(); }
+  if (socket) { socket.onopen = null; socket.onclose = null; socket.onerror = null; socket.onmessage = null; socket.close(); }
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  socket = new WebSocket(`${protocol}//${location.host}/ws/sessions/${encodeURIComponent(name)}`);
+  const connectedName = name;
+  socket = new WebSocket(`${protocol}//${location.host}/ws/sessions/${encodeURIComponent(name)}?session_id=${encodeURIComponent(sessionId)}`);
   socket.binaryType = 'arraybuffer'; setStatus('Connecting…'); reconnect.disabled = true;
   socket.onopen = () => { cancelReconnect(); socket.send(JSON.stringify({type:'scroll',lines:0})); nativeScrolled = false; historyMode = false; setStatus('Connected'); resize(); if (following) terminal.scrollToBottom(); if (focusOnConnect && mode === 'type' && !more.open && !document.querySelector('dialog[open]') && (document.activeElement === document.body || $('#terminal').contains(document.activeElement))) terminal.focus(); focusOnConnect = false; };
   socket.onmessage = (event) => {
@@ -215,9 +285,16 @@ function connect() {
     });
   };
   socket.onclose = (event) => {
-    if (event.code === 4001 || event.code === 4404) {
-      autoReconnectEnabled = false; setStatus('Session ended');
-      reconnect.disabled = true;
+    if (event.code === 4404 || event.code === 4409) {
+      autoReconnectEnabled = false; reconnect.disabled = true;
+      refreshIdentity().then(() => {
+        if (generation !== connectionGeneration || !viewVisible) return;
+        if (name !== connectedName) { autoReconnectEnabled = true; connect(); }
+        else { setStatus('Original session is not running'); reconnect.disabled = false; }
+      }).catch(error => { if (generation === connectionGeneration && viewVisible) { setStatus(error.message); reconnect.disabled = false; } });
+    } else if (event.code === 4001) {
+      autoReconnectEnabled = false; setStatus(event.reason || 'Session unavailable; reconnect to retry');
+      reconnect.disabled = false;
     } else if (event.code === 4000) {
       autoReconnectEnabled = false; setStatus('Detached by user; tmux is still running');
       reconnect.disabled = false;
@@ -230,6 +307,7 @@ function connect() {
     }
   };
   socket.onerror = () => { setStatus('Connection error'); }; // close schedules exactly one retry
+  if (firstConnection) loadBrief(true);
 }
 
 function setMode(selected, focus = true) {
@@ -250,8 +328,24 @@ function insertComposer(text, focus = true) {
 }
 
 function autoSizeComposer() {
+  const drawer = $('#input-drawer');
   composer.style.height = 'auto';
-  composer.style.height = `${Math.min(composer.scrollHeight, parseFloat(getComputedStyle(composer).lineHeight || '20') * 4 + 20)}px`;
+  if (drawer.hidden) { resize(); return; }
+  drawer.style.maxHeight = 'none';
+  const style = getComputedStyle(composer);
+  const number = value => Number.parseFloat(value) || 0;
+  const lineHeight = number(style.lineHeight) || number(style.fontSize) * 1.4;
+  const border = number(style.borderTopWidth) + number(style.borderBottomWidth);
+  const padding = number(style.paddingTop) + number(style.paddingBottom);
+  const viewport = window.visualViewport;
+  const bottom = (viewport?.offsetTop || 0) + (viewport?.height || innerHeight);
+  const available = Math.max(0, bottom - $('.terminal-controls').getBoundingClientRect().bottom);
+  const chrome = drawer.getBoundingClientRect().height - composer.getBoundingClientRect().height;
+  const outputSpace = Math.min(64, Math.max(24, available * .2));
+  const maximum = Math.max(number(style.minHeight), available - chrome - outputSpace);
+  composer.style.height = `${Math.min(composer.scrollHeight + border, lineHeight * 4 + padding + border, maximum)}px`;
+  // An exceptionally short iframe can scroll the drawer without hiding Send permanently.
+  drawer.style.maxHeight = `${available}px`;
   resize();
 }
 
@@ -301,7 +395,8 @@ async function copySelection() {
 async function loadBrief(silent = false) {
   if (briefLoaded && silent) return;
   try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(name)}/brief`, { cache: 'no-store' });
+    await refreshIdentity();
+    const response = await fetch(sessionPath('brief'), { cache: 'no-store' });
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || response.statusText);
     if (body.brief && (!composer.value || !silent)) {
@@ -323,7 +418,8 @@ async function refreshTextView(direction = null) {
   try {
     if (direction) send(direction === 'up' ? '\x1b[5~' : '\x1b[6~');
     if (direction) await new Promise((resolve) => setTimeout(resolve, 180));
-    const response = await fetch(`/api/sessions/${encodeURIComponent(name)}/review?lines=1000`, { cache: 'no-store' });
+    await refreshIdentity();
+    const response = await fetch(sessionPath('review?lines=1000'), { cache: 'no-store' });
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || response.statusText);
     if (request !== textViewRequest || !dialog.open) return;
@@ -535,9 +631,8 @@ composer.addEventListener('keydown', (event) => {
 
 initTheme($('#terminal-theme'), () => { terminal.options.theme = xtermTheme(); });
 saveDraft();
-try { showComposer(sessionStorage.getItem(`${draftKey}:open`) === 'true'); } catch {}
-setMode(mode, false); syncVisualViewport(); autoSizeComposer(); autoReconnectEnabled = true; cancelReconnect(); connect(); loadBrief(true);
-fetch(`/api/sessions/${encodeURIComponent(name)}/review?lines=1`, { cache: 'no-store' })
+setMode(mode, false); syncVisualViewport(); autoSizeComposer(); autoReconnectEnabled = true; cancelReconnect(); connect();
+refreshIdentity().then(() => fetch(sessionPath('review?lines=1'), { cache: 'no-store' }))
   .then((response) => response.ok ? response.json() : null)
   .then((body) => { alternateScreen = Boolean(body?.alternate_screen); })
   .catch(() => {});

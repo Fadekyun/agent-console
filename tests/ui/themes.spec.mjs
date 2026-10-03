@@ -6,6 +6,7 @@ async function fixture(page) {
     const bodies = {
       '/api/me': {profiles:[],tool_status:[],auth_contexts:[]},
       '/api/interface': {label:'Test'},
+      '/api/sessions': [{id:'theme-probe-id',tmux_name:'theme-probe'}],
       '/api/workbench': {sessions:[],nodes:[],groups:[],aliases:{},readiness:{ready:true,warnings:[]}},
     };
     return route.fulfill({json:bodies[path] || {brief:'',results:[],items:[]}});

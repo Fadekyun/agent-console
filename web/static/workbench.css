@@ -92,3 +92,16 @@ body.terminal-open{overflow:hidden}
 .work-history>.cards{margin:12px 0}.matched-children{display:grid;gap:4px;overflow-wrap:anywhere}
 .hidden-filter{align-self:end;min-height:44px;white-space:nowrap}
 @media(max-width:760px){.filter-row>.hidden-filter{grid-column:1/-1}.work-history{padding:10px}.matched-children a{padding:5px 0}}
+
+/* Let linked actions take up their real padded height, just like buttons. */
+a.button{display:inline-flex;align-items:center;justify-content:center;max-width:100%;overflow-wrap:anywhere;text-align:center}
+.top>.brand{min-width:0;flex-wrap:wrap;column-gap:10px;row-gap:2px}
+.top>.brand>span{overflow-wrap:anywhere}
+.node-heading>a{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+#role-description:empty,#create-error:empty{display:none}
+@media(max-width:400px){
+  .filter-row{grid-template-columns:minmax(0,1fr) 44px;gap:10px}
+  .filter-row>.search{grid-column:1/-1}
+}
+/* The Sessions label must not shrink underneath a long terminal status. */
+#terminal-sessions{flex-shrink:0}

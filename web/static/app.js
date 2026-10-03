@@ -4,7 +4,7 @@ import { skillActionMessage, skillToolDiagnostic } from '/static/skill-diagnosti
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { identity: null, sessions: [], plans: [], tree: { roots: [], delegations: [] }, view: 'sessions', selectedSession: null };
+const state = { identity: null, sessions: [], plans: [], tree: { roots: [], delegations: [] }, view: 'sessions', selectedSession: null, selectedSessionId: null };
 const viewTitles = { sessions: 'Sessions', projects: 'Projects', profiles: 'Profiles', skills: 'Skills', jevghost: 'Jev Ghost', orchestration: 'Orchestration', new: 'New session' };
 const activeEl = $('#active-sessions');
 const historyEl = $('#session-history');
@@ -116,6 +116,8 @@ function updateDockLayout() {
 function activateTerminal(name) {
   if (!terminalTabs.has(name)) return;
   activeTerminal = name;
+  const selected = terminalTabs.get(name);
+  selected.focusRequested = true; selected.focusOrigin = document.activeElement;
   terminalDock.hidden = false;
   terminalDock.classList.remove('collapsed');
   terminalTabs.forEach(({ tab, frame }, tabName) => {
@@ -130,8 +132,10 @@ function activateTerminal(name) {
 
 function requestTerminalFocus(name) {
   const item = terminalTabs.get(name);
-  if (!item) return;
-  if (activeTerminal !== name || item.frame.hidden) return;
+  if (!item?.loaded || !item.focusRequested) return;
+  item.focusRequested = false;
+  if (activeTerminal !== name || item.frame.hidden || document.querySelector('dialog[open]')) return;
+  if (document.activeElement !== item.focusOrigin && document.activeElement !== document.body && document.activeElement !== item.frame) return;
   try {
     item.frame.contentWindow?.postMessage({ type: 'agent-console:focus-terminal' }, window.location.origin);
   } catch { /* same-origin, unreachable */ }
@@ -161,23 +165,27 @@ function openTerminal(name) {
     showNotice('Four terminal tabs are already open. Close one before attaching another.', 'error');
     return;
   }
+  const item = { name, sessionId: state.sessions.find(session => session.tmux_name === name)?.id, loaded: false };
   const tab = document.createElement('button');
   tab.type = 'button'; tab.className = 'terminal-tab'; tab.setAttribute('role', 'tab');
   tab.textContent = name;
-  tab.onclick = () => activateTerminal(name);
+  tab.onclick = () => activateTerminal(item.name);
   const wrapper = document.createElement('div'); wrapper.className = 'terminal-tab-item';
   const close = document.createElement('button'); close.type = 'button'; close.className = 'terminal-tab-close';
   close.setAttribute('aria-label', `Close ${name}`); close.textContent = '×';
-  close.onclick = () => { closeTerminal(name); (terminalTabs.get(activeTerminal)?.tab || $('#refresh')).focus(); };
+  close.onclick = () => { closeTerminal(item.name); (terminalTabs.get(activeTerminal)?.tab || $('#refresh')).focus(); };
   wrapper.append(tab, close);
   const frame = document.createElement('iframe');
   frame.className = 'terminal-embed'; frame.title = `Terminal ${name}`;
-  frame.src = `/terminal?session=${encodeURIComponent(name)}&embed=1`; frame.hidden = true;
+  frame.src = `/terminal?session=${encodeURIComponent(name)}&embed=1${item.sessionId ? `&session_id=${encodeURIComponent(item.sessionId)}` : ''}`; frame.hidden = true;
   frame.addEventListener('load', () => {
-    requestTerminalFocus(name);
+    if (terminalTabs.get(item.name)?.frame !== frame) return;
+    item.loaded = true;
+    requestTerminalFocus(item.name);
   });
   $('#terminal-tabs').append(wrapper); $('#terminal-frames').append(frame);
-  terminalTabs.set(name, { tab, frame }); activateTerminal(name);
+  Object.assign(item, { tab, frame, close });
+  terminalTabs.set(name, item); activateTerminal(name);
 }
 
 function renderWaitStatus(session) {
@@ -222,12 +230,13 @@ async function waitForChildren(name, button) {
 
 function renderInspector(session) {
   const opening = inspector.hidden;
-  if (opening || state.selectedSession !== session.tmux_name) {
+  if (opening || state.selectedSessionId !== session.id) {
     const opener = document.activeElement;
     inspectorReturnFocus = opener.closest('.session-row')?.dataset.session === session.tmux_name ? opener : null;
     inspectorReturnSession = session.tmux_name;
   }
-  state.selectedSession = session.tmux_name;
+  state.selectedSession = session.tmux_name; state.selectedSessionId = session.id;
+  inspectorReturnSession = session.tmux_name;
   $('#inspector-name').textContent = session.tmux_name;
   $('#inspector-content').innerHTML = `
     <div class="inspector-state">${attentionBadge(session)}<span class="badge ${session.running ? 'live' : 'stopped'}">${escapeHtml(session.live_state)}</span></div>
@@ -248,11 +257,11 @@ function renderInspector(session) {
     </dl>
     <div class="brief-block"><h3>Stored brief</h3><p>${escapeHtml(session.initial_task || 'No brief recorded.')}</p></div>
     <div id="inspector-wait-status"></div>`;
-  const draft = attentionDrafts.get(session.tmux_name);
+  const draft = attentionDrafts.get(session.id);
   attentionForm.elements.state.value = draft?.state ?? session.attention_state ?? 'normal';
   attentionForm.elements.note.value = draft?.note ?? session.attention_note ?? '';
-  attentionForm.dataset.session = session.tmux_name; $('#attention-status').textContent = '';
-  $('button[type="submit"]', attentionForm).disabled = attentionPending.has(session.tmux_name);
+  attentionForm.dataset.session = session.tmux_name; attentionForm.dataset.sessionId = session.id; $('#attention-status').textContent = '';
+  $('button[type="submit"]', attentionForm).disabled = attentionPending.has(session.id);
   const actions = $('#inspector-actions');
   const actionSignature = JSON.stringify([session.id, session.tmux_name, session.running, session.actions, !!session.total_child_count]);
   if (actions.dataset.sessionActions !== actionSignature) {
@@ -282,7 +291,7 @@ function renderInspector(session) {
 }
 
 function closeInspector(restoreFocus = true) {
-  inspector.hidden = true; state.selectedSession = null; renderSessions();
+  inspector.hidden = true; state.selectedSession = null; state.selectedSessionId = null; renderSessions();
   if (restoreFocus) {
     const row = $$('.session-row').find(node => node.dataset.session === inspectorReturnSession);
     const target = inspectorReturnFocus?.isConnected ? inspectorReturnFocus : row;
@@ -1187,14 +1196,22 @@ async function refresh() {
   const [sessions, plans, tree] = await Promise.all([api('/api/sessions?state=all'), api('/api/plans'), api('/api/delegations')]);
   if (request !== refreshRequest) return;
   state.sessions = sessions; state.plans = plans; state.tree = tree;
-  for (const name of [...terminalTabs.keys()]) {
-    const session = sessions.find((item) => item.tmux_name === name);
-    if (!session?.running) closeTerminal(name);
+  for (const [name, item] of [...terminalTabs]) {
+    const session = sessions.find(session => item.sessionId ? session.id === item.sessionId : session.tmux_name === name);
+    if (!session?.running) { closeTerminal(name); continue; }
+    if (session.tmux_name !== name) {
+      item.name = session.tmux_name;
+      item.tab.textContent = item.name; item.frame.title = `Terminal ${item.name}`;
+      item.close.setAttribute('aria-label', `Close ${item.name}`);
+      terminalTabs.delete(name); terminalTabs.set(item.name, item);
+      if (activeTerminal === name) activeTerminal = item.name;
+      item.frame.contentWindow?.postMessage({type:'agent-console:refresh-identity',session_id:item.sessionId}, location.origin);
+    }
   }
   renderSessions(); await renderOrchestration();
   if (request !== refreshRequest) return;
   if (state.selectedSession) {
-    const selected = sessions.find((item) => item.tmux_name === state.selectedSession);
+    const selected = sessions.find((item) => item.id === state.selectedSessionId);
     if (selected) renderInspector(selected); else closeInspector(false);
   }
 }
@@ -1253,27 +1270,27 @@ $$('[data-attention-filter]').forEach((button) => button.onclick = () => { $('#f
 $('#inspector-close').onclick = closeInspector;
 
 attentionForm.addEventListener('input', () => {
-  attentionDrafts.set(attentionForm.dataset.session, { state: attentionForm.elements.state.value, note: attentionForm.elements.note.value });
+  attentionDrafts.set(attentionForm.dataset.sessionId, { state: attentionForm.elements.state.value, note: attentionForm.elements.note.value });
 });
 attentionForm.onsubmit = async (event) => {
-  event.preventDefault(); const name = attentionForm.dataset.session; const submit = $('button[type="submit"]', attentionForm);
-  if (attentionPending.has(name)) return;
+  event.preventDefault(); const name = attentionForm.dataset.session, id = attentionForm.dataset.sessionId; const submit = $('button[type="submit"]', attentionForm);
+  if (attentionPending.has(id)) return;
   const submitted = { state: attentionForm.elements.state.value, note: attentionForm.elements.note.value };
-  attentionPending.add(name);
+  attentionPending.add(id);
   submit.disabled = true; $('#attention-status').textContent = 'Updating…';
   try {
     const session = await api(`/api/sessions/${encodeURIComponent(name)}/attention`, { method: 'PATCH', body: JSON.stringify({ state: submitted.state, note: submitted.note || null }) });
-    const draft = attentionDrafts.get(name);
-    if (!draft || (draft.state === submitted.state && draft.note === submitted.note)) attentionDrafts.delete(name);
-    const index = state.sessions.findIndex((item) => item.tmux_name === name); if (index >= 0) state.sessions[index] = session;
+    const draft = attentionDrafts.get(id);
+    if (!draft || (draft.state === submitted.state && draft.note === submitted.note)) attentionDrafts.delete(id);
+    const index = state.sessions.findIndex((item) => item.id === id); if (index >= 0) state.sessions[index] = session;
     renderSessions(); renderOrchestration().catch(error => showNotice(error.message, 'error'));
-    if (state.selectedSession === name && !inspector.hidden) {
+    if (state.selectedSessionId === id && !inspector.hidden) {
       renderInspector(session); $('#attention-status').textContent = 'State updated';
     }
   } catch (error) {
-    if (state.selectedSession === name && !inspector.hidden) $('#attention-status').textContent = error.message;
+    if (state.selectedSessionId === id && !inspector.hidden) $('#attention-status').textContent = error.message;
     else showNotice(`${name}: ${error.message}`, 'error');
-  } finally { attentionPending.delete(name); submit.disabled = attentionPending.has(state.selectedSession); }
+  } finally { attentionPending.delete(id); submit.disabled = attentionPending.has(state.selectedSessionId); }
 };
 
 $('#terminal-dock-collapse').onclick = () => { terminalDock.classList.toggle('collapsed'); updateDockLayout(); };

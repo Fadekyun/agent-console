@@ -6,7 +6,7 @@
   <title id="page-title">Agent Terminal</title>
   <script></script>
   <link rel="stylesheet" href="/vendor/xterm.css">
-  <link rel="stylesheet" href="/static/styles.css?v=0.28.4">
+  <link rel="stylesheet" href="/static/styles.css?v=0.28.5">
 </head>
 <body class="terminal-page" data-terminal-mode="type">
   <header class="terminal-header">
@@ -25,13 +25,14 @@
         <button id="load-brief">Load brief</button><button id="peers">Peers</button><button id="detach">Detach (Ctrl-A d)</button><button id="fullscreen">Full screen</button>
       </div>
     </div></details>
+    <button id="restore-legacy-draft" hidden title="Restore an older draft saved under this session name; review before sending">Restore older draft</button>
     <button id="resume-typing" hidden>Enable typing</button>
     <button id="reconnect" disabled hidden>Reconnect</button>
   </div>
   <div class="terminal-frame" role="application" aria-label="Terminal session"><div id="terminal"></div><button id="new-output" class="new-output" hidden aria-label="Scroll to bottom">Scroll to bottom</button></div>
   <div id="input-drawer" class="composer" hidden>
     <textarea aria-label="Compose input" id="composer" rows="1" placeholder="Compose input"></textarea>
-    <div class="composer-actions"><button id="paste-device" data-icon="paste" title="Paste into the draft without sending">Paste from device</button><button id="send">Send</button><button id="send-enter" class="primary">Send + Enter</button></div>
+    <div class="composer-actions"><button id="paste-device" data-icon="paste" data-icon-only title="Paste into the draft without sending">Paste from device</button><button id="send">Send</button><button id="send-enter" class="primary">Send + Enter</button></div>
   </div>
 
   <dialog id="peers-dialog" aria-labelledby="peers-title"><div class="dialog-form"><div class="panel-heading"><div><h2 id="peers-title">Peer sessions</h2><p class="muted">Insert into the composer; nothing is sent automatically.</p></div><button data-close="peers-dialog">Close</button></div><div id="peer-list" class="peer-list"></div></div></dialog>
@@ -39,6 +40,6 @@
   <dialog id="copy-sheet" aria-labelledby="copy-title"><div class="dialog-form"><h2 id="copy-title">Copy terminal selection</h2><p class="muted">Select the text below and use the system Copy action.</p><textarea id="copy-sheet-text" aria-label="Copy terminal text" rows="10" readonly></textarea><div class="dialog-actions"><button data-close="copy-sheet">Close</button></div></div></dialog>
   <dialog id="paste-sheet" aria-labelledby="paste-title"><div class="dialog-form"><h2 id="paste-title">Paste from device</h2><p class="muted">Automatic clipboard reading is unavailable here. Click below and press Ctrl+V or Cmd+V, or touch and hold then choose Paste. Choose Use in composer to review the draft; nothing is sent.</p><textarea id="paste-sheet-text" aria-label="Manual paste" rows="6" placeholder="Click or touch and hold here, then Paste"></textarea><div class="dialog-actions"><button data-close="paste-sheet">Cancel</button><button id="use-manual-paste" class="primary">Use in composer</button></div></div></dialog>
   <textarea id="terminal-clipboard-fallback" class="visually-hidden" aria-hidden="true"></textarea>
-  <script type="module" src="/static/terminal.js?v=0.28.4"></script>
+  <script type="module" src="/static/terminal.js?v=0.28.5"></script>
 </body>
 </html>

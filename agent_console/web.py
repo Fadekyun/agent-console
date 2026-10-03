@@ -7,7 +7,9 @@ import json
 import logging
 import os
 import pty
+import re
 import signal
+import sqlite3
 import struct
 import subprocess
 import termios
@@ -530,22 +532,40 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             child_selectors=payload.child_selectors,
         )
 
+    def require_session_identity(name: str, expected_id: str | None) -> None:
+        if expected_id is None:
+            return
+        with session_manager.database.connect() as conn:
+            current = conn.execute("SELECT id FROM sessions WHERE tmux_name=?", (name,)).fetchone()
+        if current is None or current["id"] != expected_id:
+            raise HTTPException(status_code=409, detail="session identity changed")
+
     @app.get("/api/sessions/{name}/review")
     async def review_session(
         name: str,
         response: Response,
         lines: int = Query(default=200, ge=1, le=1000),
+        session_id: str | None = Query(default=None),
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
-        return session_manager.review_session(validate_session_name(name), lines=lines)
+        name = validate_session_name(name)
+        require_session_identity(name, session_id)
+        result = session_manager.review_session(name, lines=lines)
+        require_session_identity(name, session_id)
+        return result
 
     @app.get("/api/sessions/{name}/brief")
     async def session_brief(
-        name: str, response: Response, _: AuthContext = Depends(require_identity)
+        name: str, response: Response, session_id: str | None = Query(default=None),
+        _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
-        return session_manager.session_brief(validate_session_name(name))
+        name = validate_session_name(name)
+        require_session_identity(name, session_id)
+        result = session_manager.session_brief(name)
+        require_session_identity(name, session_id)
+        return result
 
     @app.get("/api/integration/plan-requests/{request_id}/result")
     async def integration_plan_result(
@@ -914,38 +934,72 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         except KeyError:
             await websocket.close(code=4404, reason="session is not running")
             return
+        session_id = inspected["id"]
+        expected_session_id = websocket.query_params.get("session_id")
+        if expected_session_id is not None and expected_session_id != session_id:
+            await websocket.close(code=4409, reason="session identity changed")
+            return
         view_only = inspected.get("execution_kind") == "integration-plan"
         if not tmux.exists(name):
             await websocket.close(code=4404, reason="session is not running")
             return
-        client_key = f"{tmux.scope}:{name}"
+        client_key = f"{tmux.scope}:{session_id}"
         if pty_clients[client_key] >= MAX_PTY_CLIENTS:
             await websocket.close(code=4429, reason="PTY client limit reached")
             return
 
         await websocket.accept()
+        # Accept yields control: another connection may have reserved the final
+        # slot while this one was handshaking. Reserve without another await.
+        if pty_clients[client_key] >= MAX_PTY_CLIENTS:
+            await websocket.close(code=4429, reason="PTY client limit reached")
+            return
         pty_clients[client_key] += 1
-        master_fd, slave_fd = pty.openpty()
-        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-        process = subprocess.Popen(
-            tmux.attach_command(name),
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            close_fds=True,
-            preexec_fn=os.setsid,
-            env={**os.environ, "TERM": "xterm-256color"},
-        )
-        os.close(slave_fd)
-        session_manager.database.audit(
-            "session.attached",
-            name,
-            "success",
-            actor=actor,
-            surface="web",
-        )
-        log.info("ws session=%s actor=%s surface=web attached", name, actor)
-
+        master_fd = slave_fd = None
+        process = None
+        try:
+            # Pin a tmux runtime identity while rename holds the same writer
+            # lock. The attach subprocess then remains safe after lock release,
+            # even if a rename immediately makes this URL's old name reusable.
+            with session_manager.database.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                current = conn.execute(
+                    "SELECT tmux_name, socket_scope, execution_kind FROM sessions WHERE id=?",
+                    (session_id,),
+                ).fetchone()
+                if current is None or current["socket_scope"] != tmux.scope:
+                    raise RuntimeError("connected session identity is unavailable")
+                current_name = validate_session_name(current["tmux_name"])
+                runtime_id = tmux.run(
+                    "display-message", "-p", "-t", tmux.pane_target(current_name),
+                    "#{session_id}", timeout=2,
+                ).stdout.strip()
+                if not re.fullmatch(r"\$[0-9]+", runtime_id):
+                    raise RuntimeError("invalid tmux session identity")
+                view_only = current["execution_kind"] == "integration-plan"
+                master_fd, slave_fd = pty.openpty()
+                fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+                process = subprocess.Popen(
+                    tmux.command("attach-session", "-t", runtime_id),
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    close_fds=True,
+                    start_new_session=True,
+                    env={**os.environ, "TERM": "xterm-256color"},
+                )
+            os.close(slave_fd)
+        except (OSError, RuntimeError, sqlite3.Error, ValueError) as exc:
+            if process is not None and process.poll() is None:
+                process.terminate()
+            for fd in (slave_fd, master_fd):
+                if fd is not None:
+                    with suppress(OSError):
+                        os.close(fd)
+            pty_clients[client_key] = max(0, pty_clients[client_key] - 1)
+            log.warning("ws session=%s attach error=%s", name, exc)
+            await websocket.close(code=4001, reason="session unavailable")
+            return
         async def read_pty() -> None:
             try:
                 while process.poll() is None:
@@ -963,8 +1017,31 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                     except RuntimeError:
                         pass
 
+        def scroll_connected_session(lines: int) -> None:
+            # Rename holds the same database writer lock while changing tmux.
+            # Resolve the identity inside that lock so an old name can never
+            # redirect this open socket's history control to a replacement.
+            with session_manager.database.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                current = conn.execute(
+                    "SELECT tmux_name, socket_scope FROM sessions WHERE id=?",
+                    (session_id,),
+                ).fetchone()
+                if current is None or current["socket_scope"] != tmux.scope:
+                    raise RuntimeError("connected session identity is unavailable")
+                tmux.scroll_history(validate_session_name(current["tmux_name"]), lines)
+
         reader = asyncio.create_task(read_pty())
         try:
+            session_manager.database.audit(
+                "session.attached",
+                name,
+                "success",
+                actor=actor,
+                surface="web",
+            )
+            log.info("ws session=%s actor=%s surface=web attached", name, actor)
+
             while True:
                 message = await websocket.receive()
                 if message.get("type") == "websocket.disconnect":
@@ -988,22 +1065,26 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                     elif control.get("type") == "scroll":
                         lines = control.get("lines")
                         if type(lines) is int and -50 <= lines <= 50:
-                            await asyncio.to_thread(tmux.scroll_history, name, lines)
+                            await asyncio.to_thread(scroll_connected_session, lines)
                     elif control.get("type") == "detach":
                         await websocket.close(code=4000, reason="detached by user")
                         break
-        except (json.JSONDecodeError, OSError, WebSocketDisconnect) as ws_exc:
+        except (json.JSONDecodeError, OSError, RuntimeError, sqlite3.Error, ValueError, WebSocketDisconnect) as ws_exc:
             log.warning("ws session=%s error=%s", name, ws_exc, exc_info=True)
+            with suppress(RuntimeError):
+                await websocket.close(code=4001, reason="session unavailable")
         finally:
             reader.cancel()
+            # Release local resources before awaiting process exit. A closing
+            # websocket may cancel this task while that await is outstanding.
+            os.close(master_fd)
+            pty_clients[client_key] = max(0, pty_clients[client_key] - 1)
             if process.poll() is None:
                 process.terminate()
                 try:
                     await asyncio.to_thread(process.wait, 3)
                 except subprocess.TimeoutExpired:
                     process.kill()
-            os.close(master_fd)
-            pty_clients[client_key] = max(0, pty_clients[client_key] - 1)
 
     return app
 

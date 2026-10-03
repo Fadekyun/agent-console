@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 async function terminalFixture(page, { delayed = false } = {}) {
   await page.route('**/api/**', route => {
     const path = new URL(route.request().url()).pathname;
-    return route.fulfill({ json: path === '/api/sessions' ? [] : {} });
+    return route.fulfill({ json: path === '/api/sessions' ? [{id:'menu-fixture-id',tmux_name:'menu-fixture'}] : {} });
   });
   await page.addInitScript(delayed => {
     window.__terminalBytes = [];

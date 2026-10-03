@@ -78,13 +78,19 @@ class Tmux:
         *args: str,
         check: bool = True,
         capture_output: bool = True,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        result = subprocess.run(
-            self.command(*args),
-            check=False,
-            capture_output=capture_output,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                self.command(*args),
+                check=False,
+                capture_output=capture_output,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            operation = args[0] if args else "command"
+            raise RuntimeError(f"tmux {operation} timed out; retry when the server responds") from exc
         if check and result.returncode != 0:
             detail = (result.stderr or result.stdout or "unknown tmux error").strip()
             operation = args[0] if args else "command"
@@ -102,13 +108,13 @@ class Tmux:
         if type(lines) is not int or not -50 <= lines <= 50:
             raise ValueError("scroll lines must be an integer between -50 and 50")
         if lines == 0:
-            mode = self.run("display-message", "-p", "-t", self.pane_target(name), "#{pane_in_mode}").stdout.strip()
+            mode = self.run("display-message", "-p", "-t", self.pane_target(name), "#{pane_in_mode}", timeout=2).stdout.strip()
             if mode == "1":
-                self.run("send-keys", "-t", self.pane_target(name), "-X", "cancel")
+                self.run("send-keys", "-t", self.pane_target(name), "-X", "cancel", timeout=2)
             return
-        self.run("copy-mode", "-e", "-t", self.pane_target(name))
+        self.run("copy-mode", "-e", "-t", self.pane_target(name), timeout=2)
         self.run("send-keys", "-t", self.pane_target(name), "-X", "-N", str(abs(lines)),
-                 "scroll-up" if lines < 0 else "scroll-down")
+                 "scroll-up" if lines < 0 else "scroll-down", timeout=2)
 
     def _remove_owned_stale_socket(self) -> bool:
         if not self.socket_path or not self.socket_path.exists():
@@ -128,9 +134,15 @@ class Tmux:
             "-F",
             "#{session_name}\t#{session_created}\t#{session_activity}\t#{session_attached}\t#{session_windows}\t#{pane_current_command}",
             check=False,
+            timeout=2,
         )
         if result.returncode != 0:
-            return {}
+            detail = (result.stderr or result.stdout or "unknown tmux error").strip()
+            if "no server running" in detail.lower() or (
+                "error connecting to" in detail.lower() and "no such file or directory" in detail.lower()
+            ):
+                return {}
+            raise RuntimeError(f"tmux list-sessions failed: {detail}")
         sessions: dict[str, TmuxSession] = {}
         for line in result.stdout.splitlines():
             parts = line.split("\t", 5)
@@ -181,7 +193,7 @@ class Tmux:
     def rename(self, name: str, new_name: str) -> None:
         validate_session_name(name)
         validate_session_name(new_name)
-        self.run("rename-session", "-t", self.session_target(name), new_name)
+        self.run("rename-session", "-t", self.session_target(name), new_name, timeout=2)
 
     def kill(self, name: str) -> None:
         validate_session_name(name)

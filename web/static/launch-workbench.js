@@ -1,6 +1,10 @@
-export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSession,message}) {
+export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSession,message,createVersion}) {
   const $=selector=>document.querySelector(selector),form=$('#create-form');
-  let sequence=0,review=null,launching=false;
+  let sequence=0,review=null;
+  const pendingLaunches=new Set();
+  function context(){return {version:createVersion(),sessionId:state.selected?.id,hash:location.hash};}
+  function ownsContext(origin){return origin.version===createVersion()&&(origin.sessionId?origin.sessionId===state.selected?.id&&origin.hash.split('/')[0]===location.hash.split('/')[0]:origin.hash===location.hash);}
+  function ownsDraft(origin){return ownsContext(origin)&&$('#create-dialog').open;}
   const labels={tool:'Harness',profile:'Role',repository:'Repository',worktree:'Isolated worktree',auth_context:'Account',agent_mode:'Mode',provider:'Provider',model:'Model',reasoning_effort:'Reasoning effort',plan_reasoning_effort:'Plan reasoning effort',project_id:'Project'};
   function explain(target,value){
     const list=el('dl',null,'configuration-list');
@@ -47,12 +51,12 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
   }
   async function reviewLaunch(request=getRequest(),{start=false}={}){
     if(start&&review){await runLaunch();return;}
-    const token=++sequence;review=null;const panel=$('#launch-preview'),button=$('#preview-launch');button.disabled=true;
+    const token=++sequence,origin=context();review=null;const panel=$('#launch-preview'),button=$('#preview-launch');button.disabled=true;
     panel.hidden=false;panel.replaceChildren(el('p','Checking launch configuration…'));
     try{
       const source=form.dataset.continuation||null;
       const view=await api('/api/workbench/launches/preview',{request,source_session_id:source});
-      if(token!==sequence)return;
+      if(token!==sequence||!ownsDraft(origin))return;
       const key=Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('');
       review={request,source_session_id:source,expected_hash:view.hash,request_key:key};
       panel.replaceChildren(el('h3','Review launch'));explain(panel,view);
@@ -61,25 +65,26 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
       const result=el('p');result.setAttribute('role','status');panel.append(run,result);
       run.onclick=()=>runLaunch();
       if(start)await runLaunch();
-    }catch(error){if(token===sequence)panel.replaceChildren(el('p',error.message,'danger'));}
-    finally{button.disabled=false;}
+    }catch(error){if(token===sequence&&ownsDraft(origin))panel.replaceChildren(el('p',error.message,'danger'));}
+    finally{if(ownsContext(origin))button.disabled=false;}
   }
   async function runLaunch(){
-    if(!review||launching)return;
-    const submission=review;launching=true;
+    if(!review||pendingLaunches.has(review.request_key))return;
+    const submission=review,origin=context();pendingLaunches.add(submission.request_key);
     const controls=[...form.elements].map(control=>[control,control.disabled]);
     for(const [control] of controls)control.disabled=true;
     const panel=$('#launch-preview');let result=panel.querySelector('[role=status]');
     if(!result){result=el('p');result.setAttribute('role','status');panel.append(result);}
     try{
       const launched=await api('/api/workbench/launches',submission);
+      if(!ownsDraft(origin)){message(launched.state==='created'?`Created ${launched.name}. Open it from Work.`:(launched.error||'Previous launch is pending. Check its status before starting it again.'));await refresh();return;}
       if(launched.state!=='created'){
         result.textContent=launched.error||'Launch is pending. Check its status before starting another session.';
         form.querySelector('button[type=submit]').textContent='Check launch';return;
       }
-      message('');$('#create-dialog').close();await refresh();openSession(launched.name);
-    }catch(error){result.textContent=error.message+' Check this launch before starting another.';form.querySelector('button[type=submit]').textContent='Check launch';}
-    finally{launching=false;for(const [control,disabled] of controls)control.disabled=disabled;const run=$('#confirm-launch');if(run)run.textContent='Check launch';}
+      message('');$('#create-dialog').close();await refresh();if(ownsContext(origin))openSession(launched.name);else message(`Created ${launched.name}. Open it from Work.`);
+    }catch(error){if(ownsDraft(origin)){result.textContent=error.message+' Check this launch before starting another.';form.querySelector('button[type=submit]').textContent='Check launch';}else message(`Previous launch: ${error.message}. Check its status before starting it again.`);}
+    finally{pendingLaunches.delete(submission.request_key);if(origin.version===createVersion()){for(const [control,disabled] of controls)control.disabled=disabled;const run=$('#confirm-launch');if(run)run.textContent='Check launch';}}
   }
   async function recipes(){
     const list=$('#recipe-list');list.replaceChildren(el('p','Loading recipes…'));$('#recipe-dialog').showModal();
@@ -100,12 +105,12 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
   $('#save-recipe').onclick=async()=>{
     if(!form.reportValidity())return;
     if(!form.elements.recipe_title.value.trim()){$('#create-error').textContent='Name this recipe before saving.';form.elements.recipe_title.focus();return;}
-    const button=$('#save-recipe');button.disabled=true;$('#create-error').textContent='';
+    const button=$('#save-recipe'),origin=context();button.disabled=true;$('#create-error').textContent='';
     try{
       const old=form.dataset.recipe?JSON.parse(form.dataset.recipe):null;
       const saved=await api('/api/workbench/recipes'+(old?'/'+old.id:''),{title:form.elements.recipe_title.value.trim(),request:getRequest(),expected_revision:old?.revision||null});
-      form.dataset.recipe=JSON.stringify(saved);button.textContent='Update recipe';message('Recipe saved. It has not started a session.');
-    }catch(error){$('#create-error').textContent=error.message;}finally{button.disabled=false;}
+      if(ownsDraft(origin)){form.dataset.recipe=JSON.stringify(saved);button.textContent='Update recipe';}message('Recipe saved. It has not started a session.');
+    }catch(error){if(ownsDraft(origin))$('#create-error').textContent=error.message;else message(`Recipe save: ${error.message}`);}finally{if(origin.version===createVersion())button.disabled=false;}
   };
   $('#show-configuration').onclick=async()=>{
     const selected=state.selected,button=$('#show-configuration');if(!selected)return;button.disabled=true;
@@ -118,10 +123,10 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
     }catch(error){message(error.message);}finally{button.disabled=false;}
   };
   $('#continue-session').onclick=async()=>{
-    const source=state.selected,button=$('#continue-session');if(!source)return;button.disabled=true;
+    const source=state.selected,button=$('#continue-session'),origin=context();if(!source)return;button.disabled=true;
     try{
       const data=await api(`/api/workbench/sessions/${source.id}/configuration`);
-      if(state.selected?.id!==source.id)return;
+      if(state.selected?.id!==source.id||!ownsContext(origin)||$('#create-dialog').open)return;
       if(!data.latest||data.latest.invalidated){
         const panel=$('#session-configuration');panel.hidden=false;panel.replaceChildren(el('p',data.latest?.invalidated||data.notice));
         const draft=el('button','New session from known settings');panel.append(draft);

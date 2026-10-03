@@ -244,11 +244,11 @@ test('closing terminal Text View during a pending refresh does not reopen it', a
   await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
   let release;
   const pending = new Promise(resolve => { release = resolve; });
-  await page.route('**/api/sessions/codex-root/review?lines=1000', async route => {
+  await page.route('**/api/sessions/codex-root/review?lines=1000&session_id=sess-root', async route => {
     await pending;
     await route.fulfill({json:{content:'NEW_CAPTURE',alternate_screen:false,capture_scope:'history',line_count:1}});
   });
-  const response = page.waitForResponse('**/api/sessions/codex-root/review?lines=1000');
+  const response = page.waitForResponse('**/api/sessions/codex-root/review?lines=1000&session_id=sess-root');
   await page.locator('#text-refresh').click();
   await expect(page.locator('#text-refresh')).toBeDisabled();
   await page.locator('[data-close="text-dialog"]').click();
@@ -1136,7 +1136,7 @@ test('dedicated terminal with stored brief keeps terminal focus, composer not fo
 });
 test('dedicated terminal without stored brief gets terminal focus', async ({ page }) => {
   await installFakeWebSocket(page); await mockApi(page);
-  await page.route('**/api/sessions/codex-root/brief', async (route) => {
+  await page.route('**/api/sessions/codex-root/brief?session_id=sess-root', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ session: 'codex-root', brief: null, stored_only: true }) });
   });
   await page.goto('/terminal?session=codex-root');

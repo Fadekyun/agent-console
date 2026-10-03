@@ -580,7 +580,7 @@ test('legacy binary mouse reports preserve bytes instead of UTF-8 encoding',asyn
 
 test('optional input reclaims output space and retains an unsent task across collapse and reload',async({page})=>{
   await fixture(page);const sent=[];
-  await page.route('**/api/sessions/session-one/brief',route=>route.fulfill({json:{brief:'Review this task before sending'}}));
+  await page.route('**/api/sessions/session-one/brief?session_id=root',route=>route.fulfill({json:{brief:'Review this task before sending'}}));
   await page.routeWebSocket('**/ws/sessions/**',ws=>ws.onMessage(value=>sent.push(value)));
   await page.goto('/terminal?session=session-one');
   await expect(page.locator('#connection')).toHaveText('Connected');

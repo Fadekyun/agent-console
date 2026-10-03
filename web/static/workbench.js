@@ -1,5 +1,5 @@
-import { setupLaunches } from '/static/launch-workbench.js';
-import { setupOverview } from '/static/work-overview.js?v=0.28.4';
+import { setupLaunches } from '/static/launch-workbench.js?v=0.28.5';
+import { setupOverview } from '/static/work-overview.js?v=0.28.5';
 import { setupResults } from '/static/results-workbench.js';
 import { setupSkills } from '/static/skill-workbench.js';
 import { initTheme } from '/static/theme.js?v=10';
@@ -30,7 +30,7 @@ $('#show-results').onclick = () => { location.hash = `#results/${encodeURICompon
 function status(s) { return s.attention_state !== 'normal' && s.attention_state ? names[s.attention_state] || s.attention_state : s.running ? 'Working' : 'Stopped'; }
 function sessionLink(s) { return `#session/${encodeURIComponent(s.tmux_name)}`; }
 const overview=setupOverview({state,el,openCreate,api,message,refresh});
-const launches=setupLaunches({api,el,state,openCreate,getRequest:createRequest,refresh,message,openSession:name=>{location.hash=`#session/${encodeURIComponent(name)}`;route();openTerminal();}});
+const launches=setupLaunches({api,el,state,openCreate,getRequest:createRequest,refresh,message,createVersion:()=>createGeneration,openSession:name=>{location.hash=`#session/${encodeURIComponent(name)}`;route();openTerminal();}});
 function renderWork(){overview.renderWork();}
 function renderSession() {
   const s = state.selected;
@@ -74,10 +74,18 @@ function route() {
     const step=showingStep?state.work?.nodes.find(n=>n.id===state.selectedNodeId):null;
     sessionName=showingStep?(state.work?.nodes.find(n=>n.id===step?.root_id)?.native_name||'missing-step'):(hash.startsWith('#session/')||showingResults)?decodeURIComponent(hash.slice(9)):null;
   } catch { message('Invalid session link. Return to Work.'); }
-  const previous = state.selected?.tmux_name;
+  const previous = state.selected?.tmux_name,previousId=state.selected?.id;
+  const remembered=history.state?.workbenchSession;
+  const pinned=remembered?.hash===hash;
+  const selected=pinned?state.sessions.find(s=>s.id===remembered.id):state.sessions.find(s=>s.tmux_name===sessionName);
+  if(selected&&sessionName&&!showingStep){
+    sessionName=selected.tmux_name;
+    const currentHash=`#${showingResults?'results':'session'}/${encodeURIComponent(sessionName)}`;
+    history.replaceState({...history.state,workbenchSession:{hash:currentHash,id:selected.id}},'',currentHash);
+  }
   const switchingFromDrawer = $('#sessions-dialog').open && previous !== sessionName;
   if(switchingFromDrawer)$('#sessions-dialog').close();
-  state.selected = state.sessions.find(s => s.tmux_name === sessionName) || null;
+  state.selected = selected || null;
   $('#work-view').hidden = Boolean(sessionName) || ['#settings', '#skills'].includes(hash);
   $('#skills-view').hidden = hash !== '#skills';
   if (hash === '#skills' && !skillsLoaded && state.me) { skillsLoaded = true; skillsView.load().catch(error => { skillsLoaded = false; message(error.message); }); }
@@ -105,7 +113,7 @@ function route() {
     } else frame.hidden = name !== state.selected?.tmux_name;
   }
   if (!state.selected || !state.frames.has(state.selected.tmux_name)) $('#terminal-panel').hidden = true;
-  if (!showingResults && state.selected?.running && previous !== state.selected.tmux_name && (!matchMedia('(max-width:760px)').matches || switchingFromDrawer)) openTerminal();
+  if (!showingResults && state.selected?.running && previousId !== state.selected.id && (!matchMedia('(max-width:760px)').matches || switchingFromDrawer)) openTerminal();
   syncTerminalVisibility();
 }
 async function loadSettings() {
@@ -131,6 +139,25 @@ async function refresh() {
       if(!Array.isArray(work.nodes)||!Array.isArray(work.sessions))throw new Error('Work summary unavailable');
       const tasks=new Map(work.nodes.map(node=>[node.native_id,node.task]));
       for(const session of work.sessions)if(session.initial_task===undefined&&tasks.has(session.id))session.initial_task=tasks.get(session.id);
+      // Names can change asynchronously (including automatic naming). Keep the
+      // selected identity attached to the durable ID; terminal drafts use that ID too.
+      const selectedId=state.selected?.id, selectedName=state.selected?.tmux_name;
+      const terminalWasOpen=!$('#terminal-panel').hidden;
+      let selectedRenamed=false;
+      const previousById=new Map(state.sessions.map(session=>[session.id,session]));
+      const renames=work.sessions.flatMap(session=>{
+        const previous=previousById.get(session.id);
+        return previous&&previous.tmux_name!==session.tmux_name?[{session,previous}]:[];
+      });
+      for(const {session,previous} of renames){
+        state.frames.get(previous.tmux_name)?.remove();state.frames.delete(previous.tmux_name);
+        if(session.id===selectedId){
+          const prefix=location.hash.startsWith('#results/')?'#results/':'#session/';
+          if(location.hash===prefix+encodeURIComponent(selectedName)){
+            history.replaceState(history.state,'',prefix+encodeURIComponent(session.tmux_name));selectedRenamed=true;
+          }
+        }
+      }
       state.work=work;state.sessions=work.sessions;
       // Only clear the refresh failure notice on recovery; unrelated notices survive.
       if($('#notice').dataset.kind==='refresh')message('');
@@ -139,6 +166,7 @@ async function refresh() {
       const scrollX=window.scrollX,scrollY=window.scrollY;
       const scrollContainers=[...document.querySelectorAll('#tree-panel,#session-tree,#sessions-dialog,#tree-drawer')].map(node=>[node,node.scrollTop,node.scrollLeft]);
       route();
+      if(selectedRenamed&&terminalWasOpen&&state.selected?.id===selectedId&&state.selected.running&&!location.hash.startsWith('#results/'))openTerminal();
       for(const [node,top,left] of scrollContainers){node.scrollTop=top;node.scrollLeft=left;}
       window.scrollTo(scrollX,scrollY);
     } catch (error) { message(`Could not refresh sessions: ${error.message}`, 'refresh'); }
@@ -159,7 +187,7 @@ function openTerminal() {
   if (!frame) {
     // Bound browser PTYs; drafts survive eviction in the terminal's sessionStorage.
     if (state.frames.size >= 3) { const [name, old] = state.frames.entries().next().value; old.remove(); state.frames.delete(name); }
-    frame = el('iframe'); frame.title = `Terminal: ${s.tmux_name}`; frame.src = `/terminal?session=${encodeURIComponent(s.tmux_name)}&embed=1&mode=type&lifecycle=managed`;
+    frame = el('iframe'); frame.title = `Terminal: ${s.tmux_name}`; frame.src = `/terminal?session=${encodeURIComponent(s.tmux_name)}&session_id=${encodeURIComponent(s.id)}&embed=1&mode=type&lifecycle=managed`;
     frame.addEventListener('load',()=>{frame.dataset.loaded='true';syncTerminalVisibility();requestTerminalFocus(frame);});
     state.frames.set(s.tmux_name, frame); $('#terminal-frames').append(frame);
   }
@@ -226,7 +254,7 @@ function configureSessionFlow() {
   $('#create-start-help').textContent=scheduled?'This scheduled task needs one review before it can run automatically.':'Open Input · draft in the terminal to review and send the task when you are ready.';
 }
 $('#schedule-step').onchange=configureSessionFlow;
-let createOrigin=null;
+let createOrigin=null,createGeneration=0;
 function restoreCreateOrigin(){
   const origin=createOrigin;createOrigin=null;
   if(!origin||origin.hash!==location.hash)return;
@@ -235,6 +263,7 @@ function restoreCreateOrigin(){
   for(const [node,top,left] of origin.scroll){node.scrollTop=top;node.scrollLeft=left;}
 }
 function openCreate(parent = null, step = null) {
+  createGeneration++;for(const control of form.elements)control.disabled=false;
   createOrigin={hash:location.hash,control:document.activeElement,drawer:$('#sessions-dialog').open,scroll:[$('#sessions-dialog'),$('#session-tree'),$('#tree-panel')].map(node=>[node,node.scrollTop,node.scrollLeft])};
   if ($('#sessions-dialog').open) $('#sessions-dialog').close();
   if (!state.me) { message('Tool information is unavailable. Use Refresh to retry loading settings.', 'settings'); return; }
@@ -270,12 +299,21 @@ function createRequest(){
 form.onsubmit = async event => {
   event.preventDefault(); const submit = $('button[type=submit]', form); if (submit.disabled) return; submit.disabled = true; $('#create-error').textContent = '';
   const fields=form.elements,parent=fields.parent.value,data=createRequest();
+  const generation=createGeneration,originHash=location.hash,originSessionId=state.selected?.id;
+  const stillOnOrigin=()=>generation===createGeneration&&(originSessionId?state.selected?.id===originSessionId&&location.hash.split('/')[0]===originHash.split('/')[0]:location.hash===originHash);
+  const ownsDraft=()=>stillOnOrigin()&&$('#create-dialog').open;
+  async function finishSession(session){
+    const navigate=ownsDraft();if(navigate)$('#create-dialog').close();
+    if(state.loading)await state.loading;await refresh();
+    if(navigate&&stillOnOrigin()){location.hash=sessionLink(session);route();openTerminal();}
+    else message(`Created ${session.tmux_name}. Open it from Work.`);
+  }
   try {
     if(!parent&&form.dataset.review){await launches.reviewLaunch(data,{start:true});return;}
     if(parent&&!$('#schedule-step').checked){
       const owner=state.sessions.find(s=>s.id===parent);if(!owner)throw new Error('Parent session is unavailable. Refresh and try again.');
       const session=await api(`/api/sessions/${encodeURIComponent(owner.tmux_name)}/children`,data);
-      $('#create-dialog').close();if(state.loading)await state.loading;await refresh();location.hash=sessionLink(session);route();openTerminal();
+      await finishSession(session);
     }else if(parent){
       const existing=form.dataset.step?JSON.parse(form.dataset.step):null;
       const owner=existing?.owner_id||parent;
@@ -284,13 +322,13 @@ form.onsubmit = async event => {
       const dependencies=(existing?.dependencies||[]).filter(d=>d.source_id!==owner);dependencies.push({source_id:owner,readiness:fields.readiness.value});
       const proposal={task:data.task,reason:fields.reason.value,expected_output:fields.expected_output.value,config,dependencies};
       const proposed=existing?await api(`/api/workflow/steps/${existing.id}/edit`,{...proposal,expected_version:existing.version}):await api(`/api/sessions/${encodeURIComponent(parent)}/workflow/proposals`,{...proposal,request_key:Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('')});
-      $('#create-dialog').close();resultsSession=null;await refresh();location.hash=`#step/${encodeURIComponent(proposed.id)}`;route();await resultsReady;if($('#workflow-next-steps'))$('#workflow-next-steps').open=true;
+      const navigate=ownsDraft();if(navigate)$('#create-dialog').close();resultsSession=null;await refresh();if(navigate&&stillOnOrigin()){location.hash=`#step/${encodeURIComponent(proposed.id)}`;route();await resultsReady;if($('#workflow-next-steps'))$('#workflow-next-steps').open=true;}
       message('Next step proposed. Preview its launch and accept it when the scope is right.');
     }else{
-      const session=await api('/api/sessions',data);$('#create-dialog').close();if(state.loading)await state.loading;await refresh();location.hash=sessionLink(session);route();openTerminal();
+      const session=await api('/api/sessions',data);await finishSession(session);
     }
-  } catch (error) { $('#create-error').textContent = error.message; }
-  finally { submit.disabled = false; }
+  } catch (error) { if(ownsDraft())$('#create-error').textContent=error.message;else message(`Session creation: ${error.message}`); }
+  finally { if(generation===createGeneration)submit.disabled = false; }
 };
 async function sessionAction(action, payload, method='POST') {
   const s=state.selected;if(!s)return;
@@ -353,11 +391,11 @@ $('#show-history').onclick=async()=>{
   const session=state.selected,button=$('#show-history');button.disabled=true;
   try{
     const data=await api(`/api/workbench/sessions/${session.id}/history`);if(session.id!==state.selected?.id)return;
-    const panel=$('#session-history');panel.replaceChildren(el('h3','History'),el('p',data.notice,'small muted'));
+    const panel=$('#session-history'),generation=Symbol('history');panel.historyGeneration=generation;panel.replaceChildren(el('h3','History'),el('p',data.notice,'small muted'));
     function append(events){for(const event of events)panel.append(el('p',`${event.at} · ${event.action}${event.outcome?' · '+event.outcome:''}`,'small'));}
-    append(data.events);if(data.events.length===50){const more=el('button','Older workflow events');let before=data.before;more.onclick=async()=>{more.disabled=true;try{const page=await api(`/api/workbench/sessions/${session.id}/history?before=${before}`);append(page.events);before=page.before;if(page.events.length<50)more.remove();}catch(error){message(error.message);}finally{more.disabled=false;}};panel.append(more);}
+    append(data.events);if(data.events.length===50){const more=el('button','Older workflow events');let before=data.before;more.onclick=async()=>{more.disabled=true;try{const page=await api(`/api/workbench/sessions/${session.id}/history?before=${before}`);if(state.selected?.id!==session.id||panel.historyGeneration!==generation)return;append(page.events);before=page.before;if(page.events.length<50)more.remove();}catch(error){if(state.selected?.id===session.id&&panel.historyGeneration===generation)message(error.message);}finally{more.disabled=false;}};panel.append(more);}
     panel.append(el('h3','Session audit'));append(data.audit);
-    if(data.audit.length===50){const more=el('button','Older session events');let before=data.audit_before;more.onclick=async()=>{more.disabled=true;try{const page=await api(`/api/workbench/sessions/${session.id}/history?audit_before=${before}`);append(page.audit);before=page.audit_before;if(page.audit.length<50)more.remove();}catch(error){message(error.message);}finally{more.disabled=false;}};panel.append(more);}
+    if(data.audit.length===50){const more=el('button','Older session events');let before=data.audit_before;more.onclick=async()=>{more.disabled=true;try{const page=await api(`/api/workbench/sessions/${session.id}/history?audit_before=${before}`);if(state.selected?.id!==session.id||panel.historyGeneration!==generation)return;append(page.audit);before=page.audit_before;if(page.audit.length<50)more.remove();}catch(error){if(state.selected?.id===session.id&&panel.historyGeneration===generation)message(error.message);}finally{more.disabled=false;}};panel.append(more);}
     panel.hidden=false;
   }catch(error){message(error.message);}finally{button.disabled=false;}
 };
@@ -379,8 +417,8 @@ $('#preview-skills').onclick = previewSkills;
 form.elements.repository.addEventListener('change', previewSkills);
 form.elements.profile.addEventListener('change', previewSkills);
 form.elements.tool.addEventListener('change', previewSkills);
-$('#new-session').onclick = () => openCreate(); $('#cancel-create').onclick = () => {$('#create-dialog').close();restoreCreateOrigin();};
-$('#create-dialog').addEventListener('cancel',()=>setTimeout(restoreCreateOrigin,0));
+$('#new-session').onclick = () => openCreate(); $('#cancel-create').onclick = () => {createGeneration++;$('#create-dialog').close();restoreCreateOrigin();};
+$('#create-dialog').addEventListener('cancel',()=>{createGeneration++;setTimeout(restoreCreateOrigin,0);});
 form.elements.profile.onchange = configureRole; form.elements.tool.onchange = configureTool;
 const treePanel=$('#tree-panel');
 try { treePanel.open=localStorage.getItem('workbench-tree-open') !== 'false'; } catch {}

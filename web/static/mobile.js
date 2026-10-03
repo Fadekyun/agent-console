@@ -2,7 +2,7 @@ import { projectActions } from '/static/project-actions.js?v=1';
 import { initTheme } from '/static/theme.js?v=10';
 import { skillActionMessage, skillToolDiagnostic } from '/static/skill-diagnostics.js?v=1';
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
-const form=$('#mobile-new'); let identity; let currentModels=[]; let loadModelsReq=0; let pending; let currentPlanId; let profileEditorRequest=0; let planRequest=0; let creatingSession=false; const startingPlans=new Set();
+const form=$('#mobile-new'); let identity; let currentModels=[]; let loadModelsReq=0; let pendingKill; let pendingAttention; let killRequest=0; let attentionRequest=0; let delegateRequest=0; let creatingChild=false; let sessionRead=0; const sessionMutations=new Set(); let currentPlanId; let profileEditorRequest=0; let planRequest=0; let creatingSession=false; const startingPlans=new Set();
 async function api(path, options={}) { const response=await fetch(path,{cache:'no-store',headers:{'Content-Type':'application/json',...(options.headers||{})},...options}); const body=await response.json(); if(!response.ok) throw new Error(body.detail||response.statusText); return body; }
 function contexts() { const tool=form.elements.tool.value, provider=form.elements.provider.value; if(tool==='opencode'&&!provider){form.elements.auth_context.replaceChildren();return;} const values=identity.auth_contexts.filter((x)=>x.tool===tool && (tool!=='opencode'||x.provider===provider) && (tool!=='opencode'||x.enabled!==false)); form.elements.auth_context.replaceChildren(...values.map((x)=>new Option(`${x.name} · ${x.status}`,x.name,false,x.default))); }
 function renderModels(values){$('#mobile-models').replaceChildren(...values.map((m)=>{const label=m.estimated_usd==null?(m.cost.output==null?'unknown':`$${m.cost.output}/M out`):`est. $${m.estimated_usd.toFixed(6)}${m.cheapest?' · CHEAPEST':''}`;const o=new Option(`${m.name} · ${label}`,m.model);o.disabled=!m.selectable;return o;}));}
@@ -29,11 +29,32 @@ function toolChanged(){
   if(open)models();
   if(native){form.elements.model.closest('label').hidden=false;nativeModelChanged();}
 }
-function sessionCard(session){const article=document.createElement('article');article.className='mobile-session';const title=document.createElement('strong');title.textContent=session.tmux_name;const meta=document.createElement('small');meta.textContent=`${session.tool||'legacy'} · ${session.profile||'legacy'} · ${session.live_state||'tmux live'}`;const badge=document.createElement('small');badge.className='attention-badge';badge.textContent=session.attention_state||'';const actions=document.createElement('div');actions.className='mobile-session-actions';const attach=document.createElement('a');attach.className='button primary';attach.textContent='Attach';attach.href=`/terminal?session=${encodeURIComponent(session.tmux_name)}`;const interrupt=document.createElement('button');interrupt.textContent='Interrupt';interrupt.onclick=()=>life(session,'interrupt');const restart=document.createElement('button');restart.textContent='Restart';restart.onclick=()=>life(session,'restart');const kill=document.createElement('button');kill.textContent='Kill';kill.onclick=()=>confirmKill(session);const details=document.createElement('button');details.textContent='Details';details.onclick=()=>openAttention(session);const btns=[];if(session.actions.includes('attach'))btns.push(attach);if(session.actions.includes('interrupt'))btns.push(interrupt);if(session.actions.includes('restart'))btns.push(restart);if(session.actions.includes('kill'))btns.push(kill);btns.push(details);actions.append(...btns);article.append(title,meta,badge,actions);return article;}
-async function life(s,op){await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${op}`,{method:'POST',body:'{}'});await renderSessions();}
-function confirmKill(s){pending=s;$('#mobile-kill-name').textContent=s.tmux_name;$('#mobile-kill-unmanaged').hidden=!!s.managed;$('#mobile-kill-allow').checked=false;document.getElementById('mobile-kill-dialog').showModal();}
-function openAttention(s){pending=s;$('#mobile-attention-state').value=s.attention_state||'normal';$('#mobile-attention-note').value=s.attention_note||'';document.getElementById('mobile-attention-dialog').showModal();}
-async function renderSessions(){try{const sessions=await api('/api/sessions?state=all');$('#mobile-sessions').replaceChildren(...sessions.map(sessionCard));if(!sessions.length)$('#mobile-sessions').textContent='No sessions.';}catch(e){$('#mobile-sessions').textContent=e.message;}}
+function sessionCard(session){const article=document.createElement('article');article.className='mobile-session';article.dataset.session=session.id||session.tmux_name;const title=document.createElement('strong');title.textContent=session.tmux_name;const meta=document.createElement('small');meta.textContent=`${session.tool||'legacy'} · ${session.profile||'legacy'} · ${session.live_state||'tmux live'}`;const badge=document.createElement('small');badge.className='attention-badge';badge.textContent=session.attention_state||'';const actions=document.createElement('div');actions.className='mobile-session-actions';const attach=document.createElement('a');attach.className='button primary';attach.textContent='Attach';attach.href=`/terminal?session=${encodeURIComponent(session.tmux_name)}`;const interrupt=document.createElement('button');interrupt.textContent='Interrupt';interrupt.onclick=()=>life(session,'interrupt');const restart=document.createElement('button');restart.textContent='Restart';restart.onclick=()=>life(session,'restart');const kill=document.createElement('button');kill.textContent='Kill';kill.onclick=()=>confirmKill(session);const details=document.createElement('button');details.textContent='Details';details.onclick=()=>openAttention(session);const btns=[];if(session.actions.includes('attach'))btns.push(attach);if(session.actions.includes('interrupt'))btns.push(interrupt);if(session.actions.includes('restart'))btns.push(restart);if(session.actions.includes('kill'))btns.push(kill);btns.push(details);for(const button of [interrupt,restart,kill])button.disabled=sessionMutations.has(session.id||session.tmux_name);actions.append(...btns);article.append(title,meta,badge,actions);return article;}
+function sessionStatus(text){$('#mobile-sessions-status').textContent=text;}
+function sessionBusy(s,busy){
+ const key=s.id||s.tmux_name;
+ if(busy)sessionMutations.add(key);else sessionMutations.delete(key);
+ $$('#mobile-sessions .mobile-session').forEach(card=>{if(card.dataset.session===key)$$('button',card).filter(b=>['Interrupt','Restart','Kill'].includes(b.textContent)).forEach(b=>b.disabled=busy);});
+}
+async function life(s,op){
+ const key=s.id||s.tmux_name;if(sessionMutations.has(key))return;
+ sessionBusy(s,true);sessionStatus(`${op==='restart'?'Restarting':'Interrupting'} ${s.tmux_name}…`);
+ try{await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${op}`,{method:'POST',body:'{}'});await renderSessions();}
+ catch(e){sessionStatus(`${s.tmux_name}: ${e.message}`);}
+ finally{sessionBusy(s,false);}
+}
+function confirmKill(s){pendingKill=s;killRequest++;$('#mobile-kill-status').textContent='';$('#mobile-kill-confirm').disabled=false;$('#mobile-kill-name').textContent=s.tmux_name;$('#mobile-kill-unmanaged').hidden=!!s.managed;$('#mobile-kill-allow').checked=false;document.getElementById('mobile-kill-dialog').showModal();}
+function openAttention(s){pendingAttention=s;attentionRequest++;$('#mobile-attention-status').textContent='';$('#mobile-attention-save').disabled=false;$('#mobile-attention-state').value=s.attention_state||'normal';$('#mobile-attention-note').value=s.attention_note||'';document.getElementById('mobile-attention-dialog').showModal();}
+async function renderSessions(){
+ const request=++sessionRead;
+ try{
+  const sessions=await api('/api/sessions?state=all');if(request!==sessionRead)return;
+  sessions.sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')||(a.id||a.tmux_name).localeCompare(b.id||b.tmux_name));
+  $('#mobile-sessions').replaceChildren(...sessions.map(sessionCard));
+  if(!sessions.length)$('#mobile-sessions').textContent='No sessions.';
+  sessionStatus('');
+ }catch(e){if(request===sessionRead)sessionStatus(`Refresh failed: ${e.message}. Your last session list is still shown.`);}
+}
 async function refresh(){try{await renderSessions();}catch(e){$('#mobile-sessions').textContent=e.message;}}
 function planCard(p){const article=document.createElement('article');article.className='mobile-plan';const title=document.createElement('strong');title.textContent=p.title;const meta=document.createElement('small');meta.textContent=`${p.repository||''} · ${p.status}${p.revision_state?(' · '+p.revision_state):''}`;const actions=document.createElement('div');actions.className='mobile-session-actions';const view=document.createElement('button');view.textContent='View';view.onclick=()=>viewPlan(p.id);const copy=document.createElement('button');copy.textContent='Copy';copy.onclick=()=>copyText('agentctl plan execute '+p.id);const start=document.createElement('button');start.textContent='Start';start.className='primary';start.onclick=()=>startPlan(p);actions.append(view,copy,start);article.append(title,meta,actions);return article;}
 async function renderPlans(){try{const plans=await api('/api/plans');$('#mobile-plans').replaceChildren(...plans.map(planCard));if(!plans.length)$('#mobile-plans').textContent='No plans yet.';}catch(e){$('#mobile-plans').textContent=e.message;}}
@@ -72,6 +93,8 @@ async function copyText(t){try{await navigator.clipboard.writeText(t);}catch{pro
 async function renderTree(){try{const data=await api('/api/delegations');const roots=Array.isArray(data?.roots)?data.roots:[];const tree=$('#mobile-tree');tree.replaceChildren();if(!roots.length){tree.textContent='No sessions.';}for(const r of roots){const node=document.createElement('div');node.className='mobile-tree-node';const title=document.createElement('strong');title.textContent=r.tmux_name;const meta=document.createElement('small');meta.textContent=`${r.tool||''} · ${r.profile||''}`;const actions=document.createElement('div');actions.className='mobile-session-actions';const delegate=document.createElement('button');delegate.textContent='Delegate';delegate.onclick=()=>openDelegate(r);const attach=document.createElement('a');attach.className='button primary';attach.textContent='Attach';attach.href=`/terminal?session=${encodeURIComponent(r.tmux_name)}`;actions.append(delegate,attach);node.append(title,meta,actions);for(const c of r.children||[]){const child=document.createElement('div');child.className='mobile-tree-child';child.textContent=`↳ ${c.tmux_name} (${c.profile})`;node.append(child);}tree.append(node);}const groups=await api('/api/session-groups').catch(()=>[]);if(groups.length){const sep=document.createElement('hr');tree.append(sep);const heading=document.createElement('strong');heading.textContent='Session groups';tree.append(heading);for(const g of groups){const gc=document.createElement('div');gc.className='mobile-tree-node';const gt=document.createElement('strong');gt.textContent=g.name;const gm=document.createElement('small');gm.textContent=`${g.purpose||'No purpose'} · ${g.member_count||0} sessions`;const ga=document.createElement('div');ga.className='mobile-session-actions';const gOpen=document.createElement('button');gOpen.textContent='Open';gOpen.title='Open the first running session';gOpen.onclick=async()=>{if(gOpen.disabled)return;gOpen.disabled=true;try{const r=await api(`/api/session-groups/${encodeURIComponent(g.id)}/open`,{method:'POST'});const first=(r.available||[])[0];if(first){location.href=`/terminal?session=${encodeURIComponent(first.tmux_name)}`;}else{alert('No running sessions in this group.');}}catch(e){alert(e.message);}finally{gOpen.disabled=false;}};ga.append(gOpen);gc.append(gt,gm,ga);tree.append(gc);}}}catch(e){$('#mobile-tree').textContent=e.message;}}
 function openDelegate(session) {
   const form = $('#mobile-delegate');
+  delegateRequest++;form.reset();$('#mobile-delegate-status').textContent='';$('button[type=submit]',form).disabled=creatingChild;
+  form.elements.repository.value=session.repository||'';
   form.elements.parent.value = session.tmux_name;
   const profiles = identity.profiles || [];
   const parent = profiles.find(profile => profile.name === (session.profile || 'general'));
@@ -153,7 +176,37 @@ form.onsubmit=async(e)=>{e.preventDefault();if(creatingSession)return;creatingSe
 $$('[data-mobile-tab]').forEach((x)=>x.onclick=()=>select(x.dataset.mobileTab));$('#mobile-refresh').onclick=()=>{renderSessions();renderPlans();renderTree();};let layout='auto';try{layout=localStorage.getItem('agent-console-layout')||'auto';}catch{}$('#mobile-layout').value=layout;$('#mobile-layout').onchange=()=>{const v=$('#mobile-layout').value;try{localStorage.setItem('agent-console-layout',v);}catch{}if(v==='desktop')location.href='/desktop';};select('sessions');start().catch((e)=>{$('#mobile-sessions').textContent=e.message;});
 $$('[data-close]').forEach((btn)=>btn.addEventListener('click',()=>{const d=document.getElementById(btn.dataset.close);if(d)d.close();}));
 $('#mobile-estimate').onclick=estimate;
-$('#mobile-kill-confirm').onclick=async()=>{if(!pending)return;const allow=$('#mobile-kill-allow').checked;await api(`/api/sessions/${encodeURIComponent(pending.tmux_name)}/kill`,{method:'POST',body:JSON.stringify({confirmed:true,allow_unmanaged:allow,understand_unmanaged:allow})});document.getElementById('mobile-kill-dialog').close();pending=null;await renderSessions();};
-$('#mobile-attention-save').onclick=async()=>{if(!pending)return;const state=$('#mobile-attention-state').value;const note=$('#mobile-attention-note').value||null;await api(`/api/sessions/${encodeURIComponent(pending.tmux_name)}/attention`,{method:'PATCH',body:JSON.stringify({state,note})});document.getElementById('mobile-attention-dialog').close();pending=null;await renderSessions();};
+$('#mobile-kill-confirm').onclick=async()=>{
+ const s=pendingKill,button=$('#mobile-kill-confirm'),dialog=$('#mobile-kill-dialog'),request=killRequest;
+ if(!s||button.disabled||sessionMutations.has(s.id||s.tmux_name))return;
+ const current=()=>request===killRequest&&dialog.open;
+ const allow=$('#mobile-kill-allow').checked;button.disabled=true;sessionBusy(s,true);$('#mobile-kill-status').textContent='Stopping…';
+ try{
+  await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/kill`,{method:'POST',body:JSON.stringify({confirmed:true,allow_unmanaged:allow,understand_unmanaged:allow})});
+  if(current()){dialog.close();pendingKill=null;}await renderSessions();
+ }catch(e){if(current())$('#mobile-kill-status').textContent=e.message;else sessionStatus(`${s.tmux_name}: ${e.message}`);}
+ finally{sessionBusy(s,false);if(current())button.disabled=false;}
+};
+$('#mobile-attention-save').onclick=async()=>{
+ const s=pendingAttention,button=$('#mobile-attention-save'),dialog=$('#mobile-attention-dialog'),request=attentionRequest;
+ if(!s||button.disabled)return;const current=()=>request===attentionRequest&&dialog.open;
+ const state=$('#mobile-attention-state').value,note=$('#mobile-attention-note').value||null;
+ button.disabled=true;$('#mobile-attention-status').textContent='Saving…';
+ try{
+  await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/attention`,{method:'PATCH',body:JSON.stringify({state,note})});
+  if(current()){dialog.close();pendingAttention=null;}await renderSessions();
+ }catch(e){if(current())$('#mobile-attention-status').textContent=e.message;else sessionStatus(`${s.tmux_name}: ${e.message}`);}
+ finally{if(current())button.disabled=false;}
+};
 $('#mobile-plan-copy').onclick=()=>{if(currentPlanId)copyText('agentctl plan execute '+currentPlanId);};
-$('#mobile-delegate').onsubmit=async(e)=>{e.preventDefault();const f=$('#mobile-delegate');const d=Object.fromEntries(new FormData(f));await api(`/api/sessions/${encodeURIComponent(d.parent)}/delegations`,{method:'POST',body:JSON.stringify({profile:d.profile,tool:d.tool,auth_context:d.auth_context,agent_mode:d.agent_mode,task:d.task,repository:d.repository,name:d.name||null})});document.getElementById('mobile-delegate-dialog').close();await renderTree();};
+$('#mobile-delegate').onsubmit=async(e)=>{
+ e.preventDefault();if(creatingChild)return;
+ const f=$('#mobile-delegate'),dialog=$('#mobile-delegate-dialog'),button=$('button[type=submit]',f),request=delegateRequest;
+ const d=Object.fromEntries(new FormData(f)),current=()=>request===delegateRequest&&dialog.open;
+ creatingChild=true;button.disabled=true;$('#mobile-delegate-status').textContent='Creating…';
+ try{
+  await api(`/api/sessions/${encodeURIComponent(d.parent)}/delegations`,{method:'POST',body:JSON.stringify({profile:d.profile,tool:d.tool,auth_context:d.auth_context,agent_mode:d.agent_mode,task:d.task,repository:d.repository,name:d.name||null})});
+  if(current())dialog.close();await renderTree();
+ }catch(e){if(current())$('#mobile-delegate-status').textContent=e.message;else sessionStatus(`${d.parent}: ${e.message}`);}
+ finally{creatingChild=false;button.disabled=false;}
+};

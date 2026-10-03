@@ -185,8 +185,12 @@ class SessionManager:
         return self.tmux
 
     def reconcile(self) -> list[dict[str, Any]]:
-        live = self._live_sessions()
         with self.database.connect() as conn:
+            # Read tmux only after acquiring the writer reservation. Otherwise a
+            # rename can commit between the live snapshot and the database read,
+            # making the same terminal look like a new unmanaged session.
+            conn.execute("BEGIN IMMEDIATE")
+            live = self._live_sessions()
             rows = conn.execute("SELECT * FROM sessions").fetchall()
             known = {row["tmux_name"]: row for row in rows}
 
@@ -250,8 +254,9 @@ class SessionManager:
     def list_sessions(self, *, reconcile: bool = True) -> list[dict[str, Any]]:
         if reconcile:
             return self.reconcile()
-        live = self._live_sessions()
         with self.database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            live = self._live_sessions()
             rows = conn.execute("SELECT * FROM sessions ORDER BY created_at DESC").fetchall()
         names_by_id = {row["id"]: row["tmux_name"] for row in rows}
         child_counts: dict[str, int] = {}
@@ -2113,50 +2118,91 @@ class SessionManager:
         session = self.inspect(name)
         if session.get("execution_kind") == "integration-plan":
             raise PermissionError("integration planning sessions cannot be renamed")
-        # A finished harness leaves no tmux session to rename, but the rename must
-        # still update the launcher, context file and database row. Inspect first,
-        # then tolerate the harness exiting between the inspection and the call.
-        if session.get("running"):
-            try:
-                self.tmux_for_name(name).rename(name, new_name)
-            except RuntimeError as exc:
-                # Only a positive "session is gone" report is tolerated: any other
-                # failure (socket, permissions) must stay fatal so the caller does
-                # not end up with a renamed database row and a live tmux session
-                # still under the old name.
-                if not session_missing_error(exc):
-                    raise
-                log.debug("tmux session %s already exited before rename: %s", name, exc)
-        launcher_path = session["launcher_path"]
-        if launcher_path:
-            old_launcher = Path(launcher_path)
-            new_launcher = old_launcher.with_name(f"{new_name}.sh")
-            launcher_text = old_launcher.read_text(encoding="utf-8")
-            launcher_text = launcher_text.replace(
-                f"export AGENT_CONSOLE_SESSION_NAME={shlex.quote(name)}\n",
-                f"export AGENT_CONSOLE_SESSION_NAME={shlex.quote(new_name)}\n",
-                1,
-            )
-            old_context_path = str(self.settings.state_dir / "contexts" / f"{name}.md")
-            new_context_path = str(self.settings.state_dir / "contexts" / f"{new_name}.md")
-            launcher_text = launcher_text.replace(old_context_path, new_context_path)
-            old_launcher.rename(new_launcher)
-            new_launcher.write_text(launcher_text, encoding="utf-8")
-            new_launcher.chmod(0o700)
-            launcher_path = str(new_launcher)
-        old_context = self.settings.state_dir / "contexts" / f"{name}.md"
-        if old_context.is_file():
-            new_context = old_context.with_name(f"{new_name}.md")
-            context_text = old_context.read_text(encoding="utf-8")
-            context_text = context_text.replace(name, new_name)
-            old_context.rename(new_context)
-            new_context.write_text(context_text, encoding="utf-8")
-            new_context.chmod(0o600)
+        if name == new_name:
+            return session
+        staged: list[Path] = []
+        metadata: list[tuple[Path, Path, str, int]] = []
+        renamed = False
+        tmux = self.tmux_for_name(name)
         with self.database.connect() as conn:
-            conn.execute(
-                "UPDATE sessions SET tmux_name=?, launcher_path=? WHERE tmux_name=?",
-                (new_name, launcher_path, name),
-            )
+            # Reconciliation must not observe the interval between the tmux
+            # rename and its database update, even from another Console process.
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute("SELECT id FROM sessions WHERE tmux_name=?", (name,)).fetchone()
+            if current is None or current["id"] != session["id"]:
+                raise RuntimeError("session changed during rename; refresh and retry")
+            if conn.execute("SELECT 1 FROM sessions WHERE tmux_name=?", (new_name,)).fetchone():
+                raise ValueError(f"session already exists: {new_name}")
+            for folder, suffix in (("launchers", ".sh"), ("contexts", ".md")):
+                target = self.settings.state_dir / folder / f"{new_name}{suffix}"
+                if target.exists() or target.is_symlink():
+                    raise ValueError(f"session metadata already exists: {new_name}")
+            # Read and prepare everything before changing the live terminal.
+            # A missing/unwritable launcher must not split one session into two.
+            launcher_path = session["launcher_path"]
+            old_context = self.settings.state_dir / "contexts" / f"{name}.md"
+            new_context = old_context.with_name(f"{new_name}.md")
+            if launcher_path:
+                old_launcher = Path(launcher_path)
+                new_launcher = old_launcher.with_name(f"{new_name}.sh")
+                text = old_launcher.read_text(encoding="utf-8").replace(
+                    f"export AGENT_CONSOLE_SESSION_NAME={shlex.quote(name)}\n",
+                    f"export AGENT_CONSOLE_SESSION_NAME={shlex.quote(new_name)}\n", 1,
+                ).replace(str(old_context), str(new_context))
+                metadata.append((old_launcher, new_launcher, text, 0o700))
+                launcher_path = str(new_launcher)
+            if old_context.is_file():
+                metadata.append((old_context, new_context,
+                                 old_context.read_text(encoding="utf-8").replace(name, new_name), 0o600))
+            try:
+                for _, target, text, mode in metadata:
+                    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+                    staged.append(target)
+                    with os.fdopen(fd, "w", encoding="utf-8") as output:
+                        output.write(text)
+                        output.flush()
+                        os.fsync(output.fileno())
+                if session.get("running"):
+                    try:
+                        runtime_id = tmux.run("display-message", "-p", "-t", tmux.pane_target(name),
+                                              "#{session_id}", timeout=2).stdout.strip()
+                    except RuntimeError as exc:
+                        if not session_missing_error(exc):
+                            raise
+                        runtime_id = ""
+                    try:
+                        tmux.rename(name, new_name)
+                        renamed = True
+                    except RuntimeError as exc:
+                        if session_missing_error(exc):
+                            log.debug("session %s exited during rename: %s", name, exc)
+                        elif isinstance(exc.__cause__, subprocess.TimeoutExpired):
+                            # A timed-out client may have delivered its command.
+                            # Recognize that outcome only by the original runtime ID.
+                            observed = tmux.run("display-message", "-p", "-t", tmux.pane_target(new_name),
+                                                "#{session_id}", timeout=2).stdout.strip()
+                            if not re.fullmatch(r"\$[0-9]+", runtime_id) or observed != runtime_id:
+                                raise
+                            renamed = True
+                        else:
+                            raise
+                conn.execute("UPDATE sessions SET tmux_name=?, launcher_path=? WHERE id=?",
+                             (new_name, launcher_path, session["id"]))
+                conn.commit()
+            except Exception:
+                if renamed:
+                    # Original metadata is still intact if the database update fails.
+                    tmux.rename(new_name, name)
+                for target in staged:
+                    target.unlink(missing_ok=True)
+                raise
+        # Commit succeeded. Stale copies can be retained safely if cleanup fails;
+        # never turn a completed rename into an apparent request failure.
+        for original, _, _, _ in metadata:
+            try:
+                original.unlink()
+            except OSError:
+                log.warning("session=%s old rename metadata could not be removed", new_name)
         self.database.audit("session.renamed", name, "success", details={"new_name": new_name})
         return self.inspect(new_name)
 

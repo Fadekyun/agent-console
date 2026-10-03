@@ -153,3 +153,13 @@ test('row keyboard navigation follows displayed creation order instead of API or
   const first=page.locator('#active-sessions .session-row').first();await first.focus();await first.press('ArrowDown');
   await expect(page.locator('#inspector-name')).toHaveText('audit-0');
 });
+
+
+test('inspector follows renamed session ID and never transfers its draft to a reused name',async({page})=>{
+  await page.clock.install();const {sessions,requests}=await fixture(page);await page.goto('/desktop');
+  await page.locator('#active-sessions .session-row').click();const note=page.locator('#attention-form [name=note]');await note.fill('Private original draft');
+  sessions[0].tmux_name='renamed-original';sessions.push({...sessions[0],id:'new-id',tmux_name:'audit-0',attention_note:''});
+  const reads=requests.filter(r=>r.path==='/api/sessions').length;await page.clock.fastForward(10100);await expect.poll(()=>requests.filter(r=>r.path==='/api/sessions').length).toBeGreaterThan(reads);
+  await expect(page.locator('#inspector-name')).toHaveText('renamed-original');await expect(note).toHaveValue('Private original draft');
+  await page.locator('#inspector-close').click();await page.locator('#active-sessions .session-row[data-session="audit-0"]').click();await expect(note).toHaveValue('');
+});

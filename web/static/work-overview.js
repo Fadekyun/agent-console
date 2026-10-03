@@ -135,7 +135,8 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
     function appendCard(entry,target){
       const {node,group,members,eligible}=entry;
       const card=el('article',null,'card');card.dataset.node=node.id;
-      card.append(el('h3',node.title.length>100?node.title.slice(0,97)+'…':node.title),statuses(node));
+      const title=el('h3',node.title.length>100?node.title.slice(0,97)+'…':node.title);title.title=node.title;
+      card.append(title,statuses(node));
       if(node.hidden)card.append(el('p','Hidden session · shown as context for its children','small muted'));
       if(node.task)card.append(el('p',node.task.slice(0,500),'brief muted'));
       card.append(el('p',`${node.project_name?node.project_name+' · ':''}${node.repository||'No repository'}`,'overview-meta'),el('p',`${node.profile||'Session'} · ${node.tool||'Terminal'}${node.tool&&node.tool!=='shell'?' / '+(node.model||'Default model (not recorded)'):''} · ${node.last_activity?new Date(node.last_activity).toLocaleString():'No activity recorded'}`,'overview-meta'));
@@ -196,7 +197,7 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
     function visit(current,depth){
       if(!current||!shown.has(current.id)||visited.has(current.id))return;visited.add(current.id);
       const item=el('div',null,`node${current.id===(selectedId||node.id)?' active':''}`);item.style.setProperty('--depth',depth);item.dataset.node=current.id;
-      const a=el('a',current.title.length>80?current.title.slice(0,77)+'…':current.title);a.href=link(current);if(current.id===(selectedId||node.id))a.setAttribute('aria-current','page');
+      const a=el('a',current.title);a.title=current.title;a.setAttribute('aria-label',current.title);a.href=link(current);if(current.id===(selectedId||node.id))a.setAttribute('aria-current','page');
       const children=(childrenByParent.get(current.id)||[]).filter(n=>shown.has(n.id)),heading=el('div',null,'node-heading');
       heading.append(a);if(current.hidden)heading.append(el('small','Hidden','muted'));
       if(children.length){

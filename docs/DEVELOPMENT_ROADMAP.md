@@ -1,3 +1,11 @@
+## Session identity and responsive audit — 2026-10-03 (#141)
+
+- Fixed: concurrent rename/reconciliation duplicate identities, occupied-name metadata overwrite, missing-file rename failures, and false stopped status after tmux observation failures. Staged metadata and bounded terminal calls reduce partial rename failures; websocket attachment and scroll stay bound to the intended identity.
+- Fixed: renamed selection/dock continuity, private draft ownership, browser history after name reuse, late creation/recipe/continuation responses and cross-session history contamination. Mobile lifecycle errors and overlapping refreshes now preserve usable state.
+- Fixed: long-name mobile card overflow, deep-tree title height, cramped search, link/form spacing, overlapping mobile navigation, tablet header overlap, multiline composer sizing and delayed dock focus theft.
+- Verification includes concurrency and failure injection, strict identity guards and geometry/hit testing across five viewport widths. Filesystem/process crashes during cross-resource operations and physical phone keyboard behavior are not claimed as exhaustively tested.
+- Remaining design work: context-specific cancelled New session drafts, a primary Workbench project picker and selected-child wait controls.
+
 ## Deep interaction audit — 2026-10-03 (#141)
 
 - Addressed: session More menus clipped by table scrolling, keyboard propagation and refresh replacement; terminal menu viewport limits, touch targets and delayed connection focus; Open work pointer continuity, long Workbench title overflow and direct Settings readiness; confirmation for write-only environment deletion.
@@ -9,7 +17,7 @@
 - Implemented: environment drafts survive failed writes and clear after successful writes, including refresh failures; corrected CI whitespace findings.
 - Implemented: touch-accessible Workbench Refresh restores bootstrap retry on narrow screens.
 - Implemented: isolated test harnesses and npm assets in Python CI; updated terminal dock regression for accessible sibling controls. Narrow full-control terminal actions now open the standalone terminal.
-- Confirmed follow-up opportunities: project selection for fresh roots in Workbench; confirmation before deleting write-only environment values; selected-child waits in the UI.
+- Confirmed follow-up opportunities: project selection for fresh roots in Workbench; selected-child waits in the UI.
 - Optional future additions: installed-wrapper drift diagnostics and opt-in attention notifications.
 
 ## Verified follow-up fixes — 2026-10-03 (#141)

@@ -380,6 +380,139 @@ class SessionIntegrationTests(unittest.TestCase):
         self.assertTrue(tmux.exists("stale-recovery"))
         tmux.kill("stale-recovery")
 
+    def test_rename_rejects_existing_stopped_name_without_touching_files(self):
+        first = self.manager.create(tool="shell", profile="general", name="rename-source", repository=str(self.workspace))
+        target = self.manager.create(tool="shell", profile="general", name="rename-target", repository=str(self.workspace))
+        self.manager.kill("rename-target")
+        paths = [self.manager.settings.state_dir / folder / filename
+                 for folder, filename in [("launchers", "rename-source.sh"), ("launchers", "rename-target.sh"),
+                                          ("contexts", "rename-source.md"), ("contexts", "rename-target.md")]]
+        before = {path: path.read_bytes() for path in paths}
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            self.manager.rename("rename-source", "rename-target")
+        self.assertEqual({path: path.read_bytes() for path in paths}, before)
+        self.assertTrue(self.manager.inspect("rename-source")["running"])
+        self.assertEqual(self.manager.inspect("rename-source")["id"], first["id"])
+        self.assertEqual(self.manager.inspect("rename-target")["id"], target["id"])
+
+    def test_reconcile_during_rename_keeps_one_managed_session_identity(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        source = self.manager.create(tool="shell", profile="general", name="rename-race", repository=str(self.workspace))
+        renamed, release, reconciled = Event(), Event(), Event()
+        original = Tmux.rename
+        def paused_rename(tmux, name, new_name):
+            original(tmux, name, new_name)
+            renamed.set()
+            if not release.wait(5):
+                raise RuntimeError("test rename release timed out")
+        def reconcile():
+            try:
+                return self.manager.reconcile()
+            finally:
+                reconciled.set()
+        with patch.object(Tmux, "rename", paused_rename), ThreadPoolExecutor(max_workers=2) as pool:
+            rename = pool.submit(self.manager.rename, "rename-race", "rename-race-new")
+            try:
+                self.assertTrue(renamed.wait(5))
+                read = pool.submit(reconcile)
+                self.assertFalse(reconciled.wait(.25), "reconciliation observed an unfinished rename")
+            finally:
+                release.set()
+            self.assertEqual(rename.result(timeout=5)["id"], source["id"])
+            read.result(timeout=5)
+        records = self.manager.list_sessions()
+        self.assertEqual([(r["id"], r["tmux_name"], r["managed"]) for r in records],
+                         [(source["id"], "rename-race-new", True)])
+
+    def test_session_list_snapshot_cannot_mix_names_across_rename(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        source = self.manager.create(tool="shell", profile="general", name="snapshot-old", repository=str(self.workspace))
+        observed, release = Event(), Event()
+        original = self.manager._live_sessions
+        def paused_snapshot():
+            snapshot = original()
+            if not observed.is_set():
+                observed.set()
+                if not release.wait(5):
+                    raise RuntimeError("test snapshot release timed out")
+            return snapshot
+        with patch.object(self.manager, "_live_sessions", paused_snapshot), ThreadPoolExecutor(max_workers=2) as pool:
+            read = pool.submit(self.manager.list_sessions, reconcile=False)
+            try:
+                self.assertTrue(observed.wait(5))
+                rename = pool.submit(self.manager.rename, "snapshot-old", "snapshot-new")
+                time.sleep(.1)
+                self.assertFalse(rename.done())
+            finally:
+                release.set()
+            records = read.result(timeout=5)
+            self.assertEqual([(r["id"], r["tmux_name"], r["running"]) for r in records],
+                             [(source["id"], "snapshot-old", True)])
+            self.assertEqual(rename.result(timeout=5)["id"], source["id"])
+
+    def test_tmux_observation_failure_preserves_status_and_releases_writer(self):
+        self.manager.create(tool="shell", profile="general", name="observation-error", repository=str(self.workspace))
+        with self.manager.database.connect() as conn:
+            before = dict(conn.execute("SELECT * FROM sessions WHERE tmux_name='observation-error'").fetchone())
+        with patch.object(self.manager, "_live_sessions", side_effect=RuntimeError("tmux list-sessions timed out")):
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                self.manager.reconcile()
+        with self.manager.database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            after = dict(conn.execute("SELECT * FROM sessions WHERE tmux_name='observation-error'").fetchone())
+        self.assertEqual(after, before)
+        self.assertTrue(self.manager.inspect("observation-error")["running"])
+
+    def test_rename_metadata_read_failure_does_not_duplicate_session(self):
+        session = self.manager.create(tool="shell", profile="general", name="metadata-missing", repository=str(self.workspace))
+        Path(session["launcher_path"]).unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.manager.rename("metadata-missing", "metadata-new")
+        self.assertEqual([(r["id"], r["tmux_name"]) for r in self.manager.list_sessions()],
+                         [(session["id"], "metadata-missing")])
+
+    def test_rename_timeout_after_applied_command_preserves_original_identity(self):
+        session = self.manager.create(tool="shell", profile="general", name="timeout-old", repository=str(self.workspace))
+        original = Tmux.rename
+        def applied_then_timeout(tmux, name, new_name):
+            original(tmux, name, new_name)
+            raise RuntimeError("tmux rename-session timed out") from subprocess.TimeoutExpired("tmux", 2)
+        with patch.object(Tmux, "rename", applied_then_timeout):
+            renamed = self.manager.rename("timeout-old", "timeout-new")
+        self.assertEqual(renamed["id"], session["id"])
+        self.assertEqual(len(self.manager.list_sessions()), 1)
+        self.assertTrue(renamed["running"])
+
+    def test_rename_database_failure_restores_live_name_and_original_metadata(self):
+        from contextlib import contextmanager
+        import sqlite3
+        session = self.manager.create(tool="shell", profile="general", name="rollback-old", repository=str(self.workspace))
+        original_connect = self.manager.database.connect
+        class FailingRenameConnection:
+            def __init__(self, connection):
+                self.connection = connection
+            def __getattr__(self, key):
+                return getattr(self.connection, key)
+            def execute(self, sql, *args):
+                if sql.startswith("UPDATE sessions SET tmux_name="):
+                    raise sqlite3.OperationalError("injected rename update failure")
+                return self.connection.execute(sql, *args)
+        @contextmanager
+        def fail_update():
+            with original_connect() as conn:
+                yield FailingRenameConnection(conn)
+        before = Path(session["launcher_path"]).read_bytes()
+        with patch.object(self.manager.database, "connect", fail_update):
+            with self.assertRaisesRegex(sqlite3.OperationalError, "injected rename"):
+                self.manager.rename("rollback-old", "rollback-new")
+        self.assertEqual([(r["id"], r["tmux_name"], r["running"]) for r in self.manager.list_sessions()],
+                         [(session["id"], "rollback-old", True)])
+        self.assertEqual(Path(session["launcher_path"]).read_bytes(), before)
+        self.assertFalse((self.manager.settings.state_dir / "launchers" / "rollback-new.sh").exists())
+        self.assertFalse((self.manager.settings.state_dir / "contexts" / "rollback-new.md").exists())
+
     def test_rename_updates_context_and_launcher(self) -> None:
         session = self.manager.create(
             tool="shell",
