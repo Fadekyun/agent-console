@@ -1659,6 +1659,7 @@ class SessionManager:
                 integration_count = conn.execute(
                     "SELECT COUNT(*) FROM integration_requests WHERE admission_held=1"
                 ).fetchone()[0]
+            parent_ancestor_ids = set()
             if parent_session_id:
                 with self.database.connect() as conn:
                     parent_exists = conn.execute(
@@ -1677,12 +1678,11 @@ class SessionManager:
                     validate_child(dict(parent_exists), profile=profile, repository=str(cwd),
                                    project_id=project_id, agent_mode=agent_mode, worktree=worktree)
                 ancestor = dict(parent_exists)
-                seen = set()
                 with self.database.connect() as conn:
                     while ancestor:
-                        if ancestor["id"] in seen or len(seen) >= MAX_DELEGATION_DEPTH:
+                        if ancestor["id"] in parent_ancestor_ids or len(parent_ancestor_ids) >= MAX_DELEGATION_DEPTH:
                             raise ValueError("descendant depth limit reached")
-                        seen.add(ancestor["id"])
+                        parent_ancestor_ids.add(ancestor["id"])
                         row = conn.execute("SELECT * FROM sessions WHERE id=?",
                                            (ancestor.get("parent_session_id"),)).fetchone()
                         ancestor = dict(row) if row else None
@@ -1705,6 +1705,10 @@ class SessionManager:
                         f"session name is reserved by an integration request: {name}"
                     )
                 session_id = locked_existing["id"]
+            # Name reuse preserves a stopped session's durable identity. Check
+            # the final identity under admission lock before preparing assets.
+            if session_id in parent_ancestor_ids:
+                raise ValueError("a session cannot become a child of itself or its descendants")
             from .workbench_launch import LaunchCatalog
             launch_catalog = LaunchCatalog(self)
             launch_view = launch_catalog.describe(prepared, task=task,
@@ -1863,6 +1867,10 @@ class SessionManager:
             log.info("session=%s id=%s tool=%s profile=%s mode=%s provider=%s worktree=%s surface=%s",
                      name, session_id, tool, profile, agent_mode, provider, worktree, creator_surface)
         except Exception:
+            # Admission rejection has not touched launch assets. In particular,
+            # do not remove a stopped session's preserved overlays on name reuse.
+            if not context_created and not worktree_created:
+                raise
             if environment_backup is not None:
                 write_private(environment_path, environment_backup)
             else:
