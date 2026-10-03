@@ -671,7 +671,7 @@ test('short desktop session keeps terminal and details within the viewport', asy
   expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(1024);
   const stop=await page.locator('#stop-terminal-session').boundingBox();
   expect(stop.x+stop.width).toBeLessThanOrEqual(1024);
-  await page.screenshot({path:'review-evidence/short-window-after.png'});
+  await page.screenshot({path:info.outputPath('short-window-after.png')});
   expect(await page.evaluate(()=>document.documentElement.scrollHeight)).toBeLessThanOrEqual(600);
   await page.locator('#session-detail > summary').click();
   await page.locator('#show-output').click();
