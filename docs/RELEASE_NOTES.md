@@ -1,3 +1,10 @@
+## 0.28.1 — unreleased, 2026-10-03 (#141)
+
+- Impact: failed environment saves and suppression requests retain the in-memory draft for retry. Successful mutations clear the draft even if the following refresh fails. Corrected trailing whitespace found by the first public CI run.
+- Configuration/migration: none. Refresh browser assets; drafts remain in page memory only and are never persisted to browser storage.
+- Verification: 21 environment browser checks passed across desktop/360px/390px, covering retry, suppression, refresh failure and scope changes; 3 version checks passed. Public CI validates the full candidate.
+- Rollback: select the retained v0.28.0 release through its schema guard and restart web only. Preserve databases and running sessions; the prior version loses drafts when environment writes fail.
+
 ## 0.28.0 — unreleased, 2026-10-03 (#141)
 
 - Impact: managed workflow and peer-read CLI routing rejects incomplete contexts before local workflow writers/session readers. Managed Pi launches retain Console's resolved overrides, empty/suppressed variables and native disabled MCP entries. Repeatable `wait-for-children --child ID_OR_NAME` waits for a selected direct-child batch instead of historical work; omitted selectors keep existing behavior.

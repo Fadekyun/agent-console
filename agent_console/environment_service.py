@@ -39,5 +39,3 @@ def describe(manager, project_id):
                          "revision": revision, "refresh_required": revision != manager.environment.revision(row["project_id"])})
     result["sessions"] = sessions
     return result
-
-

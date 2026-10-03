@@ -1,10 +1,16 @@
+## Publication acceptance fixes — 2026-10-03 (#141)
+
+- Implemented: environment drafts survive failed writes and clear after successful writes, including refresh failures; corrected CI whitespace findings.
+- Confirmed follow-up opportunities: project selection for fresh roots in Workbench; confirmation before deleting write-only environment values; selected-child waits in the UI.
+- Optional future additions: installed-wrapper drift diagnostics and opt-in attention notifications.
+
 ## Verified follow-up fixes — 2026-10-03 (#141)
 
 - Implemented: consistent detection of incomplete managed CLI contexts before local workflow writers or session readers; actionable recovery without removing session identity markers.
 - Implemented: managed Pi wrapper preserves resolved project environment and native MCP config; standalone compatibility remains separate. Rollout must update the installed wrapper as well as the selected Console release.
 - Implemented: repeatable `session wait-for-children --child ID_OR_NAME` resolves a direct-child batch to durable IDs, preserving historical outcomes and unscoped behavior.
 - Verification: independent verifier confirmation, synthetic actual-wrapper execution, scoped-wait regressions, integrated CLI/session checks and live rollout evidence in FOLLOWUP_VERIFICATION_20261003.md.
-- Remaining external verification: physical iOS/Android keyboards/selection/orientation; remote CI requires published source.
+- Remaining external verification: physical iOS/Android keyboards/selection/orientation; public review PR now runs remote CI.
 
 ## Exact session targeting — 2026-10-03 (#141)
 

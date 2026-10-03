@@ -73,12 +73,16 @@ async function refresh() {
     $('environment-entries').replaceChildren(retry);
   } finally { if (current(scope, token)) controls(); }
 }
-async function change(name, payload, scope = renderedScope, token = generation) {
+async function change(name, payload, scope = renderedScope, token = generation, clearDraft = false) {
   if (!editable(scope, token)) return;
   saving = true; controls();
   try {
     await api('/api/environment/' + encodeURIComponent(name) + query(scope), {method: payload === null ? 'DELETE' : 'PUT', ...(payload === null ? {} : {body: JSON.stringify(payload)})});
     if (!current(scope, token)) return;
+    if (clearDraft) {
+      $('environment-value').value = '';
+      $('environment-multiline-value').value = '';
+    }
     $('environment-message').textContent = 'Environment saved. New sessions and explicit restarts use the latest values.';
     await refresh();
   } catch (error) { if (current(scope, token)) $('environment-message').textContent = error.message; }
@@ -88,13 +92,11 @@ $('environment-form').onsubmit = async event => {
   event.preventDefault();
   if (!editable()) return;
   const value = valueInput().value;
-  valueInput().value = '';
-  await change($('environment-name').value, {value, state: 'enabled'});
+  await change($('environment-name').value, {value, state: 'enabled'}, renderedScope, generation, true);
 };
 $('environment-suppress').onclick = () => {
   if (!editable() || !$('environment-name').reportValidity()) return;
-  valueInput().value = '';
-  change($('environment-name').value, {state: 'suppressed'});
+  change($('environment-name').value, {state: 'suppressed'}, renderedScope, generation, true);
 };
 $('environment-scope').onchange = () => { $('environment-form').reset(); multiline(); $('environment-message').textContent = ''; refresh(); };
 controls();

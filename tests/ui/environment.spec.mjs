@@ -84,3 +84,83 @@ test('environment ignores responses from old scopes and late saves',async({page}
   await expect(page.locator('#environment-message')).not.toContainText('Stale A');
   await expect(page.locator('#environment-entries')).not.toContainText('A_KEY');
 });
+
+test('failed environment save retains its draft for a safe retry and clears after success',async({page})=>{
+  await scopes(page);const writes=[];
+  await page.route('**/api/environment**',async route=>{
+    if(route.request().method()==='GET')return route.fulfill({json:environmentData('APP_KEY')});
+    writes.push(route.request().postDataJSON());
+    return writes.length===1
+      ?route.fulfill({status:503,json:{detail:'Temporary save failure'}})
+      :route.fulfill({json:{ok:true}});
+  });
+  await page.goto('/environment?project_id=a');
+  await page.locator('#environment-name').fill('APP_KEY');
+  await page.locator('#environment-value').fill('synthetic-retry-value');
+  await page.getByRole('button',{name:'Save variable'}).click();
+  await expect(page.locator('#environment-message')).toHaveText('Temporary save failure');
+  await expect(page.locator('#environment-value')).toHaveValue('synthetic-retry-value');
+  await expect(page.getByRole('button',{name:'Save variable'})).toBeEnabled();
+  await page.getByRole('button',{name:'Save variable'}).click();
+  await expect(page.locator('#environment-message')).toContainText('Environment saved');
+  await expect(page.locator('#environment-value')).toHaveValue('');
+  expect(writes).toEqual(Array(2).fill({value:'synthetic-retry-value',state:'enabled'}));
+});
+
+test('failed suppression preserves a multiline draft and successful suppression clears it',async({page})=>{
+  await scopes(page);const writes=[];
+  await page.route('**/api/environment**',async route=>{
+    if(route.request().method()==='GET')return route.fulfill({json:environmentData('APP_KEY')});
+    writes.push(route.request().postDataJSON());
+    return writes.length===1
+      ?route.fulfill({status:503,json:{detail:'Temporary suppression failure'}})
+      :route.fulfill({json:{ok:true}});
+  });
+  await page.goto('/environment?project_id=a');
+  await page.locator('#environment-name').fill('APP_KEY');
+  await page.locator('#environment-multiline').check();
+  await page.locator('#environment-multiline-value').fill('synthetic line one\nsynthetic line two');
+  await page.getByRole('button',{name:'Suppress inherited variable'}).click();
+  await expect(page.locator('#environment-message')).toHaveText('Temporary suppression failure');
+  await expect(page.locator('#environment-multiline-value')).toHaveValue('synthetic line one\nsynthetic line two');
+  await page.getByRole('button',{name:'Suppress inherited variable'}).click();
+  await expect(page.locator('#environment-message')).toContainText('Environment saved');
+  await expect(page.locator('#environment-multiline-value')).toHaveValue('');
+  expect(writes).toEqual(Array(2).fill({state:'suppressed'}));
+});
+
+test('successful environment write clears the secret even if refreshing metadata fails',async({page})=>{
+  await scopes(page);let saved=false;
+  await page.route('**/api/environment**',async route=>{
+    if(route.request().method()!=='GET'){saved=true;return route.fulfill({json:{ok:true}});}
+    return saved?route.fulfill({status:503,json:{detail:'Metadata refresh failed'}}):route.fulfill({json:environmentData('APP_KEY')});
+  });
+  await page.goto('/environment');
+  await page.locator('#environment-name').fill('APP_KEY');
+  await page.locator('#environment-value').fill('synthetic-success-value');
+  await page.getByRole('button',{name:'Save variable'}).click();
+  await expect(page.locator('#environment-message')).toHaveText('Metadata refresh failed');
+  await expect(page.locator('#environment-value')).toHaveValue('');
+  await expect(page.getByRole('button',{name:'Retry loading variables'})).toBeVisible();
+});
+
+test('late successful save cannot clear a draft belonging to a new scope',async({page})=>{
+  await scopes(page);let releaseSave;
+  await page.route('**/api/environment**',async route=>{
+    if(route.request().method()==='GET')return route.fulfill({json:environmentData('APP_KEY')});
+    await new Promise(resolve=>{releaseSave=resolve;});return route.fulfill({json:{ok:true}});
+  });
+  await page.goto('/environment?project_id=a');
+  await page.locator('#environment-name').fill('APP_KEY');
+  await page.locator('#environment-value').fill('synthetic-old-scope-value');
+  await page.getByRole('button',{name:'Save variable'}).click();
+  await expect.poll(()=>typeof releaseSave).toBe('function');
+  // The selector is disabled for users, but external scope changes must still be guarded.
+  await page.locator('#environment-scope').evaluate(node=>{node.value='b';node.dispatchEvent(new Event('change'));});
+  await expect(page.locator('#environment-entries')).toContainText('APP_KEY');
+  await page.locator('#environment-value').evaluate(node=>{node.value='synthetic-new-scope-value';});
+  releaseSave();
+  await expect(page.locator('#environment-scope')).toBeEnabled();
+  await expect(page.locator('#environment-value')).toHaveValue('synthetic-new-scope-value');
+  await expect(page.locator('#environment-message')).not.toContainText('Environment saved');
+});

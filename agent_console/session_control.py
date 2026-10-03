@@ -176,4 +176,3 @@ class SessionControl:
         if command == 'kill':
             return self.manager.kill(name, allow_unmanaged=False)
         raise ValueError('unsupported session control operation')
-
