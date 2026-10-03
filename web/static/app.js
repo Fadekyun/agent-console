@@ -30,6 +30,12 @@ const groupForm = $('#group-form');
 const groupDetailDialog = $('#group-detail-dialog');
 const terminalTabs = new Map();
 let activeTerminal = null;
+let profileEditorRequest = 0;
+let planRequest = 0;
+let refreshRequest = 0;
+let orchestrationRequest = 0;
+const attentionPending = new Set();
+const attentionDrafts = new Map();
 
 const attentionLabels = {
   normal: 'Normal',
@@ -134,7 +140,7 @@ function closeTerminal(name) {
   const item = terminalTabs.get(name);
   if (!item) return;
   item.frame.src = 'about:blank';
-  item.frame.remove(); item.tab.remove(); terminalTabs.delete(name);
+  item.frame.remove(); item.tab.parentElement.remove(); terminalTabs.delete(name);
   if (activeTerminal === name) {
     const next = [...terminalTabs.keys()].at(-1) || null;
     activeTerminal = null;
@@ -152,18 +158,20 @@ function openTerminal(name) {
   }
   const tab = document.createElement('button');
   tab.type = 'button'; tab.className = 'terminal-tab'; tab.setAttribute('role', 'tab');
-  tab.innerHTML = `<span>${escapeHtml(name)}</span><span class="terminal-tab-close" role="button" aria-label="Close ${escapeHtml(name)}">×</span>`;
-  tab.onclick = (event) => {
-    if (event.target.closest('.terminal-tab-close')) { closeTerminal(name); return; }
-    activateTerminal(name);
-  };
+  tab.textContent = name;
+  tab.onclick = () => activateTerminal(name);
+  const wrapper = document.createElement('div'); wrapper.className = 'terminal-tab-item';
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'terminal-tab-close';
+  close.setAttribute('aria-label', `Close ${name}`); close.textContent = '×';
+  close.onclick = () => { closeTerminal(name); (terminalTabs.get(activeTerminal)?.tab || $('#refresh')).focus(); };
+  wrapper.append(tab, close);
   const frame = document.createElement('iframe');
   frame.className = 'terminal-embed'; frame.title = `Terminal ${name}`;
   frame.src = `/terminal?session=${encodeURIComponent(name)}&embed=1`; frame.hidden = true;
   frame.addEventListener('load', () => {
     requestTerminalFocus(name);
   });
-  $('#terminal-tabs').append(tab); $('#terminal-frames').append(frame);
+  $('#terminal-tabs').append(wrapper); $('#terminal-frames').append(frame);
   terminalTabs.set(name, { tab, frame }); activateTerminal(name);
 }
 
@@ -229,9 +237,11 @@ function renderInspector(session) {
     </dl>
     <div class="brief-block"><h3>Stored brief</h3><p>${escapeHtml(session.initial_task || 'No brief recorded.')}</p></div>
     <div id="inspector-wait-status"></div>`;
-  attentionForm.elements.state.value = session.attention_state || 'normal';
-  attentionForm.elements.note.value = session.attention_note || '';
+  const draft = attentionDrafts.get(session.tmux_name);
+  attentionForm.elements.state.value = draft?.state ?? session.attention_state ?? 'normal';
+  attentionForm.elements.note.value = draft?.note ?? session.attention_note ?? '';
   attentionForm.dataset.session = session.tmux_name; $('#attention-status').textContent = '';
+  $('button[type="submit"]', attentionForm).disabled = attentionPending.has(session.tmux_name);
   const actions = $('#inspector-actions'); actions.replaceChildren();
   const addButton = (label, handler, className = '') => {
     const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.className = className; button.onclick = handler; actions.append(button); return button;
@@ -404,10 +414,12 @@ function renderTreeNode(session) {
 }
 
 async function renderOrchestration() {
+  const request = ++orchestrationRequest;
   const [groups, tree] = await Promise.all([
     api('/api/session-groups').catch(() => []),
     Promise.resolve(state.tree),
   ]);
+  if (request !== orchestrationRequest) return;
   const groupEl = document.createElement('div'); groupEl.className = 'panel';
   groupEl.innerHTML = '<div class="panel-heading"><h3>Session groups</h3><button id="new-group-btn" class="compact">New group</button></div>';
   const groupList = document.createElement('div'); groupList.className = 'tree-list';
@@ -417,9 +429,8 @@ async function renderOrchestration() {
     groupList.innerHTML = '<p class="empty">No session groups yet. Create one to coordinate multiple sessions.</p>';
   }
   groupEl.append(groupList);
-  $('#new-group-btn')?.addEventListener('click', openNewGroup);
+  $('#new-group-btn', groupEl).addEventListener('click', openNewGroup);
   treeEl.replaceChildren(groupEl, ...state.tree.roots.map(renderTreeNode));
-  if (!state.tree.roots.length && !groups.length) treeEl.innerHTML = '<p class="empty">No sessions discovered.</p>';
   const activePlans = state.plans.filter(p => p.status === 'planned' || p.status === 'executing');
   plansEl.replaceChildren(...activePlans.map((plan) => {
     const row = document.createElement('article'); row.className = 'plan-row';
@@ -579,14 +590,21 @@ async function openGroupTerminals(groupId, groupName) {
 }
 
 async function openPlan(planId) {
-  planForm.reset(); $('#plan-title').textContent = 'Loading plan…'; $('#plan-meta').textContent = ''; $('#plan-content').textContent = ''; $('#plan-status').textContent = '';
+  const request = ++planRequest;
+  const current = () => request === planRequest && planDialog.open;
+  const submit = $('button[type="submit"]', planForm);
+  planForm.reset(); submit.disabled = true;
+  $('#plan-title').textContent = 'Loading plan…'; $('#plan-meta').textContent = '';
+  $('#plan-content').textContent = ''; $('#plan-status').textContent = ''; $('#revision-warning').hidden = true;
   planDialog.showModal();
   try {
     const plan = await api(`/api/plans/${encodeURIComponent(planId)}`);
+    if (!current()) return;
     planForm.elements.plan_id.value = plan.id; $('#plan-title').textContent = plan.title || plan.id;
     $('#plan-meta').textContent = `${plan.status} · ${plan.repository || 'No repository'} · revision ${plan.revision_state}`;
     $('#plan-content').textContent = plan.plan; $('#revision-warning').hidden = plan.revision_state !== 'changed';
-  } catch (error) { $('#plan-status').textContent = error.message || String(error); }
+    submit.disabled = false;
+  } catch (error) { if (current()) $('#plan-status').textContent = error.message || String(error); }
 }
 
 async function renderProfiles() {
@@ -611,37 +629,54 @@ function profileCard(entry) {
 }
 
 async function openProfileEditor(name) {
+  const request = ++profileEditorRequest;
+  const dialog = $('#profile-editor-dialog');
+  const current = () => request === profileEditorRequest && dialog.open;
   const form = $('#profile-editor-form'); form.reset();
+  const submit = $('button[type="submit"]', form);
+  submit.disabled = true; form.elements.content.disabled = true;
   form.elements.profile_name.value = name;
   $('#profile-editor-title').textContent = `Edit: ${name}`;
+  $('#profile-editor-meta').textContent = '';
   $('#profile-editor-status').textContent = 'Loading…';
-  $('#profile-editor-dialog').showModal();
+  dialog.showModal();
   try {
     const data = await api(`/api/profiles/${encodeURIComponent(name)}`);
+    if (!current()) return;
     form.elements.content.value = data.content || '';
     const metaHtml = [
-      `<span>${data.read_write_capability}</span>`,
-      `<span>worktree: ${data.worktree_requirement}</span>`,
-      `<span>status: ${data.status}</span>`,
+      `<span>${escapeHtml(data.read_write_capability)}</span>`,
+      `<span>worktree: ${escapeHtml(data.worktree_requirement)}</span>`,
+      `<span>status: ${escapeHtml(data.status)}</span>`,
       data.requires_human_approval ? '<span>requires approval</span>' : '',
-      data.replacement_profile ? `<span>replaces: ${data.replacement_profile}</span>` : '',
+      data.replacement_profile ? `<span>replaces: ${escapeHtml(data.replacement_profile)}</span>` : '',
     ].filter(Boolean).join(' ');
     $('#profile-editor-meta').innerHTML = metaHtml;
     $('#profile-editor-status').textContent = '';
-  } catch (e) { $('#profile-editor-status').textContent = e.message; }
+    form.elements.content.disabled = false; submit.disabled = false;
+  } catch (e) { if (current()) $('#profile-editor-status').textContent = e.message; }
 }
 
 $('#profile-editor-form').onsubmit = async (event) => {
-  event.preventDefault(); const submit = $('button[type="submit"]', event.target); submit.disabled = true;
+  event.preventDefault();
+  const form = event.target, dialog = $('#profile-editor-dialog');
+  const submit = $('button[type="submit"]', form);
+  if (submit.disabled) return;
+  const request = profileEditorRequest, name = form.elements.profile_name.value;
+  const current = () => request === profileEditorRequest && dialog.open;
+  submit.disabled = true;
   const status = $('#profile-editor-status'); status.textContent = 'Saving…';
   try {
-    await api(`/api/profiles/${encodeURIComponent(event.target.elements.profile_name.value)}`, {
-      method: 'PUT', body: JSON.stringify({ content: event.target.elements.content.value }),
+    await api(`/api/profiles/${encodeURIComponent(name)}`, {
+      method: 'PUT', body: JSON.stringify({ content: form.elements.content.value }),
     });
-    status.textContent = 'Saved.';
-    setTimeout(() => { $('#profile-editor-dialog').close(); }, 800);
-    renderProfiles();
-  } catch (e) { status.textContent = e.message; } finally { submit.disabled = false; }
+    if (current()) {
+      status.textContent = 'Saved.';
+      setTimeout(() => { if (current()) dialog.close(); }, 800);
+    }
+    renderProfiles().catch(error => showNotice(error.message, 'error'));
+  } catch (e) { if (current()) status.textContent = e.message; }
+  finally { if (current()) submit.disabled = false; }
 };
 
 $('#refresh-profiles').onclick = renderProfiles;
@@ -1029,13 +1064,16 @@ async function estimateModelUsage() {
 }
 
 async function refresh() {
+  const request = ++refreshRequest;
   const [sessions, plans, tree] = await Promise.all([api('/api/sessions?state=all'), api('/api/plans'), api('/api/delegations')]);
+  if (request !== refreshRequest) return;
   state.sessions = sessions; state.plans = plans; state.tree = tree;
   for (const name of [...terminalTabs.keys()]) {
     const session = sessions.find((item) => item.tmux_name === name);
     if (!session?.running) closeTerminal(name);
   }
-  renderSessions(); renderOrchestration();
+  renderSessions(); await renderOrchestration();
+  if (request !== refreshRequest) return;
   if (state.selectedSession) {
     const selected = sessions.find((item) => item.tmux_name === state.selectedSession);
     if (selected) renderInspector(selected); else closeInspector();
@@ -1044,8 +1082,8 @@ async function refresh() {
 
 async function start() {
   initTheme([$('#theme-select'), $('#mobile-theme-select')]);
-  const layout = localStorage.getItem('agent-console-layout') || 'auto'; $('#layout-select').value = layout;
-  $('#layout-select').onchange = () => { const value=$('#layout-select').value; localStorage.setItem('agent-console-layout', value); if(value==='mobile') location.href='/mobile'; };
+  let layout = 'auto'; try { layout = localStorage.getItem('agent-console-layout') || 'auto'; } catch {} $('#layout-select').value = layout;
+  $('#layout-select').onchange = () => { const value=$('#layout-select').value; try { localStorage.setItem('agent-console-layout', value); } catch {} if(value==='mobile') location.href='/mobile'; };
   state.identity = await api('/api/me'); $('#identity').textContent = `${state.identity.login} · ${state.identity.access_surface}`;
   const readyCount = state.identity.tool_status.filter((item) => item.status === 'ready').length;
   $('#provider-summary').textContent = `${readyCount}/${state.identity.tool_status.length} providers ready`;
@@ -1095,14 +1133,28 @@ $$('#filter-search, #filter-tool, #filter-profile, #filter-state, #filter-attent
 $$('[data-attention-filter]').forEach((button) => button.onclick = () => { $('#filter-attention').value = button.dataset.attentionFilter; renderSessions(); });
 $('#inspector-close').onclick = closeInspector;
 
+attentionForm.addEventListener('input', () => {
+  attentionDrafts.set(attentionForm.dataset.session, { state: attentionForm.elements.state.value, note: attentionForm.elements.note.value });
+});
 attentionForm.onsubmit = async (event) => {
   event.preventDefault(); const name = attentionForm.dataset.session; const submit = $('button[type="submit"]', attentionForm);
+  if (attentionPending.has(name)) return;
+  const submitted = { state: attentionForm.elements.state.value, note: attentionForm.elements.note.value };
+  attentionPending.add(name);
   submit.disabled = true; $('#attention-status').textContent = 'Updating…';
   try {
-    const session = await api(`/api/sessions/${encodeURIComponent(name)}/attention`, { method: 'PATCH', body: JSON.stringify({ state: attentionForm.elements.state.value, note: attentionForm.elements.note.value || null }) });
+    const session = await api(`/api/sessions/${encodeURIComponent(name)}/attention`, { method: 'PATCH', body: JSON.stringify({ state: submitted.state, note: submitted.note || null }) });
+    const draft = attentionDrafts.get(name);
+    if (!draft || (draft.state === submitted.state && draft.note === submitted.note)) attentionDrafts.delete(name);
     const index = state.sessions.findIndex((item) => item.tmux_name === name); if (index >= 0) state.sessions[index] = session;
-    renderInspector(session); renderSessions(); renderOrchestration(); $('#attention-status').textContent = 'State updated';
-  } catch (error) { $('#attention-status').textContent = error.message; } finally { submit.disabled = false; }
+    renderSessions(); renderOrchestration().catch(error => showNotice(error.message, 'error'));
+    if (state.selectedSession === name && !inspector.hidden) {
+      renderInspector(session); $('#attention-status').textContent = 'State updated';
+    }
+  } catch (error) {
+    if (state.selectedSession === name && !inspector.hidden) $('#attention-status').textContent = error.message;
+    else showNotice(`${name}: ${error.message}`, 'error');
+  } finally { attentionPending.delete(name); submit.disabled = attentionPending.has(state.selectedSession); }
 };
 
 $('#terminal-dock-collapse').onclick = () => { terminalDock.classList.toggle('collapsed'); updateDockLayout(); };
@@ -1126,7 +1178,7 @@ $('#terminal-dock-handle').addEventListener('pointerdown', (event) => {
   window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop, { once: true });
 });
 (function restoreDock() {
-  const saved = localStorage.getItem('agent-console-dock-height');
+  let saved; try { saved = localStorage.getItem('agent-console-dock-height'); } catch {}
   if (saved) {
     const h = parseInt(saved, 10);
     if (h > 0 && h <= window.innerHeight - 56) { terminalDock.style.height = `${h}px`; updateDockLayout(); }
@@ -1172,17 +1224,29 @@ delegateForm.onsubmit = async (event) => {
 };
 
 planForm.onsubmit = async (event) => {
-  event.preventDefault(); const submit = $('button[type="submit"]', planForm); submit.disabled = true; $('#plan-status').textContent = 'Creating isolated implementation session…';
+  event.preventDefault(); const submit = $('button[type="submit"]', planForm);
+  if (submit.disabled || !planForm.elements.plan_id.value) return;
+  const request = planRequest;
+  submit.disabled = true; $('#plan-status').textContent = 'Creating isolated implementation session…';
   const data = Object.fromEntries(new FormData(planForm)); const planId = data.plan_id; delete data.plan_id; data.confirmed = true;
   data.allow_revision_change = planForm.elements.allow_revision_change.checked; if (!data.name) data.name = null;
-  try { const session = await api(`/api/plans/${encodeURIComponent(planId)}/execute`, { method: 'POST', body: JSON.stringify(data) }); planDialog.close(); await refresh(); selectView('sessions'); renderInspector(session); openTerminal(session.tmux_name); }
-  catch (error) { $('#plan-status').textContent = error.message; submit.disabled = false; }
+  try {
+    const session = await api(`/api/plans/${encodeURIComponent(planId)}/execute`, { method: 'POST', body: JSON.stringify(data) });
+    const current = request === planRequest && planDialog.open;
+    if (current) planDialog.close();
+    await refresh();
+    if (current && request === planRequest && !planDialog.open) {
+      selectView('sessions'); renderInspector(session); openTerminal(session.tmux_name);
+    } else { showNotice(`Created ${session.tmux_name} from plan ${planId}`); }
+  } catch (error) { if (request === planRequest && planDialog.open) $('#plan-status').textContent = error.message; }
+  finally { if (request === planRequest) submit.disabled = false; }
 };
 
 $('#refresh').onclick = async (event) => {
-  event.currentTarget.disabled = true;
+  const button = event.currentTarget;
+  button.disabled = true;
   try { await refresh(); showNotice('Console refreshed'); } catch (error) { showNotice(error.message, 'error'); }
-  finally { event.currentTarget.disabled = false; }
+  finally { button.disabled = false; }
 };
 
 start().catch((error) => showNotice(error.message || String(error), 'error'));
