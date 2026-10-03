@@ -11,7 +11,6 @@
 <body class="terminal-page" data-terminal-mode="type">
   <header class="terminal-header">
     <a class="button compact" href="/">Dashboard</a><strong id="session-name"></strong><span id="connection" class="connection-state" role="status" aria-live="polite">Connecting…</span>
-    <label class="compact-theme">Theme<select id="terminal-theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label><label class="compact-theme">Palette<select data-palette-select aria-label="Palette"><option value="forest">Forest</option><option value="ocean">Ocean</option><option value="violet">Violet</option></select></label>
   </header>
   <div class="terminal-controls">
     <button id="toggle-composer" aria-expanded="false" aria-controls="input-drawer" title="Optional input and paste controls">Input</button>
@@ -23,6 +22,10 @@
       <div class="key-strip" aria-label="Terminal keys and controls">
         <button data-key="\u0003">Ctrl-C</button><button data-key="\u0010">Ctrl-P</button><button data-key="\u001b">Esc</button><button data-key="\t">Tab</button><button data-key="\u001b[A">↑</button><button data-key="\u001b[B">↓</button><button data-key="\u001b[5~">Page up</button><button data-key="\u001b[6~">Page down</button>
         <button id="load-brief">Load brief</button><button id="peers">Peers</button><button id="detach">Detach (Ctrl-A d)</button><button id="fullscreen">Full screen</button>
+      </div>
+      <div class="appearance-controls">
+        <label>Theme<select id="terminal-theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        <label>Palette<select data-palette-select aria-label="Palette"><option value="forest">Forest</option><option value="ocean">Ocean</option><option value="violet">Violet</option></select></label>
       </div>
     </div></details>
     <button id="restore-legacy-draft" hidden title="Restore an older draft saved under this session name; review before sending">Restore older draft</button>

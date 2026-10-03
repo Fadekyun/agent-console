@@ -89,7 +89,11 @@ test('More closes on keyboard exit and outside pointer, and Peers restores focus
   await page.keyboard.press('Shift+Tab');
   await expect(page.locator('#terminal-more')).not.toHaveAttribute('open','');
   await openMore(page);
-  await page.locator('.terminal-frame').click({position:{x:15,y:300}});
+  const frameBounds=await page.locator('.terminal-frame').boundingBox();
+  const menuBounds=await page.locator('.terminal-menu').boundingBox();
+  const outsideY=frameBounds.height-15;
+  expect(frameBounds.y+outsideY).toBeGreaterThan(menuBounds.y+menuBounds.height);
+  await page.locator('.terminal-frame').click({position:{x:15,y:outsideY}});
   await expect(page.locator('#terminal-more')).not.toHaveAttribute('open','');
   await openMore(page);
   await page.locator('#peers').click();
@@ -149,6 +153,7 @@ test('menu fits a panned visual viewport when the keyboard changes its visible h
 test('initial connection does not take focus from another toolbar control',async({page})=>{
   await page.setViewportSize({width:1280,height:800});
   await terminalFixture(page,{delayed:true});await page.goto('/terminal?session=menu-fixture');
+  await page.locator('#terminal-more > summary').click();
   await page.locator('#terminal-theme').focus();await page.evaluate(()=>window.__openTerminal());
   await expect(page.locator('#terminal-theme')).toBeFocused();
 });

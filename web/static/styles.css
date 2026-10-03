@@ -10,10 +10,13 @@ button, .button, input, select, textarea { font: inherit; }
 button, .button, input, select, textarea { min-height: 44px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface-raised); color: var(--text); padding: 9px 12px; }
 button, .button { cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 button:hover:not(:disabled), .button:hover { border-color: var(--accent); background: var(--accent-soft); }
-button:focus-visible, .button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 38%, transparent); outline-offset: 2px; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 button:disabled { cursor: not-allowed; opacity: .5; }
 .primary { background: var(--accent); border-color: var(--accent); color: var(--accent-foreground); }
+.primary:hover:not(:disabled), .button.primary:hover, .new-output:hover:not(:disabled) { background: var(--accent); color: var(--accent-foreground); border-color: var(--accent); }
 .danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); background: var(--danger-soft); }
+.danger:hover:not(:disabled), .button.danger:hover { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
+a { color: var(--accent); }
 .compact { min-height: 38px; padding: 6px 10px; }
 h1, h2, h3, p { margin-top: 0; }
 h1 { margin-bottom: 2px; font-size: 1.35rem; } h2 { margin-bottom: 6px; font-size: 1.18rem; } h3 { margin-bottom: 4px; font-size: 1rem; }
@@ -97,13 +100,13 @@ dialog::backdrop { background: rgb(0 0 0 / .58); } .dialog-form, dialog form { d
 #terminal .xterm { height: 100%; } #terminal .xterm-viewport { touch-action: pan-y; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .terminal-page[data-terminal-mode="type"] #terminal .xterm-viewport { touch-action: none; } .terminal-page[data-terminal-mode="select"] #terminal .xterm-viewport { touch-action: auto; }
 .new-output { position: absolute; z-index: 5; left: 50%; bottom: 10px; transform: translateX(-50%); min-height: 38px; background: var(--accent); color: var(--accent-foreground); border-color: var(--accent); box-shadow: var(--shadow); white-space: nowrap; }
-.new-output.has-unread { background: var(--danger); border-color: var(--danger); animation: new-output-pulse 1.2s ease-in-out 2; }
+.new-output.has-unread, .new-output.has-unread:hover:not(:disabled) { background: var(--danger); border-color: var(--danger); animation: new-output-pulse 1.2s ease-in-out 2; }
 @keyframes new-output-pulse { 0%, 100% { box-shadow: var(--shadow); } 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 32%, transparent), var(--shadow); } }
 .composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; padding: 8px 9px max(12px, env(safe-area-inset-bottom, 8px)); border-top: 1px solid var(--border); background: var(--surface); }
 .composer textarea { line-height: 1.4; min-height: 44px; max-height: 7.5em; resize: none; overflow-y: auto; } .composer-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .peer-list .session-row { grid-template-columns: 1fr; }
 .text-view { width: min(900px, 100%); }.text-view pre { min-height: 40dvh; max-height: 60dvh; overflow: auto; white-space: pre-wrap; user-select: text; -webkit-user-select: text; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--terminal-bg); color: var(--terminal-text); touch-action: pan-y; }
-.mobile-console { min-height: 100dvh; overflow-x: hidden; background: var(--background); }.mobile-header { position: sticky; top: 0; z-index: 10; display: flex; justify-content: space-between; gap: 8px; padding: max(10px,env(safe-area-inset-top)) 10px 10px; border-bottom: 1px solid var(--border); background: var(--surface); }.mobile-header>div { display:flex; gap:6px; align-items:center; }.mobile-header>div:first-child { display:grid; }.mobile-header small { color:var(--muted); }.mobile-header select { min-height:40px; max-width:104px; padding:5px; }.mobile-main { padding:12px 10px calc(82px + env(safe-area-inset-bottom)); }.mobile-main h1 { font-size:1.15rem; }.mobile-session-list { display:grid; gap:8px; }.mobile-session { display:grid; gap:7px; padding:12px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); }.mobile-session small { color:var(--muted); }.mobile-session div { display:flex; gap:7px; }.mobile-form { display:grid; gap:12px; }.mobile-tabs { position:fixed; z-index:20; bottom:0; left:0; right:0; display:grid; grid-template-columns:repeat(7,1fr); gap:5px; padding:7px 8px max(7px,env(safe-area-inset-bottom)); border-top:1px solid var(--border); background:var(--surface); }.mobile-tabs>* { display:grid; place-items:center; min-width:0; min-height:46px; font-size:.78rem; }
+.mobile-console { min-height: 100dvh; overflow-x: hidden; background: var(--bg); }.mobile-header { position: sticky; top: 0; z-index: 10; display: flex; justify-content: space-between; gap: 8px; padding: max(10px,env(safe-area-inset-top)) 10px 10px; border-bottom: 1px solid var(--border); background: var(--surface); }.mobile-header>div { display:flex; gap:6px; align-items:center; }.mobile-header>div:first-child { display:grid; }.mobile-header small { color:var(--muted); }.mobile-header select { min-height:40px; max-width:104px; padding:5px; }.mobile-main { padding:12px 10px calc(82px + env(safe-area-inset-bottom)); }.mobile-main h1 { font-size:1.15rem; }.mobile-session-list { display:grid; gap:8px; }.mobile-session { display:grid; gap:7px; padding:12px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); }.mobile-session small { color:var(--muted); }.mobile-session div { display:flex; gap:7px; }.mobile-form { display:grid; gap:12px; }.mobile-tabs { position:fixed; z-index:20; bottom:0; left:0; right:0; display:grid; grid-template-columns:repeat(7,1fr); gap:5px; padding:7px 8px max(7px,env(safe-area-inset-bottom)); border-top:1px solid var(--border); background:var(--surface); }.mobile-tabs>* { display:grid; place-items:center; min-width:0; min-height:46px; font-size:.78rem; }
 .model-estimator { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)) auto; gap:6px; margin-top:9px; align-items:end; }.estimate-field { display:grid; gap:4px; min-width:0; color:var(--muted); font-size:.78rem; font-weight:600; }.model-estimator input { min-width:0; }.estimator-help { display:block; margin-top:6px; font-weight:400; }.mobile-estimator { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:8px; }.mobile-estimator label { display:grid; gap:4px; font-size:.78rem; color:var(--muted); }.mobile-estimator button { grid-column:1/-1; }
 .mobile-plan-list { display:grid; gap:8px; }
 .mobile-plan { display:grid; gap:7px; padding:12px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); }
@@ -111,7 +114,7 @@ dialog::backdrop { background: rgb(0 0 0 / .58); } .dialog-form, dialog form { d
 .mobile-session-actions { display:flex; flex-wrap:wrap; gap:7px; }
 .mobile-session-actions .button, .mobile-session-actions button, .mobile-session-actions a { min-height:40px; }
 .mobile-session .attention-badge { color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.03em; }
-.plan-body { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; overflow:auto; max-height:50dvh; background:var(--background); padding:10px; border-radius:var(--radius); }
+.plan-body { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; overflow:auto; max-height:50dvh; background:var(--bg); padding:10px; border-radius:var(--radius); }
 .mobile-tree { display:grid; gap:10px; }
 .mobile-tree-node { display:grid; gap:7px; padding:12px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); }
 .mobile-tree-child { padding-left:14px; color:var(--muted); font-size:.85rem; }
@@ -368,3 +371,9 @@ dialog::backdrop { background: rgb(0 0 0 / .58); } .dialog-form, dialog form { d
   .mobile-tabs>*{padding:6px 3px;font-size:.72rem}
   .mobile-main{padding-bottom:calc(132px + env(safe-area-inset-bottom))}
 }
+
+/* Appearance stays reachable in embedded and phone terminals. */
+.terminal-menu .appearance-controls { margin: 12px 0 0; border-top: 1px solid var(--border); padding-top: 12px; }
+.terminal-menu .appearance-controls > label { display: grid; flex: 1 1 120px; }
+/* Compact composer rules must not reveal icon-only button text. */
+.composer-actions button[data-icon][data-icon-only] { font-size: 0; min-width: 44px; min-height: 44px; padding: 10px; }
