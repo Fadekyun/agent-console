@@ -69,3 +69,41 @@ test('late child creation cannot close a newer delegate form',async({page})=>{
  await page.locator('[data-close=mobile-delegate-dialog]').click();await page.getByRole('button',{name:'Delegate',exact:true}).click();await page.locator('#mobile-delegate [name=task]').fill('New child draft');
  await held.fulfill({json:{}});await page.waitForTimeout(100);await expect(page.locator('#mobile-delegate-dialog')).toBeVisible();await expect(page.locator('#mobile-delegate [name=task]')).toHaveValue('New child draft');await expect(page.locator('#mobile-delegate button[type=submit]')).toBeEnabled();expect(errors).toEqual([]);
 });
+
+
+for(const field of ['note','state','edited-back'])test(`mobile attention save retains newer ${field} edits in the same dialog`,async({page})=>{
+ const {sessions,errors}=await fixture(page);let held;const submitted=[];
+ await page.route('**/api/sessions/session-one/attention',route=>{submitted.push(route.request().postDataJSON());held=route;});
+ await page.getByRole('button',{name:'Details',exact:true}).click();
+ const note=page.locator('#mobile-attention-note'),state=page.locator('#mobile-attention-state'),save=page.locator('#mobile-attention-save'),dialog=page.locator('#mobile-attention-dialog');
+ await note.fill('Submitted A');await state.selectOption('blocked');await save.click();await expect.poll(()=>submitted.length).toBe(1);await expect(save).toBeDisabled();
+ if(field==='state')await state.selectOption('needs_input');
+ else{await note.fill('Newer B');if(field==='edited-back')await note.fill('Submitted A');}
+ Object.assign(sessions[0],{attention_note:'Submitted A',attention_state:'blocked'});
+ await held.fulfill({json:sessions[0]});
+ await expect(dialog).toBeVisible();await expect(save).toBeEnabled();
+ await expect(page.locator('#mobile-attention-status')).toContainText('Newer edits are unsaved');
+ await expect(note).toHaveValue(field==='note'?'Newer B':'Submitted A');
+ await expect(state).toHaveValue(field==='state'?'needs_input':'blocked');
+ expect(submitted[0]).toEqual({state:'blocked',note:'Submitted A',session_id:'one'});
+ await save.click();await expect.poll(()=>submitted.length).toBe(2);
+ expect(submitted[1]).toEqual({state:field==='state'?'needs_input':'blocked',note:field==='note'?'Newer B':'Submitted A',session_id:'one'});
+ Object.assign(sessions[0],{attention_note:submitted[1].note,attention_state:submitted[1].state});
+ await held.fulfill({json:sessions[0]});await expect(dialog).toBeHidden();
+ await page.getByRole('button',{name:'Details',exact:true}).click();
+ await expect(note).toHaveValue(submitted[1].note);await expect(state).toHaveValue(submitted[1].state);expect(errors).toEqual([]);
+});
+
+test('mobile attention rejection keeps newer fields editable and unchanged retry closes',async({page})=>{
+ const {sessions,errors}=await fixture(page);let held,count=0;
+ await page.route('**/api/sessions/session-one/attention',route=>{count++;held=route;});
+ await page.getByRole('button',{name:'Details',exact:true}).click();
+ await page.locator('#mobile-attention-note').fill('Submitted A');await page.locator('#mobile-attention-state').selectOption('blocked');await page.locator('#mobile-attention-save').click();await expect.poll(()=>count).toBe(1);
+ await page.locator('#mobile-attention-note').fill('Keep B');await page.locator('#mobile-attention-state').selectOption('needs_input');
+ await held.fulfill({status:409,json:{detail:'Session changed; retry'}});
+ await expect(page.locator('#mobile-attention-dialog')).toBeVisible();await expect(page.locator('#mobile-attention-status')).toContainText('Session changed; retry');
+ await expect(page.locator('#mobile-attention-note')).toHaveValue('Keep B');await expect(page.locator('#mobile-attention-state')).toHaveValue('needs_input');await expect(page.locator('#mobile-attention-save')).toBeEnabled();
+ await page.locator('#mobile-attention-save').click();await expect.poll(()=>count).toBe(2);
+ Object.assign(sessions[0],{attention_note:'Keep B',attention_state:'needs_input'});await held.fulfill({json:sessions[0]});
+ await expect(page.locator('#mobile-attention-dialog')).toBeHidden();expect(errors).toEqual([]);
+});

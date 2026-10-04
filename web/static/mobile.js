@@ -3,7 +3,7 @@ import { copyText as copyWithFallback } from '/static/clipboard.js?v=1';
 import { initTheme } from '/static/theme.js?v=10';
 import { skillActionMessage, skillToolDiagnostic } from '/static/skill-diagnostics.js?v=1';
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
-const form=$('#mobile-new'); let identity; let currentModels=[]; let loadModelsReq=0; let pendingKill; let pendingAttention; let killRequest=0; let attentionRequest=0; let delegateRequest=0; let creatingChild=false; let sessionRead=0; const sessionMutations=new Set(); let currentPlanId; let profileEditorRequest=0; let profileEditorRevision=0; let profileSaveRequest=0; let planRequest=0; let creatingSession=false; const startingPlans=new Set();
+const form=$('#mobile-new'); let identity; let currentModels=[]; let loadModelsReq=0; let pendingKill; let pendingAttention; let killRequest=0; let attentionRequest=0; let attentionRevision=0; let delegateRequest=0; let creatingChild=false; let sessionRead=0; const sessionMutations=new Set(); let currentPlanId; let profileEditorRequest=0; let profileEditorRevision=0; let profileSaveRequest=0; let planRequest=0; let creatingSession=false; const startingPlans=new Set();
 async function api(path, options={}) { const response=await fetch(path,{cache:'no-store',headers:{'Content-Type':'application/json',...(options.headers||{})},...options}); const body=await response.json(); if(!response.ok) throw new Error(body.detail||response.statusText); return body; }
 function contexts() { const tool=form.elements.tool.value, provider=form.elements.provider.value; if(tool==='opencode'&&!provider){form.elements.auth_context.replaceChildren();return;} const values=identity.auth_contexts.filter((x)=>x.tool===tool && (tool!=='opencode'||x.provider===provider) && (tool!=='opencode'||x.enabled!==false)); form.elements.auth_context.replaceChildren(...values.map((x)=>new Option(`${x.name} · ${x.status}`,x.name,false,x.default))); }
 function renderModels(values){$('#mobile-models').replaceChildren(...values.map((m)=>{const label=m.estimated_usd==null?(m.cost.output==null?'unknown':`$${m.cost.output}/M out`):`est. $${m.estimated_usd.toFixed(6)}${m.cheapest?' · CHEAPEST':''}`;const o=new Option(`${m.name} · ${label}`,m.model);o.disabled=!m.selectable;return o;}));}
@@ -45,7 +45,7 @@ async function life(s,op){
  finally{sessionBusy(s,false);}
 }
 function confirmKill(s){pendingKill=s;killRequest++;$('#mobile-kill-status').textContent='';$('#mobile-kill-confirm').disabled=false;$('#mobile-kill-name').textContent=s.tmux_name;$('#mobile-kill-unmanaged').hidden=!!s.managed;$('#mobile-kill-allow').checked=false;document.getElementById('mobile-kill-dialog').showModal();}
-function openAttention(s){pendingAttention=s;attentionRequest++;$('#mobile-attention-status').textContent='';$('#mobile-attention-save').disabled=false;$('#mobile-attention-state').value=s.attention_state||'normal';$('#mobile-attention-note').value=s.attention_note||'';document.getElementById('mobile-attention-dialog').showModal();}
+function openAttention(s){pendingAttention=s;attentionRequest++;attentionRevision=0;$('#mobile-attention-status').textContent='';$('#mobile-attention-save').disabled=false;$('#mobile-attention-state').value=s.attention_state||'normal';$('#mobile-attention-note').value=s.attention_note||'';document.getElementById('mobile-attention-dialog').showModal();}
 async function renderSessions(){
  const request=++sessionRead;
  try{
@@ -198,14 +198,19 @@ $('#mobile-kill-confirm').onclick=async()=>{
  }catch(e){if(current())$('#mobile-kill-status').textContent=e.message;else sessionStatus(`${s.tmux_name}: ${e.message}`);}
  finally{sessionBusy(s,false);if(current())button.disabled=false;}
 };
+$$('#mobile-attention-state, #mobile-attention-note').forEach(control=>control.addEventListener('input',()=>{attentionRevision++;if($('#mobile-attention-dialog').open)$('#mobile-attention-status').textContent='Unsaved changes.';}));
 $('#mobile-attention-save').onclick=async()=>{
  const s=pendingAttention,button=$('#mobile-attention-save'),dialog=$('#mobile-attention-dialog'),request=attentionRequest;
  if(!s||button.disabled)return;const current=()=>request===attentionRequest&&dialog.open;
- const state=$('#mobile-attention-state').value,note=$('#mobile-attention-note').value||null;
+ const state=$('#mobile-attention-state').value,note=$('#mobile-attention-note').value||null,revision=attentionRevision;
  button.disabled=true;$('#mobile-attention-status').textContent='Saving…';
  try{
   await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/attention`,{method:'PATCH',body:JSON.stringify({state,note,session_id:s.id})});
-  if(current()){dialog.close();pendingAttention=null;}await renderSessions();
+  if(current()){
+   const unchanged=attentionRevision===revision&&$('#mobile-attention-state').value===state&&($('#mobile-attention-note').value||null)===note;
+   if(unchanged){dialog.close();pendingAttention=null;}
+   else $('#mobile-attention-status').textContent='Earlier changes saved. Newer edits are unsaved.';
+  }await renderSessions();
  }catch(e){if(current())$('#mobile-attention-status').textContent=e.message;else sessionStatus(`${s.tmux_name}: ${e.message}`);}
  finally{if(current())button.disabled=false;}
 };
