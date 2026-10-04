@@ -1,3 +1,8 @@
+## Preserve hidden drafts during typing recovery — 2026-10-04 (#147)
+
+- Automatic disconnected recovery appends printable input after the existing draft independently of its hidden selection, saves it and opens Input for review.
+- Explicit paste retains selection replacement. Verified full/partial selections, reload persistence and no terminal writes with isolated browser fixtures.
+
 ## Session lifecycle consistency — 2026-10-04 (#146)
 
 - Recreated stopped names retain durable identity while rotating reporting capability and updating or clearing project ownership consistently.

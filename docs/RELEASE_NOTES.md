@@ -1,3 +1,10 @@
+## 0.28.13 — unreleased, 2026-10-04 (#147)
+
+- Impact: disconnected terminal typing appends to the saved Input draft, preserving text even when a hidden selection remains. Explicit manual paste still replaces the selected range. Recovered input is never replayed automatically.
+- Configuration/migration: none. Refresh the terminal page to load the corrected recovery behavior.
+- Verification: full and partial hidden selections reproduced draft loss before the fix. All 51 terminal-input browser checks passed across desktop and two phone layouts, including persistence on reload and explicit paste replacement. Independent review and publication CI gate promotion.
+- Rollback: select the prior release through its schema guard and restart web only, preserving user sessions and state. Earlier code can overwrite a selected draft during disconnected recovery.
+
 ## 0.28.12 — unreleased, 2026-10-04 (#146)
 
 - Impact: recreating a stopped session name now rotates its reporting capability and persists the chosen project while retaining its durable ID. Old capabilities are rejected. Archiving after stop or repeated archiving preserves saved output; denied unmanaged archive-and-kill requests fail before capture or archive metadata changes.
