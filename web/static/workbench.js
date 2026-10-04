@@ -114,12 +114,12 @@ function route() {
   if (sessionName && !state.selected) message('This session is no longer available. Return to Work.', 'route');
   else if ($('#notice').dataset.kind === 'route') message('');
   renderWork(); renderSession();
-  for (const [name, frame] of state.frames) {
-    if (!state.sessions.some(session => session.tmux_name === name && session.running)) {
-      frame.remove(); state.frames.delete(name);
-    } else frame.hidden = name !== state.selected?.tmux_name;
+  for (const [id, frame] of state.frames) {
+    if (!state.sessions.some(session => session.id === id && session.running)) {
+      frame.remove(); state.frames.delete(id);
+    } else frame.hidden = id !== state.selected?.id;
   }
-  if (!state.selected || !state.frames.has(state.selected.tmux_name)) $('#terminal-panel').hidden = true;
+  if (!state.selected || !state.frames.has(state.selected.id)) $('#terminal-panel').hidden = true;
   if (!showingResults && state.selected?.running && previousId !== state.selected.id && (!matchMedia('(max-width:760px)').matches || switchingFromDrawer)) openTerminal();
   syncTerminalVisibility();
 }
@@ -161,7 +161,12 @@ async function refresh() {
         return previous&&previous.tmux_name!==session.tmux_name?[{session,previous}]:[];
       });
       for(const {session,previous} of renames){
-        state.frames.get(previous.tmux_name)?.remove();state.frames.delete(previous.tmux_name);
+        // Keep the live frame and its interaction state attached to durable identity.
+        const frame=state.frames.get(session.id);
+        if(frame){
+          frame.title=`Terminal: ${session.tmux_name}`;
+          frame.contentWindow?.postMessage({type:'agent-console:refresh-identity',session_id:session.id},location.origin);
+        }
         if(session.id===selectedId){
           const prefix=location.hash.startsWith('#results/')?'#results/':'#session/';
           if(location.hash===prefix+encodeURIComponent(selectedName)){
@@ -177,7 +182,10 @@ async function refresh() {
       const scrollX=window.scrollX,scrollY=window.scrollY;
       const scrollContainers=[...document.querySelectorAll('#tree-panel,#session-tree,#sessions-dialog,#tree-drawer')].map(node=>[node,node.scrollTop,node.scrollLeft]);
       route();
-      if(selectedRenamed&&terminalWasOpen&&state.selected?.id===selectedId&&state.selected.running&&!location.hash.startsWith('#results/'))openTerminal();
+      if(selectedRenamed&&terminalWasOpen&&state.selected?.id===selectedId){
+        const frame=state.frames.get(selectedId);
+        if(frame)setTerminalStatus(`${state.selected.tmux_name} · ${frame.dataset.status || 'Connecting…'}`);
+      }
       for(const [node,top,left] of scrollContainers){node.scrollTop=top;node.scrollLeft=left;}
       window.scrollTo(scrollX,scrollY);
     } catch (error) { message(`Could not refresh sessions: ${error.message}`, 'refresh'); }
@@ -188,19 +196,19 @@ async function refresh() {
 function requestTerminalFocus(frame){
   if(!frame.dataset.focusRequested||!frame.dataset.loaded)return;
   delete frame.dataset.focusRequested;
-  if(state.frames.get(state.selected?.tmux_name)!==frame||frame.hidden||$('#terminal-panel').hidden||document.querySelector('dialog[open]'))return;
+  if(state.frames.get(state.selected?.id)!==frame||frame.hidden||$('#terminal-panel').hidden||document.querySelector('dialog[open]'))return;
   if(document.activeElement!==frame.focusOrigin&&document.activeElement!==document.body&&document.activeElement!==frame)return;
   frame.contentWindow?.postMessage({type:'agent-console:focus-terminal'},location.origin);
 }
 function openTerminal() {
   const s = state.selected; if (!s?.running) return;
-  let frame = state.frames.get(s.tmux_name);
+  let frame = state.frames.get(s.id);
   if (!frame) {
     // Bound browser PTYs; drafts survive eviction in the terminal's sessionStorage.
-    if (state.frames.size >= 3) { const [name, old] = state.frames.entries().next().value; old.remove(); state.frames.delete(name); }
+    if (state.frames.size >= 3) { const [id, old] = state.frames.entries().next().value; old.remove(); state.frames.delete(id); }
     frame = el('iframe'); frame.title = `Terminal: ${s.tmux_name}`; frame.src = `/terminal?session=${encodeURIComponent(s.tmux_name)}&session_id=${encodeURIComponent(s.id)}&embed=1&mode=type&lifecycle=managed`;
     frame.addEventListener('load',()=>{frame.dataset.loaded='true';syncTerminalVisibility();requestTerminalFocus(frame);});
-    state.frames.set(s.tmux_name, frame); $('#terminal-frames').append(frame);
+    state.frames.set(s.id, frame); $('#terminal-frames').append(frame);
   }
   frame.dataset.focusRequested='true';frame.focusOrigin=document.activeElement;
   state.frames.forEach(f => { f.hidden = f !== frame; }); $('#terminal-panel').hidden = false;
@@ -415,7 +423,7 @@ async function sessionAction(action, payload, method='POST') {
   try {
     await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${action}`,{...payload,session_id:s.id},method);
     if(action==='kill') {
-      state.frames.get(s.tmux_name)?.remove();state.frames.delete(s.tmux_name);
+      state.frames.get(s.id)?.remove();state.frames.delete(s.id);
       if(state.selected?.id===s.id)$('#terminal-panel').hidden=true;
       syncTerminalVisibility();
     }
@@ -538,8 +546,8 @@ await refresh(); setInterval(() => { if (!document.hidden && !['#settings','#ski
 
 window.addEventListener('message', event => {
   if (event.origin !== location.origin || event.data?.type !== 'agent-console:terminal-status' || typeof event.data.status !== 'string') return;
-  for (const [name, frame] of state.frames) if (event.source === frame.contentWindow) {
+  for (const [id, frame] of state.frames) if (event.source === frame.contentWindow) {
     frame.dataset.status = event.data.status;
-    if (name === state.selected?.tmux_name) setTerminalStatus(`${name} · ${event.data.status}`);
+    if (id === state.selected?.id) setTerminalStatus(`${state.selected.tmux_name} · ${event.data.status}`);
   }
 });
