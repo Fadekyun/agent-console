@@ -245,6 +245,29 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
         self.assertFalse(self.manager.inspect(attempt['name'])['running'])
         self.assertFalse(self.manager.inspect(self.root['tmux_name'])['running'])
 
+    def test_codex_pro_workflow_auto_and_read_action_keep_native_boundaries(self):
+        self.fake.write_text(self.fake.read_text().replace(
+            "print('--output-schema --output-last-message --sandbox')",
+            "print('--output-schema --output-last-message --sandbox --approve-for-me')"
+        ))
+        (self.manager.auth.codex_home('default',tool='codex-pro')/'auth.json').write_text('{}')
+        with patch.dict(TOOL_BINARIES,{'codex-pro':self.fake}):
+            for key,action in [('pro-write','write'),('pro-read','read')]:
+                with self.subTest(action=action):
+                    step=self.propose(key=key,tool='codex-pro',action=action)
+                    self.accept(step);done=self.finish(step['id'])
+                    self.assertEqual(done['attempts'][0]['state'],'completed',done)
+                    launch=self.settings.state_dir/'workflow-attempts'/done['attempts'][0]['id']/'launch.json'
+                    argv=json.loads(launch.read_text())['argv']
+                    if action=='read':
+                        self.assertNotIn('--approve-for-me',argv)
+                        self.assertEqual(argv[argv.index('--sandbox')+1],'read-only')
+                        self.assertEqual(argv[argv.index('--ask-for-approval')+1],'never')
+                    else:
+                        self.assertIn('--approve-for-me',argv)
+                        self.assertNotIn('--ask-for-approval',argv)
+                        self.assertEqual(argv[argv.index('--sandbox')+1],'workspace-write')
+
     def test_read_action_uses_read_only_sandbox_even_for_general_role(self):
         step=self.propose(action='read');self.accept(step);done=self.finish(step['id'])
         launch=self.settings.state_dir/'workflow-attempts'/done['attempts'][0]['id']/'launch.json'

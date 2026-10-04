@@ -35,11 +35,39 @@ TOOL_BINARIES = {
 
 
 @lru_cache(maxsize=32)
-def _workflow_probe(binary,mtime,size):
+def _supports_native_flag(binary, mtime, size, command, flag):
+    try:
+        result = subprocess.run(
+            [binary, command, "--help"] if command else [binary, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return result.returncode == 0 and flag in result.stdout.split()
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _require_native_flag(binary: Path, *, command: str | None, flag: str) -> None:
+    try:
+        stat = binary.stat()
+    except OSError as exc:
+        raise RuntimeError(f"Codex Pro native approval support is unavailable: {binary}") from exc
+    if not _supports_native_flag(str(binary), stat.st_mtime_ns, stat.st_size, command, flag):
+        location = f"{command} --help" if command else "--help"
+        raise RuntimeError(
+            f"Codex Pro requires native {flag} support; installed CLI does not advertise "
+            f"{flag} in {location}"
+        )
+
+
+@lru_cache(maxsize=32)
+def _workflow_probe(binary,mtime,size,required_flags=()):
     try:
         help_result=subprocess.run([binary,'exec','--help'],capture_output=True,text=True,timeout=5,check=False)
         version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=5,check=False)
-        if help_result.returncode or not all(flag in help_result.stdout for flag in ['--output-schema','--output-last-message','--sandbox']):
+        if help_result.returncode or not all(flag in help_result.stdout for flag in ['--output-schema','--output-last-message','--sandbox', *required_flags]):
             return {'supported':False,'reason':'installed CLI lacks the required native task flags'}
         return {'supported':True,'version':version.stdout.strip()[:100] if not version.returncode else 'unknown','binary':binary}
     except (OSError,subprocess.TimeoutExpired):return {'supported':False,'reason':'native task capability probe failed or timed out'}
@@ -180,9 +208,25 @@ class CodexAdapter(ProviderAdapter):
 
     def workflow_argv(self, interactive_argv, *, schema, output, read_only):
         argv=list(interactive_argv)
-        # Unattended steps never approve new permissions. Read-only roles stay
-        # read-only even when interactive Plan sessions opt into network access.
-        argv[argv.index('--ask-for-approval')+1]='never'
+        # Read-only roles stay read-only even when interactive Plan sessions opt
+        # into network access. Codex Pro writable workflow tasks retain its
+        # explicit native automatic-review default; other unattended tasks
+        # never approve new permissions.
+        if self.tool == "codex-pro" and not read_only:
+            _require_native_flag(self.binary, command="exec", flag="--approve-for-me")
+            if "--approve-for-me" not in argv:
+                approval_index = argv.index('--ask-for-approval')
+                del argv[approval_index:approval_index + 2]
+                argv.append('--approve-for-me')
+        else:
+            # A read action may start from a writable profile's auto argv.
+            # Native automatic review implies workspace-write, so remove it
+            # before applying the narrower workflow boundary.
+            argv = [arg for arg in argv if arg != '--approve-for-me']
+            if '--ask-for-approval' in argv:
+                argv[argv.index('--ask-for-approval')+1]='never'
+            else:
+                argv += ['--ask-for-approval', 'never']
         argv[argv.index('--sandbox')+1]='read-only' if read_only else 'workspace-write'
         for index in range(len(argv)-2,-1,-1):
             if argv[index:index+2]==['-c','sandbox_workspace_write.network_access=true']:
@@ -274,6 +318,26 @@ class CodexProAdapter(CodexAdapter):
     """A separately configured Codex provider using the same Codex CLI semantics."""
 
     tool = "codex-pro"
+
+    def workflow_info(self):
+        try:
+            stat = self.binary.stat()
+        except OSError:
+            return {'supported': False, 'reason': 'tool launcher is missing'}
+        return _workflow_probe(
+            str(self.binary), stat.st_mtime_ns, stat.st_size,
+            required_flags=('--approve-for-me',),
+        )
+
+    def build_argv(self, **kwargs: Any) -> list[str]:
+        mode = kwargs["agent_mode"] or ("plan" if kwargs["read_only"] else "auto")
+        argv = super().build_argv(**kwargs)
+        if mode == "auto":
+            _require_native_flag(self.binary, command=None, flag="--approve-for-me")
+            approval_index = argv.index("--ask-for-approval")
+            del argv[approval_index:approval_index + 2]
+            argv.append("--approve-for-me")
+        return argv
 
 
 class ClaudeAdapter(ProviderAdapter):
