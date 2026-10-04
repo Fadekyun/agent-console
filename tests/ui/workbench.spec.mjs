@@ -641,17 +641,19 @@ test('collapsible branches and full-screen tree navigate every layer without los
 });
 
 
-test('failed direct input exposes the fallback without erasing its saved draft',async({page})=>{
-  await fixture(page);let socket;
-  await page.routeWebSocket('**/ws/sessions/**',ws=>{socket=ws;});
+test('failed direct input retains both the saved draft and unsent typing without replay',async({page})=>{
+  await fixture(page);let socket;const writes=[];
+  await page.routeWebSocket('**/ws/sessions/**',ws=>{socket=ws;ws.onMessage(data=>{if(Buffer.isBuffer(data))writes.push(data.toString());});});
   await page.goto('/terminal?session=session-one');await expect(page.locator('#connection')).toHaveText('Connected');
   await openInput(page);await page.locator('#composer').fill('Recoverable draft');await page.locator('#toggle-composer').click();
   socket.close({code:4000,reason:'Detached'});
   await expect(page.locator('#reconnect')).toBeVisible();
   await page.locator('.xterm-helper-textarea').focus();await page.keyboard.type('x');
   await expect(page.locator('#input-drawer')).toBeVisible();
-  await expect(page.locator('#composer')).toHaveValue('Recoverable draft');
-  await expect(page.locator('#connection')).toHaveText('Terminal is disconnected');
+  await expect(page.locator('#composer')).toHaveValue('Recoverable draftx');
+  await expect(page.locator('#composer')).toBeFocused();
+  await expect(page.locator('#connection')).toHaveText('Disconnected · unsent typing saved in Input');
+  expect(writes).toEqual([]);
 });
 
 
