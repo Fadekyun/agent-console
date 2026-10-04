@@ -189,3 +189,64 @@ test('late child creation respects navigation to results for the same session',a
   await page.evaluate(()=>location.hash='#results/session-one');await expect(page).toHaveURL(/#results\/session-one$/);
   release();await expect(page.locator('#notice')).toContainText('created-child');await expect(page).toHaveURL(/#results\/session-one$/);
 });
+
+async function visibleTerminal(page) {
+  if (await page.locator('#terminal-panel').isHidden()) await page.locator('#open-terminal').click();
+  const frame=page.frames().find(frame=>frame.url().includes('/terminal?') && !frame.isDetached());
+  await expect(frame.locator('#connection')).toHaveText('Connected');
+  return frame;
+}
+
+for (const mode of ['scroll','select']) test(`poll rename preserves iframe ${mode} mode output selection and scroll`, async ({page}) => {
+  const {sessions}=await fixture(page);
+  await page.routeWebSocket('**/ws/sessions/**',socket=>socket.send(Array.from({length:250},(_,i)=>`Retained output line ${i}\r\n`).join('')));
+  await page.goto('/work#session/session-one'); const frame=await visibleTerminal(page);
+  const element=await frame.frameElement();
+  await expect.poll(()=>frame.evaluate(()=>window.__terminal.buffer.active.baseY)).toBeGreaterThan(50);
+  await frame.locator('#terminal-more > summary').click(); await frame.locator(`[data-mode=${mode}]`).click();
+  const before=await frame.evaluate(()=>{
+    window.__terminal.scrollToLine(20);window.__terminal.select(0,22,12);
+    return {scroll:window.__terminal.buffer.active.viewportY,selection:window.__terminal.getSelection()};
+  });
+  sessions[0].tmux_name='renamed-retained'; await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('#session-title')).toHaveText('renamed-retained');
+  await expect.poll(()=>element.evaluate(node=>node.isConnected)).toBe(true);
+  await expect(frame.locator('#session-name')).toHaveText('renamed-retained');
+  await expect(frame.locator('body')).toHaveAttribute('data-terminal-mode',mode);
+  expect(await frame.evaluate(()=>({scroll:window.__terminal.buffer.active.viewportY,selection:window.__terminal.getSelection()}))).toEqual(before);
+  await expect(page.locator('iframe:not([hidden])')).toHaveAttribute('title','Terminal: renamed-retained');
+});
+
+test('poll rename retains composer focus and backward caret selection', async ({page}) => {
+  const {sessions}=await fixture(page);await page.goto('/work#session/session-one');
+  const frame=await visibleTerminal(page),element=await frame.frameElement();
+  await frame.locator('#toggle-composer').click();await frame.locator('#composer').fill('Retained selected draft');
+  await frame.locator('#composer').evaluate(node=>{node.focus();node.setSelectionRange(3,11,'backward');});
+  sessions[0].tmux_name='renamed-composer';await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('#session-title')).toHaveText('renamed-composer');
+  await expect.poll(()=>element.evaluate(node=>node.isConnected)).toBe(true);
+  await expect(frame.locator('#session-name')).toHaveText('renamed-composer');
+  await expect(frame.locator('#composer')).toBeFocused();await expect(frame.locator('#composer')).toHaveValue('Retained selected draft');
+  expect(await frame.locator('#composer').evaluate(node=>[node.selectionStart,node.selectionEnd,node.selectionDirection])).toEqual([3,11,'backward']);
+});
+
+test('poll rename with old-name reuse keeps separate durable terminal frames and drafts', async ({page}) => {
+  const {sessions}=await fixture(page);await page.goto('/work#session/session-one');
+  const original=await visibleTerminal(page),element=await original.frameElement();
+  await original.locator('#toggle-composer').click();await original.locator('#composer').fill('Original identity draft');
+  sessions[0].tmux_name='renamed-original';sessions.push({...sessions[0],id:'fresh',tmux_name:'session-one',initial_task:''});
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await expect(page.locator('#session-title')).toHaveText('renamed-original');
+  await expect.poll(()=>element.evaluate(node=>node.isConnected)).toBe(true);
+  await expect(original.locator('#session-name')).toHaveText('renamed-original');
+  await page.evaluate(()=>location.hash='#session/session-one');await expect(page.locator('#session-title')).toHaveText('session-one');
+  if(await page.locator('#terminal-panel').isHidden())await page.locator('#open-terminal').click();
+  await expect.poll(()=>page.frames().some(frame=>frame.url().includes('session_id=fresh'))).toBe(true);
+  const replacement=page.frames().find(frame=>frame.url().includes('session_id=fresh'));
+  await expect(replacement.locator('#connection')).toHaveText('Connected');await replacement.locator('#toggle-composer').click();
+  await expect(replacement.locator('#composer')).toHaveValue('');await replacement.locator('#composer').fill('Replacement identity draft');
+  await page.evaluate(()=>location.hash='#session/renamed-original');await expect(page.locator('#session-title')).toHaveText('renamed-original');
+  await expect(original.locator('#composer')).toHaveValue('Original identity draft');
+  await expect(replacement.locator('#composer')).toHaveValue('Replacement identity draft');
+  await expect(page.locator('iframe')).toHaveCount(2);
+  expect(await element.evaluate(node=>node.isConnected)).toBe(true);
+});

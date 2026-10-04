@@ -1,3 +1,10 @@
+## 0.28.21 — unreleased, 2026-10-04 (#166)
+
+- Impact: background session rename preserves the existing Workbench terminal iframe, Scroll/Select mode, output selection, scroll position, composer caret and focus. A replacement that reuses the old name has its own terminal and draft.
+- Configuration/migration: none. Refresh browser assets. Terminal frames are cached by durable session identity; no running session is renamed or migrated by the upgrade.
+- Verification: three baseline browser failures reproduced iframe replacement. All 21 focused cases passed across desktop and two mobile layouts; the corrected asynchronous replacement-frame assertion passed another three-layout check. Independent source review and exact-head CI gate promotion.
+- Rollback: select the prior release through its schema guard and restart web only, preserving sessions and state. Earlier Workbench code recreates terminals during rename.
+
 ## 0.28.20 — unreleased, 2026-10-04 (#158)
 
 - Impact: failed session creation now removes a fresh phantom row or restores a reused stopped session's original metadata, capability and transcript reference, plus prior delivery/configuration receipt history. A committed success audit is marked rolled back. This covers errors after launch bookkeeping writes.

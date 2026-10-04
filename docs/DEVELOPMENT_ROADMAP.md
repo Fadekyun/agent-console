@@ -1,3 +1,8 @@
+## Preserve terminal interaction across rename — 2026-10-04 (#166)
+
+- Cache, route and remove Workbench frames by durable session ID; refresh the retained terminal identity without reopening or focusing it.
+- Verify mode, output selection/scroll, composer focus/caret and separate drafts when an old name is reused. Native artifact ownership remains a separate issue.
+
 ## Restore metadata after failed creation — 2026-10-04 (#158)
 
 - Capture the previous row and receipt history under admission serialization, then compensate only the failed attempt after process termination is confirmed.
