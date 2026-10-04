@@ -1,5 +1,6 @@
 import { Terminal } from '/vendor/xterm.mjs';
 import { FitAddon } from '/vendor/addon-fit.mjs';
+import { guardTerminalInput } from '/static/terminal-input.js?v=0.28.10';
 import { initTheme, xtermTheme } from '/static/theme.js?v=10';
 
 // Clipboard controls keep their accessible text if icon enhancement is unavailable.
@@ -26,6 +27,7 @@ if (isEmbedded) document.body.classList.add('terminal-embedded');
 const terminal = new Terminal({ cursorBlink: true, scrollback: 10000, fontSize: coarsePointer ? 13 : 14, macOptionClickForcesSelection: true, theme: xtermTheme() });
 const fit = new FitAddon();
 terminal.loadAddon(fit); terminal.open($('#terminal'));
+guardTerminalInput(terminal);
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -36,7 +38,14 @@ const newOutput = $('#new-output');
 let socket;
 let mode = new URLSearchParams(location.search).get('mode') || 'type';
 let focusOnConnect = !coarsePointer && !isEmbedded;
-let resizeFrame;
+let resizeFrame, sentSize = '';
+function recoverTyping(value, error) {
+  const text = value.replace(/^\x1b\[200~/, '').replace(/\x1b\[201~$/, '');
+  if (!/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text) && /[^\r\n\t]/.test(text)) {
+    insertComposer(text.replace(/\r\n?/g, '\n'));
+    setStatus('Disconnected · unsent typing saved in Input');
+  } else { setStatus(error.message); showComposer(true); }
+}
 let alternateScreen = false;
 let touchStartY = null;
 let following = true;
@@ -221,7 +230,10 @@ function resize() {
     try {
       if (!viewVisible || !terminalFrame.clientWidth || !terminalFrame.clientHeight) return;
       fit.fit();
-      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
+      const size = `${terminal.cols}:${terminal.rows}`;
+      if (socket?.readyState === WebSocket.OPEN && size !== sentSize) {
+        socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows })); sentSize = size;
+      }
       if (following) terminal.scrollToBottom();
     } catch { /* the container can be between viewport sizes */ }
   });
@@ -271,6 +283,7 @@ async function connect() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const connectedName = name;
   socket = new WebSocket(`${protocol}//${location.host}/ws/sessions/${encodeURIComponent(name)}?session_id=${encodeURIComponent(sessionId)}`);
+  sentSize = '';
   socket.binaryType = 'arraybuffer'; setStatus('Connecting…'); reconnect.disabled = true;
   socket.onopen = () => { cancelReconnect(); socket.send(JSON.stringify({type:'scroll',lines:0})); nativeScrolled = false; historyMode = false; setStatus('Connected'); resize(); if (following) terminal.scrollToBottom(); if (focusOnConnect && mode === 'type' && !more.open && !document.querySelector('dialog[open]') && (document.activeElement === document.body || $('#terminal').contains(document.activeElement))) terminal.focus(); focusOnConnect = false; };
   socket.onmessage = (event) => {
@@ -530,7 +543,7 @@ async function openPeers() {
 
 // Mouse reports are terminal input, not typing. Do not cancel tmux copy mode
 // between wheel events; tmux routes them to the application that requested them.
-terminal.onData((value) => { if (mode === 'type') { try { send(value, /^\x1b\[(?:<|M)/.test(value)); } catch (error) { setStatus(error.message); showComposer(true); } } });
+terminal.onData((value) => { if (mode === 'type') { try { send(value, /^\x1b\[(?:<|M)/.test(value)); } catch (error) { recoverTyping(value, error); } } });
 terminal.onBinary((value) => {
   if (mode === 'type' && socket?.readyState === WebSocket.OPEN) {
     socket.send(Uint8Array.from(value, character => character.charCodeAt(0)));

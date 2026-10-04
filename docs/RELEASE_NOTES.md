@@ -1,3 +1,11 @@
+## 0.28.10 — unreleased, 2026-10-04 (#143)
+
+- Impact: direct terminal typing no longer resends old hidden textarea content or multiplies a mobile edit through overlapping IME fallback handlers. Actual composition and deliberate repeated keys retain their normal behavior. Pending edits flush before focus changes and Enter; text typed while disconnected is kept in Input for explicit review, never automatically replayed.
+- Transport: ordered nonblocking PTY I/O handles short writes and backpressure without blocking other sessions. Repeated unchanged resize notifications no longer cause unnecessary terminal redraw signals. A write stalled for 10 seconds closes its attachment without replay; already accepted bytes may have reached the application.
+- Configuration/migration: none. Refresh the terminal page to load the corrected input handling. No database or harness changes.
+- Verification: deterministic byte-count regressions reproduce the original whole-buffer injection, 250-copy amplification and doubled suffixes; desktop/phone typing, composition, clipboard, focus, disconnect and resize checks; isolated transport/backpressure tests; full CI and disposable live acceptance gate deployment. Synthetic mobile event sequences do not replace physical keyboard/device verification.
+- Rollback: select retained v0.28.9 through its schema guard and restart web only, preserving databases and running harnesses.
+
 ## 0.28.9 — unreleased, 2026-10-04 (#141, PR #142)
 
 - Impact: closing New session or pressing Escape retains separate in-page drafts for roots, child owners, scheduled steps, recipes and continuations. Explicit discard resets a draft; confirmed creation clears only its submitted draft. Uncertain launches retain their exact request across edits, previews, close/reopen and discard. Checking a retained launch bypasses empty draft fields; a first definitive rejection permits a fresh preview only after the status endpoint confirms that no receipt exists (HTTP 404). Earlier uncertainty remains guarded.

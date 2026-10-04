@@ -31,6 +31,7 @@ from .config import Settings
 from .database import Database
 from .logging_config import configure_logging, configure_uvicorn_logging
 from .manager import SessionManager
+from .pty_transport import PtyTransport
 from .integration_requests import IntegrationService
 from .profiles import profile_summaries
 from .skills import (
@@ -962,6 +963,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         pty_clients[client_key] += 1
         master_fd = slave_fd = None
         process = None
+        transport = None
         try:
             # Pin a tmux runtime identity while rename holds the same writer
             # lock. The attach subprocess then remains safe after lock release,
@@ -994,6 +996,8 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                     env={**os.environ, "TERM": "xterm-256color"},
                 )
             os.close(slave_fd)
+            slave_fd = None
+            transport = PtyTransport(master_fd)
         except (OSError, RuntimeError, sqlite3.Error, ValueError) as exc:
             if process is not None and process.poll() is None:
                 process.terminate()
@@ -1007,8 +1011,8 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             return
         async def read_pty() -> None:
             try:
-                while process.poll() is None:
-                    data = await asyncio.to_thread(os.read, master_fd, 8192)
+                while True:
+                    data = await transport.read()
                     if not data:
                         break
                     await websocket.send_bytes(data)
@@ -1016,11 +1020,10 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                 log.warning("ws session=%s pty error=%s", name, pty_exc, exc_info=True)
                 return
             finally:
-                if process.poll() is not None:
-                    try:
-                        await websocket.close(code=4001, reason="session ended")
-                    except RuntimeError:
-                        pass
+                # Any reader exit ends this attachment; do not leave input
+                # connected to a terminal whose output pump has failed.
+                with suppress(RuntimeError, WebSocketDisconnect):
+                    await websocket.close(code=4001, reason="session ended")
 
         def scroll_connected_session(lines: int) -> None:
             # Rename holds the same database writer lock while changing tmux.
@@ -1055,18 +1058,13 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                     if view_only:
                         await websocket.close(code=4403, reason="integration session is view-only")
                         break
-                    os.write(master_fd, message["bytes"])
+                    await transport.write(message["bytes"])
                 elif message.get("text"):
                     control = json.loads(message["text"])
                     if control.get("type") == "resize":
                         cols = max(20, min(int(control.get("cols", 80)), 500))
                         rows = max(5, min(int(control.get("rows", 24)), 200))
-                        fcntl.ioctl(
-                            master_fd,
-                            termios.TIOCSWINSZ,
-                            struct.pack("HHHH", rows, cols, 0, 0),
-                        )
-                        os.killpg(process.pid, signal.SIGWINCH)
+                        transport.resize(rows, cols, process.pid)
                     elif control.get("type") == "scroll":
                         lines = control.get("lines")
                         if type(lines) is int and -50 <= lines <= 50:
@@ -1082,14 +1080,17 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             reader.cancel()
             # Release local resources before awaiting process exit. A closing
             # websocket may cancel this task while that await is outstanding.
-            os.close(master_fd)
+            transport.close()
             pty_clients[client_key] = max(0, pty_clients[client_key] - 1)
             if process.poll() is None:
                 process.terminate()
-                try:
-                    await asyncio.to_thread(process.wait, 3)
-                except subprocess.TimeoutExpired:
-                    process.kill()
+            with suppress(asyncio.CancelledError):
+                await reader
+            try:
+                await asyncio.to_thread(process.wait, 3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                await asyncio.to_thread(process.wait, 3)
 
     return app
 

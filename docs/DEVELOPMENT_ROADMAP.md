@@ -1,3 +1,10 @@
+## Direct terminal input reliability — 2026-10-04 (#143)
+
+- Correct the non-composing mobile/IME fallback that retransmits historical textarea content or sends overlapping edits more than once, while retaining real repeats and standard composition.
+- Preserve disconnected typing as an unsent draft; flush pending edits before focus changes; suppress redundant resize traffic.
+- Replace blocking PTY I/O with cancellable readiness and complete ordered writes. Verify partial progress, backpressure, cancellation and repeated attach/detach without input replay.
+- Verification includes deterministic browser event reproductions and real transport tests; physical iOS/Android IME coverage remains an external check.
+
 ## Remaining interaction fixes — 2026-10-04 (#141)
 
 - Fixed: cancelled New session drafts now retain their own root, child, step, recipe and continuation context while the page is open; confirmed creation and explicit discard clear the appropriate draft.
