@@ -128,3 +128,18 @@ test('a Process edit arriving during the deferred composition commit is sent onc
     textarea.dispatchEvent(new CompositionEvent('compositionend',{data:'好',bubbles:true}));
   });await expect.poll(()=>writes.join('')).toBe('好1');
 });
+
+test('Process bursts immediately after composition commits remain bounded',async({page})=>{
+  const {writes}=await terminalPage(page);
+  await page.locator('.xterm-helper-textarea').evaluate(async textarea=>{
+    const subscription=window.__terminal.onData(data=>{
+      if(data!=='好')return;
+      subscription.dispose();
+      for(let i=0;i<250;i++)textarea.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',keyCode:229,bubbles:true,cancelable:true}));
+      textarea.value='好1';
+    });
+    textarea.value='';textarea.dispatchEvent(new CompositionEvent('compositionstart',{data:'',bubbles:true}));
+    textarea.value='好';textarea.dispatchEvent(new CompositionEvent('compositionupdate',{data:'好',bubbles:true}));
+    await new Promise(resolve=>setTimeout(resolve,0));textarea.dispatchEvent(new CompositionEvent('compositionend',{data:'好',bubbles:true}));
+  });await expect.poll(()=>writes.join('')).toBe('好1');
+});
