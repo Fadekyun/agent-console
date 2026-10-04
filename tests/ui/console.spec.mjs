@@ -1306,3 +1306,107 @@ for(const limit of [0,5])test(`delegation displays active child capacity ${limit
   await page.locator('.tree-node').first().locator('[data-delegate]').first().click();
   await expect(page.locator('#delegate-parent')).toHaveText(`Parent: codex-root · ${limit?'4/5 active children':'4 active children · no per-parent limit'}`);
 });
+
+test('project dialog context rejects late details and mutations while project choices stay current', async ({page}) => {
+  await mockApi(page);
+  const projects = [
+    {id:'project-a',name:'Project A',status:'active',repository:'/workspace/a',sessions:[{tmux_name:'assigned-a',tool:'shell',profile:'general',status:'detached'}]},
+    {id:'project-b',name:'Project B',status:'active',repository:'/workspace/b',sessions:[]},
+  ];
+  const pending = [], detailRequests = [];
+  let hold = null;
+  await page.route('**/api/projects**', async route => {
+    const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
+    const id = path.split('/')[3], action = path.split('/')[4];
+    if (path === '/api/projects') {
+      if (method === 'POST') projects.push({id:'project-c',status:'active',sessions:[],...request.postDataJSON()});
+      await route.fulfill({json:method === 'GET' ? projects : projects.at(-1)}); return;
+    }
+    const project = projects.find(p=>p.id===id);
+    if (method === 'GET') detailRequests.push(id);
+    if (hold === `${method}:${id}:${action || ''}`) {
+      hold = null;
+      await new Promise(resolve=>pending.push(resolve));
+    }
+    if (action === 'assign') project.sessions.push({tmux_name:request.postDataJSON().session_name,status:'detached'});
+    else if (action === 'unassign') project.sessions = project.sessions.filter(s=>s.tmux_name!==request.postDataJSON().session_name);
+    else if (method === 'PUT') Object.assign(project, request.postDataJSON());
+    else if (method === 'DELETE') projects.splice(projects.indexOf(project),1);
+    await route.fulfill({json:project});
+  });
+  await page.goto('/desktop#projects');
+  const dialog = page.locator('#project-detail-dialog');
+  const card = name => page.locator('#projects-list .profile-card').filter({has:page.getByRole('heading',{name,exact:true})});
+  const open = async name => {
+    await card(name).getByRole('button',{name:'View sessions'}).click();
+    await expect(page.locator('#project-detail-title')).toHaveText(name);
+    await expect(page.locator('#project-assign-btn')).toBeEnabled();
+  };
+  const close = async () => {
+    await dialog.locator('[data-close="project-detail-dialog"]').click();
+    await expect(dialog).not.toBeVisible();
+  };
+  const release = async path => {
+    const response = page.waitForResponse(r=>new URL(r.url()).pathname===path);
+    pending.shift()(); await response;
+  };
+  // A late detail response must not replace a newer dialog.
+  hold = 'GET:project-a:';
+  await card('Project A').getByRole('button',{name:'View sessions'}).click();
+  await expect.poll(()=>pending.length).toBe(1);
+  await close(); await open('Project B');
+  await release('/api/projects/project-a');
+  await expect(page.locator('#project-detail-title')).toHaveText('Project B');
+  await expect(page.locator('#project-assign-select')).toHaveAttribute('data-project-id','project-b');
+  await close();
+  // Closing a pending assignment must not reopen the dialog on completion.
+  await open('Project A');
+  await page.locator('#project-assign-select').selectOption('codex-root');
+  hold = 'POST:project-a:assign'; await page.locator('#project-assign-btn').click();
+  await expect.poll(()=>pending.length).toBe(1); await close();
+  const closedRefresh = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects' && r.request().method()==='GET');
+  await release('/api/projects/project-a/assign'); await closedRefresh;
+  await expect(dialog).not.toBeVisible();
+  // A late assignment must not refresh A over the newly opened B.
+  await open('Project A');
+  await page.locator('#project-assign-select').selectOption('opencode-scout');
+  hold = 'POST:project-a:assign'; await page.locator('#project-assign-btn').click();
+  await expect.poll(()=>pending.length).toBe(1); await close(); await open('Project B');
+  const beforeAssign = detailRequests.length;
+  const assignRefresh = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects' && r.request().method()==='GET');
+  await release('/api/projects/project-a/assign'); await assignRefresh;
+  expect(detailRequests.length).toBe(beforeAssign);
+  await expect(page.locator('#project-detail-title')).toHaveText('Project B');
+  await close();
+  // Reopening the same project is also a new context: retain its current selection.
+  await open('Project A'); hold = 'POST:project-a:unassign';
+  await dialog.locator('#project-detail-sessions article').filter({hasText:'assigned-a'}).getByRole('button',{name:'Unassign'}).click();
+  await expect.poll(()=>pending.length).toBe(1); await close(); await open('Project A');
+  await page.locator('#project-assign-select').selectOption('dock-two');
+  const beforeUnassign = detailRequests.length;
+  const unassignRefresh = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects' && r.request().method()==='GET');
+  await release('/api/projects/project-a/unassign'); await unassignRefresh;
+  expect(detailRequests.length).toBe(beforeUnassign);
+  await expect(page.locator('#project-assign-select')).toHaveValue('dock-two');
+  await close();
+  // Creation, edit and delete refresh New session options without losing valid choices.
+  await page.evaluate(()=>{location.hash='new';});
+  const choice = page.locator('#new-session [name="project_id"]');
+  await choice.selectOption('project-a');
+  await page.evaluate(()=>{location.hash='projects';});
+  await page.locator('#new-project-btn').click();
+  await page.locator('#new-project-form [name="name"]').fill('Project C');
+  await page.locator('#new-project-form button[type="submit"]').click();
+  await expect(choice.locator('option[value="project-c"]')).toHaveText('Project C');
+  await expect(choice).toHaveValue('project-a');
+  await card('Project A').getByRole('button',{name:'Edit project'}).click();
+  await page.locator('.project-editor [name="name"]').fill('Renamed A');
+  await page.locator('.project-editor').getByRole('button',{name:'Save project'}).click();
+  await expect(choice.locator('option[value="project-a"]')).toContainText('Renamed A');
+  await expect(choice).toHaveValue('project-a');
+  await card('Renamed A').getByRole('button',{name:'Edit project'}).click();
+  await page.locator('.project-editor').getByRole('button',{name:'Delete project',exact:true}).click();
+  await page.locator('.project-editor').getByRole('button',{name:'Delete permanently'}).click();
+  await expect(choice.locator('option[value="project-a"]')).toHaveCount(0);
+  await expect(choice).toHaveValue('');
+});

@@ -1009,8 +1009,25 @@ async function renderJevGhost() {
 
 $('#jev-ghost-refresh').onclick = renderJevGhost;
 
+let projectListGeneration = 0;
+let projectDetailContext = null;
+const projectDetailDialog = $('#project-detail-dialog');
+const currentProjectDetail = context => projectDetailContext === context && projectDetailDialog.open;
+projectDetailDialog.addEventListener('close', () => {
+  if (!projectDetailDialog.open) {
+    projectDetailContext = null;
+    delete $('#project-assign-select').dataset.projectId;
+  }
+});
+
 async function renderProjects() {
+  const generation = ++projectListGeneration;
   const projects = await api('/api/projects');
+  if (generation !== projectListGeneration) return;
+  const select = newForm.elements.project_id;
+  const choice = select.value;
+  select.replaceChildren(new Option('None', ''), ...projects.map(p => new Option(`${p.name}${p.repository ? ' · ' + p.repository : ''}`, p.id)));
+  select.value = projects.some(p => p.id === choice) ? choice : '';
   $('#projects-list').replaceChildren(...projects.map(projectCard));
 }
 
@@ -1031,8 +1048,20 @@ function projectCard(project) {
 }
 
 async function openProjectDetail(id, name) {
+  const context = {id, name};
+  projectDetailContext = context;
+  $('#project-detail-title').textContent = name;
+  $('#project-detail-repo').textContent = '';
+  $('#project-detail-status').textContent = 'Loading…';
+  $('#project-detail-sessions').replaceChildren();
+  const assignSelect = $('#project-assign-select');
+  assignSelect.replaceChildren(new Option('Select session…', ''));
+  delete assignSelect.dataset.projectId;
+  $('#project-assign-btn').disabled = true;
+  if (!projectDetailDialog.open) projectDetailDialog.showModal();
   try {
     const project = await api(`/api/projects/${encodeURIComponent(id)}`);
+    if (!currentProjectDetail(context)) return;
     $('#project-detail-title').textContent = name;
     $('#project-detail-repo').textContent = project.repository ? `Repository: ${project.repository}` : 'No repository';
     $('#project-detail-status').textContent = `Status: ${project.status} · ${(project.sessions || []).length} session(s)`;
@@ -1043,22 +1072,25 @@ async function openProjectDetail(id, name) {
       el.innerHTML = `<div class="session-title"><span>${escapeHtml(s.tmux_name || 'unknown')}</span><span class="badge ${s.status === 'detached' ? 'live' : 'stopped'}">${escapeHtml(s.profile || '')}</span></div><p class="meta">${escapeHtml(s.tool || '')} · ${escapeHtml(s.attention_state || 'normal')}${s.initial_task ? ` · ${escapeHtml(s.initial_task)}` : ''}</p>`;
       const unassignBtn = document.createElement('button'); unassignBtn.textContent = 'Unassign'; unassignBtn.className = 'danger';
       unassignBtn.onclick = async () => {
+        if (!currentProjectDetail(context) || unassignBtn.disabled) return;
+        unassignBtn.disabled = true;
         try {
           await api(`/api/projects/${encodeURIComponent(id)}/unassign`, { method: 'POST', body: JSON.stringify({ session_name: s.tmux_name }) });
-          openProjectDetail(id, name);
-        } catch (e) { showNotice(e.message, 'error'); }
+          if (currentProjectDetail(context)) openProjectDetail(id, name);
+          await renderProjects();
+        } catch (e) { if (currentProjectDetail(context)) showNotice(e.message, 'error'); }
+        finally { unassignBtn.disabled = false; }
       };
       el.append(unassignBtn);
       list.append(el);
     });
     if (!sessions.length) list.innerHTML = '<p class="empty">No sessions assigned to this project.</p>';
-    const assignSelect = $('#project-assign-select');
     const availSessions = (state.sessions || []).filter((s) => s.running && !sessions.find((ps) => ps.tmux_name === s.tmux_name));
     assignSelect.replaceChildren(...availSessions.map((s) => new Option(s.tmux_name, s.tmux_name)));
     assignSelect.prepend(new Option('Select session…', ''));
     assignSelect.dataset.projectId = id;
-    $('#project-detail-dialog').showModal();
-  } catch (e) { showNotice(e.message, 'error'); }
+    $('#project-assign-btn').disabled = false;
+  } catch (e) { if (currentProjectDetail(context)) { $('#project-detail-status').textContent = 'Unable to load project.'; showNotice(e.message, 'error'); } }
 }
 
 $('#new-project-form').onsubmit = async (event) => {
@@ -1067,19 +1099,23 @@ $('#new-project-form').onsubmit = async (event) => {
   try {
     await api('/api/projects', { method: 'POST', body: JSON.stringify({ name: event.target.elements.name.value, repository: event.target.elements.repository.value || null, description: event.target.elements.description.value || null }) });
     status.textContent = 'Created.'; $('#new-project-dialog').close();
-    renderProjects();
+    await renderProjects();
   } catch (e) { status.textContent = e.message; } finally { submit.disabled = false; }
 };
 $('#new-project-btn').onclick = () => { $('#new-project-form').reset(); $('#new-project-status').textContent = ''; $('#new-project-dialog').showModal(); };
 $('#project-assign-btn').onclick = async () => {
+  const context = projectDetailContext;
   const select = $('#project-assign-select');
   const sessionName = select.value;
-  const projectId = select.dataset.projectId;
-  if (!sessionName || !projectId) return;
+  const button = $('#project-assign-btn');
+  if (!context || !currentProjectDetail(context) || button.disabled || !sessionName || select.dataset.projectId !== context.id) return;
+  button.disabled = true;
   try {
-    await api(`/api/projects/${encodeURIComponent(projectId)}/assign`, { method: 'POST', body: JSON.stringify({ session_name: sessionName }) });
-    openProjectDetail(projectId, $('#project-detail-title').textContent);
-  } catch (e) { showNotice(e.message, 'error'); }
+    await api(`/api/projects/${encodeURIComponent(context.id)}/assign`, { method: 'POST', body: JSON.stringify({ session_name: sessionName }) });
+    if (currentProjectDetail(context)) openProjectDetail(context.id, context.name);
+    await renderProjects();
+  } catch (e) { if (currentProjectDetail(context)) showNotice(e.message, 'error'); }
+  finally { if (currentProjectDetail(context)) button.disabled = false; }
 };
 
 function updateAgentModeField() {
@@ -1257,14 +1293,7 @@ async function start() {
   newForm.elements.profile.onchange = () => { const p = state.identity.profiles.find(x => x.name === newForm.elements.profile.value); newForm.elements.worktree.checked = p ? p.worktree_requirement !== 'none' : false; updateAgentModeField(); };
   delegateForm.elements.tool.onchange = () => { updateContextSelect(delegateForm.elements.tool, delegateForm.elements.auth_context); $('#delegate-mode-field').hidden = delegateForm.elements.tool.value !== 'opencode'; };
   updateNewToolFields(); selectView(location.hash.slice(1) || 'sessions', false); await refresh();
-  (async () => {
-    try {
-      const projects = await api('/api/projects');
-      const projSelect = newForm.elements.project_id;
-      projSelect.replaceChildren(...projects.map((p) => new Option(`${p.name}${p.repository ? ' · ' + p.repository : ''}`, p.id)));
-      projSelect.prepend(new Option('None', ''));
-    } catch {}
-  })();
+  renderProjects().catch(() => {});
   setInterval(() => { if (!document.hidden && !$$('dialog').some((dialog) => dialog.open)) refresh().catch((error) => showNotice(error.message, 'error')); }, 10000);
 }
 
