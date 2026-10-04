@@ -61,12 +61,36 @@ class PiSkillDeliveryTests(unittest.TestCase):
                     self.assertFalse(result['validation']['valid'])
                     self.assertIn('unverified-version', ';'.join(result['validation']['issues']))
                     self.assertFalse(result['delivery_version']['mutation_allowed'])
-            with patch('agent_console.skills._default_version_probe', return_value='0.99.2'):
+            with patch('agent_console.skills._default_version_probe', return_value='1.0.2'):
                 result = resolve_session_skills(database, 'general', 'pi', canonical_root=self.library)
                 self.assertTrue(result['validation']['valid'], result['validation'])
                 self.assertEqual(result['materialized'][0]['name'], 'portable-guide')
-                self.assertEqual(result['delivery_version']['installed_version'], '0.99.2')
+                self.assertEqual(result['delivery_version']['installed_version'], '1.0.2')
 
+
+    def test_verified_pi_does_not_override_assigned_harness_restrictions(self):
+        (self.skill / 'agent-console.json').write_text('{"compatible_harnesses":["codex"]}')
+        database = Database(self.root / 'state/main.sqlite3'); database.migrate()
+        with patch('agent_console.skills.SKILL_CATALOG', []):
+            assign_skill(database, 'orchestrator', 'portable-guide', canonical_root=self.library)
+            with patch('agent_console.skills._default_version_probe', return_value='1.0.2'):
+                result = resolve_session_skills(database, 'orchestrator', 'pi', canonical_root=self.library)
+        self.assertFalse(result['validation']['valid'])
+        self.assertIn('harness is incompatible', ';'.join(result['validation']['issues']))
+        self.assertEqual(result['materialized'], [])
+
+    def test_unverified_pi_error_identifies_runtime_and_preserves_exact_gate(self):
+        database = Database(self.root / 'state/main.sqlite3'); database.migrate()
+        with patch('agent_console.skills.SKILL_CATALOG', []):
+            assign_skill(database, 'general', 'portable-guide', canonical_root=self.library)
+            for version in ('1.0.3', '1.0.2-beta.1', 'unknown'):
+                with self.subTest(version=version), patch('agent_console.skills._default_version_probe', return_value=version):
+                    result = resolve_session_skills(database, 'general', 'pi', canonical_root=self.library)
+                    self.assertFalse(result['validation']['valid'])
+                    detail = ';'.join(result['validation']['issues'])
+                    self.assertIn('installed: '+version, detail)
+                    self.assertIn('verified: 0.99.2, 1.0.2', detail)
+                    self.assertFalse(result['delivery_version']['mutation_allowed'])
 
 if __name__ == '__main__':
     unittest.main()

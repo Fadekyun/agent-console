@@ -1,3 +1,9 @@
+## Pi 1.0.2 selected-skill admission — 2026-10-04 (#145)
+
+- Verified native selected-snapshot delivery before adding exact 1.0.2 compatibility; clearer installed/verified-version diagnostics.
+- Preserve all skill/profile policies and unknown-version denial. The current Pi orchestrator's incompatible legacy assignments remain an explicit operator-policy follow-up, not silently skipped.
+- Reproducible native checks and isolated create/restart regressions cover this bounded compatibility update; physical/runtime model interaction remains separately verified.
+
 ## Direct terminal input reliability — 2026-10-04 (#143)
 
 - Correct the non-composing mobile/IME fallback that retransmits historical textarea content or sends overlapping edits more than once, while retaining real repeats and standard composition.
