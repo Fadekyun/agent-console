@@ -1,3 +1,8 @@
+## Profile save and edit ordering — 2026-10-04 (#149)
+
+- Track editor revisions and save generations on desktop and mobile so delayed success and close callbacks cannot discard newer instructions.
+- Preserve the existing successful-save close behavior when the latest submitted text is unchanged. Isolated browser checks cover pending requests, delayed closure, second saves and stale dialogs.
+
 ## Preserve hidden drafts during typing recovery — 2026-10-04 (#147)
 
 - Automatic disconnected recovery appends printable input after the existing draft independently of its hidden selection, saves it and opens Input for review.
