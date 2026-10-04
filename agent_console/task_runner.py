@@ -623,8 +623,11 @@ def run_request(
             }, expected=("launching", "started", "delivery_unknown"))
             return 1
     remaining_members = _active_group_members(pgid)
-    if remaining_members is None or remaining_members:
-        cleanup_uncertain = True
+    # The leader can exit between poll() and the identity check used for safe
+    # signaling. Once this Popen has reaped that exact child and a complete scan
+    # proves its group empty on the same boot, the earlier signal race is resolved.
+    cleanup_uncertain = (remaining_members is None or bool(remaining_members)
+                         or _current_boot_id() != boot_id)
 
     if cleanup_uncertain:
         _update(database, request_uuid, {

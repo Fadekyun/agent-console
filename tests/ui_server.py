@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import mimetypes
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ROUTES = {
+    "/environment": ROOT / "web" / "static" / "environment.html",
+    "/work": ROOT / "web" / "static" / "workbench.html",
     "/": ROOT / "web" / "static" / "index.html",
     "/desktop": ROOT / "web" / "static" / "index.html",
     "/mobile": ROOT / "web" / "static" / "mobile.html",
@@ -43,4 +46,4 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", 4173), Handler).serve_forever()
+    ThreadingHTTPServer(("127.0.0.1", int(os.environ.get("AGCONSOLE_UI_TEST_PORT", "4173"))), Handler).serve_forever()

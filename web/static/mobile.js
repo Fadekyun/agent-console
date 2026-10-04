@@ -1,7 +1,9 @@
-import { initTheme } from '/static/theme.js?v=8';
+import { projectActions } from '/static/project-actions.js?v=1';
+import { copyText as copyWithFallback } from '/static/clipboard.js?v=1';
+import { initTheme } from '/static/theme.js?v=10';
 import { skillActionMessage, skillToolDiagnostic } from '/static/skill-diagnostics.js?v=1';
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
-const form=$('#mobile-new'); let identity; let currentModels=[]; let loadModelsReq=0; let pending; let currentPlanId;
+const form=$('#mobile-new'); let identity; let currentModels=[]; let loadModelsReq=0; let pendingKill; let pendingAttention; let killRequest=0; let attentionRequest=0; let delegateRequest=0; let creatingChild=false; let sessionRead=0; const sessionMutations=new Set(); let currentPlanId; let profileEditorRequest=0; let planRequest=0; let creatingSession=false; const startingPlans=new Set();
 async function api(path, options={}) { const response=await fetch(path,{cache:'no-store',headers:{'Content-Type':'application/json',...(options.headers||{})},...options}); const body=await response.json(); if(!response.ok) throw new Error(body.detail||response.statusText); return body; }
 function contexts() { const tool=form.elements.tool.value, provider=form.elements.provider.value; if(tool==='opencode'&&!provider){form.elements.auth_context.replaceChildren();return;} const values=identity.auth_contexts.filter((x)=>x.tool===tool && (tool!=='opencode'||x.provider===provider) && (tool!=='opencode'||x.enabled!==false)); form.elements.auth_context.replaceChildren(...values.map((x)=>new Option(`${x.name} · ${x.status}`,x.name,false,x.default))); }
 function renderModels(values){$('#mobile-models').replaceChildren(...values.map((m)=>{const label=m.estimated_usd==null?(m.cost.output==null?'unknown':`$${m.cost.output}/M out`):`est. $${m.estimated_usd.toFixed(6)}${m.cheapest?' · CHEAPEST':''}`;const o=new Option(`${m.name} · ${label}`,m.model);o.disabled=!m.selectable;return o;}));}
@@ -28,19 +30,84 @@ function toolChanged(){
   if(open)models();
   if(native){form.elements.model.closest('label').hidden=false;nativeModelChanged();}
 }
-function sessionCard(session){const article=document.createElement('article');article.className='mobile-session';const title=document.createElement('strong');title.textContent=session.tmux_name;const meta=document.createElement('small');meta.textContent=`${session.tool||'legacy'} · ${session.profile||'legacy'} · ${session.live_state||'tmux live'}`;const badge=document.createElement('small');badge.className='attention-badge';badge.textContent=session.attention_state||'';const actions=document.createElement('div');actions.className='mobile-session-actions';const attach=document.createElement('a');attach.className='button primary';attach.textContent='Attach';attach.href=`/terminal?session=${encodeURIComponent(session.tmux_name)}`;const interrupt=document.createElement('button');interrupt.textContent='Interrupt';interrupt.onclick=()=>life(session,'interrupt');const restart=document.createElement('button');restart.textContent='Restart';restart.onclick=()=>life(session,'restart');const kill=document.createElement('button');kill.textContent='Kill';kill.onclick=()=>confirmKill(session);const details=document.createElement('button');details.textContent='Details';details.onclick=()=>openAttention(session);const btns=[];if(session.actions.includes('attach'))btns.push(attach);if(session.actions.includes('interrupt'))btns.push(interrupt);if(session.actions.includes('restart'))btns.push(restart);if(session.actions.includes('kill'))btns.push(kill);btns.push(details);actions.append(...btns);article.append(title,meta,badge,actions);return article;}
-async function life(s,op){await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${op}`,{method:'POST',body:'{}'});await renderSessions();}
-function confirmKill(s){pending=s;$('#mobile-kill-name').textContent=s.tmux_name;$('#mobile-kill-unmanaged').hidden=!!s.managed;$('#mobile-kill-allow').checked=false;document.getElementById('mobile-kill-dialog').showModal();}
-function openAttention(s){pending=s;$('#mobile-attention-state').value=s.attention_state||'normal';$('#mobile-attention-note').value=s.attention_note||'';document.getElementById('mobile-attention-dialog').showModal();}
-async function renderSessions(){try{const sessions=await api('/api/sessions?state=all');$('#mobile-sessions').replaceChildren(...sessions.map(sessionCard));if(!sessions.length)$('#mobile-sessions').textContent='No sessions.';}catch(e){$('#mobile-sessions').textContent=e.message;}}
+function sessionCard(session){const article=document.createElement('article');article.className='mobile-session';article.dataset.session=session.id||session.tmux_name;const title=document.createElement('strong');title.textContent=session.tmux_name;const meta=document.createElement('small');meta.textContent=`${session.tool||'legacy'} · ${session.profile||'legacy'} · ${session.live_state||'tmux live'}`;const badge=document.createElement('small');badge.className='attention-badge';badge.textContent=session.attention_state||'';const actions=document.createElement('div');actions.className='mobile-session-actions';const attach=document.createElement('a');attach.className='button primary';attach.textContent='Attach';attach.href=`/terminal?session=${encodeURIComponent(session.tmux_name)}`;const interrupt=document.createElement('button');interrupt.textContent='Interrupt';interrupt.onclick=()=>life(session,'interrupt');const restart=document.createElement('button');restart.textContent='Restart';restart.onclick=()=>life(session,'restart');const kill=document.createElement('button');kill.textContent='Kill';kill.onclick=()=>confirmKill(session);const details=document.createElement('button');details.textContent='Details';details.onclick=()=>openAttention(session);const btns=[];if(session.actions.includes('attach'))btns.push(attach);if(session.actions.includes('interrupt'))btns.push(interrupt);if(session.actions.includes('restart'))btns.push(restart);if(session.actions.includes('kill'))btns.push(kill);btns.push(details);for(const button of [interrupt,restart,kill])button.disabled=sessionMutations.has(session.id||session.tmux_name);actions.append(...btns);article.append(title,meta,badge,actions);return article;}
+function sessionStatus(text){$('#mobile-sessions-status').textContent=text;}
+function sessionBusy(s,busy){
+ const key=s.id||s.tmux_name;
+ if(busy)sessionMutations.add(key);else sessionMutations.delete(key);
+ $$('#mobile-sessions .mobile-session').forEach(card=>{if(card.dataset.session===key)$$('button',card).filter(b=>['Interrupt','Restart','Kill'].includes(b.textContent)).forEach(b=>b.disabled=busy);});
+}
+async function life(s,op){
+ const key=s.id||s.tmux_name;if(sessionMutations.has(key))return;
+ sessionBusy(s,true);sessionStatus(`${op==='restart'?'Restarting':'Interrupting'} ${s.tmux_name}…`);
+ try{await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${op}`,{method:'POST',body:'{}'});await renderSessions();}
+ catch(e){sessionStatus(`${s.tmux_name}: ${e.message}`);}
+ finally{sessionBusy(s,false);}
+}
+function confirmKill(s){pendingKill=s;killRequest++;$('#mobile-kill-status').textContent='';$('#mobile-kill-confirm').disabled=false;$('#mobile-kill-name').textContent=s.tmux_name;$('#mobile-kill-unmanaged').hidden=!!s.managed;$('#mobile-kill-allow').checked=false;document.getElementById('mobile-kill-dialog').showModal();}
+function openAttention(s){pendingAttention=s;attentionRequest++;$('#mobile-attention-status').textContent='';$('#mobile-attention-save').disabled=false;$('#mobile-attention-state').value=s.attention_state||'normal';$('#mobile-attention-note').value=s.attention_note||'';document.getElementById('mobile-attention-dialog').showModal();}
+async function renderSessions(){
+ const request=++sessionRead;
+ try{
+  const sessions=await api('/api/sessions?state=all');if(request!==sessionRead)return;
+  sessions.sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||'')||(a.id||a.tmux_name).localeCompare(b.id||b.tmux_name));
+  $('#mobile-sessions').replaceChildren(...sessions.map(sessionCard));
+  if(!sessions.length)$('#mobile-sessions').textContent='No sessions.';
+  sessionStatus('');
+ }catch(e){if(request===sessionRead)sessionStatus(`Refresh failed: ${e.message}. Your last session list is still shown.`);}
+}
 async function refresh(){try{await renderSessions();}catch(e){$('#mobile-sessions').textContent=e.message;}}
 function planCard(p){const article=document.createElement('article');article.className='mobile-plan';const title=document.createElement('strong');title.textContent=p.title;const meta=document.createElement('small');meta.textContent=`${p.repository||''} · ${p.status}${p.revision_state?(' · '+p.revision_state):''}`;const actions=document.createElement('div');actions.className='mobile-session-actions';const view=document.createElement('button');view.textContent='View';view.onclick=()=>viewPlan(p.id);const copy=document.createElement('button');copy.textContent='Copy';copy.onclick=()=>copyText('agentctl plan execute '+p.id);const start=document.createElement('button');start.textContent='Start';start.className='primary';start.onclick=()=>startPlan(p);actions.append(view,copy,start);article.append(title,meta,actions);return article;}
 async function renderPlans(){try{const plans=await api('/api/plans');$('#mobile-plans').replaceChildren(...plans.map(planCard));if(!plans.length)$('#mobile-plans').textContent='No plans yet.';}catch(e){$('#mobile-plans').textContent=e.message;}}
-async function viewPlan(id){const p=await api(`/api/plans/${encodeURIComponent(id)}`);currentPlanId=id;$('#mobile-plan-title').textContent=p.title;$('#mobile-plan-body').textContent=p.plan||'(empty)';$('#mobile-plan-start').onclick=()=>startPlan(p);document.getElementById('mobile-plan-dialog').showModal();}
-async function startPlan(p){if(!confirm('Start implementation of "'+p.title+'"?'))return;await api(`/api/plans/${encodeURIComponent(p.id)}/execute`,{method:'POST',body:JSON.stringify({confirmed:true,profile:'coder'})});document.getElementById('mobile-plan-dialog').close();await renderPlans();}
-async function copyText(t){try{await navigator.clipboard.writeText(t);}catch{prompt('Copy command',t);}}
-async function renderTree(){try{const data=await api('/api/delegations');const roots=Array.isArray(data?.roots)?data.roots:[];const tree=$('#mobile-tree');tree.replaceChildren();if(!roots.length){tree.textContent='No sessions.';return;}for(const r of roots){const node=document.createElement('div');node.className='mobile-tree-node';const title=document.createElement('strong');title.textContent=r.tmux_name;const meta=document.createElement('small');meta.textContent=`${r.tool||''} · ${r.profile||''}`;const actions=document.createElement('div');actions.className='mobile-session-actions';const delegate=document.createElement('button');delegate.textContent='Delegate';delegate.onclick=()=>openDelegate(r.tmux_name);const attach=document.createElement('a');attach.className='button primary';attach.textContent='Attach';attach.href=`/terminal?session=${encodeURIComponent(r.tmux_name)}`;actions.append(delegate,attach);node.append(title,meta,actions);for(const c of r.children||[]){const child=document.createElement('div');child.className='mobile-tree-child';child.textContent=`↳ ${c.tmux_name} (${c.profile})`;node.append(child);}tree.append(node);}const groups=await api('/api/session-groups').catch(()=>[]);if(groups.length){const sep=document.createElement('hr');tree.append(sep);const heading=document.createElement('strong');heading.textContent='Session groups';tree.append(heading);for(const g of groups){const gc=document.createElement('div');gc.className='mobile-tree-node';const gt=document.createElement('strong');gt.textContent=g.name;const gm=document.createElement('small');gm.textContent=`${g.purpose||'No purpose'} · ${g.member_count||0} sessions`;const ga=document.createElement('div');ga.className='mobile-session-actions';const gOpen=document.createElement('button');gOpen.textContent='Open';gOpen.onclick=async()=>{try{const r=await api(`/api/session-groups/${encodeURIComponent(g.id)}/open`,{method:'POST'});const terms=(r.available||[]).slice(0,4).map((s)=>s.tmux_name);if(terms.length){let msg=terms.join(', ');if((r.available||[]).length>4)msg+=' (and more — tab limit)';await renderSessions();alert(`Opening: ${msg}`);}else{alert('No running sessions in this group.');}}catch(e){alert(e.message);}};ga.append(gOpen);gc.append(gt,gm,ga);tree.append(gc);}}}catch(e){$('#mobile-tree').textContent=e.message;}}
-function openDelegate(parentName){const f=$('#mobile-delegate');f.elements.parent.value=parentName;const session=identity.profiles.find(()=>false);try{const profiles=JSON.parse(sessionStorage.getItem('agent-console-profiles')||'null')||[];let allowed=['planner','researcher','reviewer','scout'];const parentProfile=session?.profile||'general';const pm=profiles.find((p)=>p.name===parentProfile);if(pm&&pm.allowed_delegation_profiles)allowed=pm.allowed_delegation_profiles;f.elements.profile.replaceChildren(...allowed.map((n)=>new Option(n,n,false,n==='planner')));}catch{f.elements.profile.replaceChildren(...identity.profiles.filter((x)=>x.read_write_capability==='read_only').map((x)=>new Option(x.display_name||x.name,x.name,false,x.name==='planner')));}f.elements.tool.replaceChildren(...identity.tool_status.filter((x)=>x.status==='ready').map((x)=>new Option(x.name,x.name,false,x.name===identity.default_tool)));f.elements.auth_context.replaceChildren(...identity.auth_contexts.filter((x)=>x.tool===f.elements.tool.value).map((x)=>new Option(`${x.name} · ${x.status}`,x.name,false,x.default)));f.elements.tool.onchange=()=>f.elements.auth_context.replaceChildren(...identity.auth_contexts.filter((x)=>x.tool===f.elements.tool.value).map((x)=>new Option(`${x.name} · ${x.status}`,x.name,false,x.default)));document.getElementById('mobile-delegate-dialog').showModal();}
+async function viewPlan(id){
+  const request=++planRequest,dialog=$('#mobile-plan-dialog');
+  const current=()=>request===planRequest&&dialog.open;
+  currentPlanId=null;
+  $('#mobile-plan-title').textContent='Loading plan…';
+  $('#mobile-plan-body').textContent='';
+  $('#mobile-plan-start').disabled=true;$('#mobile-plan-copy').disabled=true;
+  $('#mobile-plan-start').onclick=null;
+  dialog.showModal();
+  try{
+    const p=await api(`/api/plans/${encodeURIComponent(id)}`);
+    if(!current())return;
+    currentPlanId=id;
+    $('#mobile-plan-title').textContent=p.title;
+    $('#mobile-plan-body').textContent=p.plan||'(empty)';
+    $('#mobile-plan-start').onclick=()=>startPlan(p);
+    $('#mobile-plan-start').disabled=startingPlans.has(id);$('#mobile-plan-copy').disabled=false;
+  }catch(e){if(current())$('#mobile-plan-body').textContent=e.message;}
+}
+async function startPlan(p){
+  if(startingPlans.has(p.id)||!confirm('Start implementation of "'+p.title+'"?'))return;
+  const request=planRequest;
+  startingPlans.add(p.id);
+  if(currentPlanId===p.id)$('#mobile-plan-start').disabled=true;
+  try{
+    await api(`/api/plans/${encodeURIComponent(p.id)}/execute`,{method:'POST',body:JSON.stringify({confirmed:true,profile:'coder'})});
+    if(request===planRequest&&currentPlanId===p.id)$('#mobile-plan-dialog').close();
+    await renderPlans();
+  }catch(e){alert(e.message);}
+  finally{startingPlans.delete(p.id);if(currentPlanId===p.id)$('#mobile-plan-start').disabled=false;}
+}
+async function copyText(t){return copyWithFallback(t,{title:'Copy command'});}
+async function renderTree(){try{const data=await api('/api/delegations');const roots=Array.isArray(data?.roots)?data.roots:[];const tree=$('#mobile-tree');tree.replaceChildren();if(!roots.length){tree.textContent='No sessions.';}for(const r of roots){const node=document.createElement('div');node.className='mobile-tree-node';const title=document.createElement('strong');title.textContent=r.tmux_name;const meta=document.createElement('small');meta.textContent=`${r.tool||''} · ${r.profile||''}`;const actions=document.createElement('div');actions.className='mobile-session-actions';const delegate=document.createElement('button');delegate.textContent='Delegate';delegate.onclick=()=>openDelegate(r);const attach=document.createElement('a');attach.className='button primary';attach.textContent='Attach';attach.href=`/terminal?session=${encodeURIComponent(r.tmux_name)}`;actions.append(delegate,attach);node.append(title,meta,actions);for(const c of r.children||[]){const child=document.createElement('div');child.className='mobile-tree-child';child.textContent=`↳ ${c.tmux_name} (${c.profile})`;node.append(child);}tree.append(node);}const groups=await api('/api/session-groups').catch(()=>[]);if(groups.length){const sep=document.createElement('hr');tree.append(sep);const heading=document.createElement('strong');heading.textContent='Session groups';tree.append(heading);for(const g of groups){const gc=document.createElement('div');gc.className='mobile-tree-node';const gt=document.createElement('strong');gt.textContent=g.name;const gm=document.createElement('small');gm.textContent=`${g.purpose||'No purpose'} · ${g.member_count||0} sessions`;const ga=document.createElement('div');ga.className='mobile-session-actions';const gOpen=document.createElement('button');gOpen.textContent='Open';gOpen.title='Open the first running session';gOpen.onclick=async()=>{if(gOpen.disabled)return;gOpen.disabled=true;try{const r=await api(`/api/session-groups/${encodeURIComponent(g.id)}/open`,{method:'POST'});const first=(r.available||[])[0];if(first){location.href=`/terminal?session=${encodeURIComponent(first.tmux_name)}`;}else{alert('No running sessions in this group.');}}catch(e){alert(e.message);}finally{gOpen.disabled=false;}};ga.append(gOpen);gc.append(gt,gm,ga);tree.append(gc);}}}catch(e){$('#mobile-tree').textContent=e.message;}}
+function openDelegate(session) {
+  const form = $('#mobile-delegate');
+  delegateRequest++;form.reset();$('#mobile-delegate-status').textContent='';$('button[type=submit]',form).disabled=creatingChild;
+  form.elements.repository.value=session.repository||'';
+  form.elements.parent.value = session.tmux_name;
+  const profiles = identity.profiles || [];
+  const parent = profiles.find(profile => profile.name === (session.profile || 'general'));
+  const allowed = new Set(parent?.allowed_delegation_profiles || profiles.filter(profile => profile.read_write_capability === 'read_only').map(profile => profile.name));
+  const choices = profiles.filter(profile => allowed.has(profile.name) && (session.agent_mode !== 'plan' || profile.read_write_capability === 'read_only'));
+  form.elements.profile.replaceChildren(...choices.map(profile => new Option(profile.display_name || profile.name, profile.name, false, profile.name === 'planner')));
+  form.elements.tool.replaceChildren(...identity.tool_status.filter(tool => tool.status === 'ready').map(tool => new Option(tool.name, tool.name, false, tool.name === identity.default_tool)));
+  const updateContexts = () => form.elements.auth_context.replaceChildren(...identity.auth_contexts.filter(context => context.tool === form.elements.tool.value).map(context => new Option(`${context.name} · ${context.status}`, context.name, false, context.default)));
+  updateContexts();
+  form.elements.tool.onchange = updateContexts;
+  document.getElementById('mobile-delegate-dialog').showModal();
+}
 async function renderMobileProfiles(){try{const entries=await api('/api/profiles');$('#mobile-profiles-list').replaceChildren(...entries.map((e)=>{const card=document.createElement('div');card.className='mobile-profile-card';const h=document.createElement('strong');h.textContent=e.display_name||e.name;const m=document.createElement('small');m.className='muted';m.textContent=`${e.read_write_capability} · worktree: ${e.worktree_requirement}${e.requires_human_approval?' · requires approval':''} · ${e.status}`;const d=document.createElement('p');d.className='muted';d.textContent=e.description||'';const btn=document.createElement('button');btn.textContent='Edit';btn.onclick=()=>openMobileProfileEditor(e.name);card.append(h,m,d,btn);return card;}));if(!entries.length)$('#mobile-profiles-list').textContent='No profiles loaded.';}catch(e){$('#mobile-profiles-list').textContent=e.message;}}
 async function renderMobileSkills(){try{const data=await api('/api/skills');$('#mobile-skills-list').replaceChildren(...data.entries.map((e)=>{const card=document.createElement('div');card.className='mobile-skill-card';const h=document.createElement('strong');h.textContent=e.name;const k=document.createElement('small');k.className='muted';k.textContent=`${e.kind} ${e.description||''}`;const t=document.createElement('div');t.style.display='flex';t.style.gap='6px';t.style.flexWrap='wrap';(e.synced||[]).forEach((s)=>t.append(skillToolDiagnostic(s,(data.providers||[]).find((provider)=>provider.tool===s.tool))));const approval=document.createElement('div');approval.className='skill-approval-info';if(e.kind==='superpower'){const allowed=e.allowed_profiles&&e.allowed_profiles.length?e.allowed_profiles.join(', '):'all profiles';approval.textContent=e.requires_approval?`Superpower · approval required · profiles: ${allowed}`:`Superpower · profiles: ${allowed}`;}else{approval.textContent='Standard skill · no approval gate';}const assignedList=document.createElement('div');assignedList.className='skill-assigned-list';if(e.assigned_to&&e.assigned_to.length){const label=document.createElement('span');label.className='skill-assigned-label';label.textContent='Assigned:';assignedList.append(label);e.assigned_to.forEach((a)=>{const tag=document.createElement('span');tag.className='skill-assigned-tag';tag.textContent=a.profile;assignedList.append(tag);});}const btnRow=document.createElement('div');btnRow.style.display='flex';btnRow.style.gap='6px';btnRow.style.flexWrap='wrap';const assignBtn=document.createElement('button');assignBtn.className='compact';assignBtn.textContent='Assign';assignBtn.onclick=()=>openMobileAssignSkill(e.name);btnRow.append(assignBtn);if(e.assigned_to&&e.assigned_to.length){e.assigned_to.forEach((a)=>{const rmBtn=document.createElement('button');rmBtn.className='compact danger';rmBtn.textContent=`Unassign ${a.profile}`;rmBtn.onclick=()=>mobileUnassignSkill(e.name,a.profile);btnRow.append(rmBtn);});}card.append(h,k,t,approval,assignedList,btnRow);return card;}));if(data.errors&&data.errors.length){const p=document.createElement('p');p.className='muted';p.textContent='Catalog errors: '+data.errors.join(', ');$('#mobile-skills-list').append(p);}}catch(e){$('#mobile-skills-list').textContent=e.message;}}
 async function openMobileAssignSkill(skillName){try{const profiles=await api('/api/profiles');const p=prompt(`Assign "${skillName}" to which profile?\nAvailable: ${profiles.map((x)=>x.name).join(', ')}`);if(!p)return;if(!profiles.some((x)=>x.name===p)){alert(`Unknown profile: ${p}`);return;}await api('/api/skills/assign',{method:'POST',body:JSON.stringify({profile:p,skill_name:skillName})});renderMobileSkills();}catch(e){alert(e.message);}}
@@ -67,18 +134,80 @@ async function runMobileSkillsDoctor(){
 }
 $('#mobile-skills-sync').onclick=runMobileSkillsSync;
 $('#mobile-skills-doctor').onclick=runMobileSkillsDoctor;
-async function openMobileProfileEditor(name){const d=$('#mobile-profile-editor-dialog');const f=$('#mobile-profile-editor-form');f.reset();f.elements.profile_name.value=name;$('#mobile-profile-editor-title').textContent=`Edit: ${name}`;$('#mobile-profile-editor-status').textContent='Loading…';d.showModal();try{const data=await api(`/api/profiles/${encodeURIComponent(name)}`);f.elements.content.value=data.content||'';$('#mobile-profile-editor-meta').innerHTML=[`<span>${data.read_write_capability}</span>`,`<span>worktree: ${data.worktree_requirement}</span>`].join(' ');$('#mobile-profile-editor-status').textContent='';}catch(e){$('#mobile-profile-editor-status').textContent=e.message;}}
-$('#mobile-profile-editor-form').onsubmit=async(e)=>{e.preventDefault();const s=$('#mobile-profile-editor-status');s.textContent='Saving…';try{await api(`/api/profiles/${encodeURIComponent(e.target.elements.profile_name.value)}`,{method:'PUT',body:JSON.stringify({content:e.target.elements.content.value})});s.textContent='Saved.';setTimeout(()=>$('#mobile-profile-editor-dialog').close(),800);renderMobileProfiles();}catch(err){s.textContent=err.message;}};
+async function openMobileProfileEditor(name) {
+  const request=++profileEditorRequest;
+  const dialog=$('#mobile-profile-editor-dialog'), form=$('#mobile-profile-editor-form');
+  const current=()=>request===profileEditorRequest&&dialog.open;
+  const submit=$('button[type="submit"]',form);
+  form.reset(); form.elements.profile_name.value=name;
+  submit.disabled=true; form.elements.content.disabled=true;
+  $('#mobile-profile-editor-title').textContent=`Edit: ${name}`;
+  $('#mobile-profile-editor-meta').textContent=''; $('#mobile-profile-editor-status').textContent='Loading…';
+  dialog.showModal();
+  try {
+    const data=await api(`/api/profiles/${encodeURIComponent(name)}`);
+    if(!current())return;
+    form.elements.content.value=data.content||'';
+    $('#mobile-profile-editor-meta').textContent=`${data.read_write_capability} · worktree: ${data.worktree_requirement}`;
+    $('#mobile-profile-editor-status').textContent='';
+    form.elements.content.disabled=false; submit.disabled=false;
+  } catch(error) { if(current())$('#mobile-profile-editor-status').textContent=error.message; }
+}
+$('#mobile-profile-editor-form').onsubmit=async(event)=>{
+  event.preventDefault();
+  const form=event.target,dialog=$('#mobile-profile-editor-dialog'),submit=$('button[type="submit"]',form);
+  if(submit.disabled)return;
+  const request=profileEditorRequest,name=form.elements.profile_name.value;
+  const current=()=>request===profileEditorRequest&&dialog.open;
+  const status=$('#mobile-profile-editor-status'); status.textContent='Saving…'; submit.disabled=true;
+  try {
+    await api(`/api/profiles/${encodeURIComponent(name)}`,{method:'PUT',body:JSON.stringify({content:form.elements.content.value})});
+    if(current()){status.textContent='Saved.';setTimeout(()=>{if(current())dialog.close();},800);}
+    renderMobileProfiles();
+  } catch(error){if(current())status.textContent=error.message;}
+  finally{if(current())submit.disabled=false;}
+};
+
 $('#mobile-refresh-profiles').onclick=renderMobileProfiles;
 async function mobileOpenProjectDetail(id,name){try{const project=await api(`/api/projects/${encodeURIComponent(id)}`);const d=$('#mobile-project-detail-dialog');$('#mobile-project-detail-title').textContent=name;$('#mobile-project-detail-repo').textContent=project.repository?`Repository: ${project.repository}`:'No repository';$('#mobile-project-detail-status').textContent=`Status: ${project.status} · ${(project.sessions||[]).length} session(s)`;const list=$('#mobile-project-detail-sessions');list.textContent='';for(const s of project.sessions||[]){const el=document.createElement('article');el.className='mobile-session';const t=document.createElement('strong');t.textContent=s.tmux_name;const m=document.createElement('small');m.textContent=`${s.tool||''} · ${s.profile||''} · ${s.attention_state||'normal'}`;const actions=document.createElement('div');actions.className='dialog-actions';const un=document.createElement('button');un.textContent='Unassign';un.className='danger';un.onclick=async()=>{try{await api(`/api/projects/${encodeURIComponent(id)}/unassign`,{method:'POST',body:JSON.stringify({session_name:s.tmux_name})});mobileOpenProjectDetail(id,name);}catch(e){alert(e.message);}};actions.append(un);el.append(t,m,actions);list.append(el);}if(!(project.sessions||[]).length)list.innerHTML='<p class="empty">No sessions assigned.</p>';d.showModal();}catch(e){alert(e.message);}}
-async function renderMobileProjects(){try{const projects=await api('/api/projects');$('#mobile-projects-list').replaceChildren(...projects.map((p)=>{const card=document.createElement('div');card.className='mobile-profile-card';const h=document.createElement('strong');h.textContent=p.name;const m=document.createElement('small');m.className='muted';m.textContent=`${p.status} · ${p.session_count||0} sessions${p.repository?' · '+p.repository:''}`;const d=document.createElement('p');d.className='muted';d.textContent=p.description||'';const actions=document.createElement('div');actions.className='dialog-actions';const view=document.createElement('button');view.textContent='View sessions';view.onclick=()=>mobileOpenProjectDetail(p.id,p.name);actions.append(view);card.append(h,m,d,actions);return card;}));if(!projects.length)$('#mobile-projects-list').textContent='No projects.';}catch(e){$('#mobile-projects-list').textContent=e.message;}}
+async function renderMobileProjects(){try{const projects=await api('/api/projects');$('#mobile-projects-list').replaceChildren(...projects.map((p)=>{const card=document.createElement('div');card.className='mobile-profile-card';const h=document.createElement('strong');h.textContent=p.name;const m=document.createElement('small');m.className='muted';m.textContent=`${p.status} · ${p.session_count||0} sessions${p.repository?' · '+p.repository:''}`;const d=document.createElement('p');d.className='muted';d.textContent=p.description||'';const actions=document.createElement('div');actions.className='dialog-actions';const view=document.createElement('button');view.textContent='View sessions';view.onclick=()=>mobileOpenProjectDetail(p.id,p.name);actions.append(view,projectActions(p,{api,refresh:renderMobileProjects}));card.append(h,m,d,actions);return card;}));if(!projects.length)$('#mobile-projects-list').textContent='No projects.';}catch(e){$('#mobile-projects-list').textContent=e.message;}}
 function select(tab){$$('[data-mobile-view]').forEach((x)=>x.hidden=x.dataset.mobileView!==tab);$$('[data-mobile-tab]').forEach((x)=>x.setAttribute('aria-current',x.dataset.mobileTab===tab?'page':'false'));if(tab==='plans')renderPlans();if(tab==='orchestration')renderTree();if(tab==='profiles')renderMobileProfiles();if(tab==='skills')renderMobileSkills();if(tab==='projects')renderMobileProjects();}
 async function start(){initTheme($('#mobile-theme'));identity=await api('/api/me');$('#mobile-identity').textContent=`${identity.access_surface} · ${identity.login}`;api('/api/profiles').then((p)=>{try{sessionStorage.setItem('agent-console-profiles',JSON.stringify(p));}catch{}}).catch(()=>{});form.elements.tool.replaceChildren(...identity.tool_status.map((x)=>{const o=new Option(`${x.name} · ${x.status}`,x.name,false,x.name===identity.default_tool);o.disabled=x.status!=='ready';return o;}));form.elements.profile.replaceChildren(...identity.profiles.map((x)=>new Option(x.display_name||x.name,x.name,false,x.name==='general')));form.elements.tool.onchange=toolChanged;form.elements.auth_context.onchange=nativeModelChanged;form.elements.profile.onchange=()=>{const p=identity.profiles.find(x=>x.name===form.elements.profile.value);form.elements.worktree.checked=p?p.worktree_requirement!=='none':false;modeChanged();};form.elements.agent_mode.onchange=modeChanged;form.elements.provider.onchange=models;toolChanged();await refresh();api('/api/projects').then((projects)=>{const s=$('#mobile-project-select');s.replaceChildren(...projects.map((p)=>new Option(`${p.name}${p.repository?' · '+p.repository:''}`,p.id)));s.prepend(new Option('None',''));}).catch(()=>{});}
-form.onsubmit=async(e)=>{e.preventDefault();const status=$('#mobile-form-status');status.textContent='Creating…';const data=Object.fromEntries(new FormData(form));data.worktree=form.elements.worktree.checked;for(const key of ['name','task','agent_mode','provider','model','project_id'])if(!data[key])data[key]=null;try{const session=await api('/api/sessions',{method:'POST',body:JSON.stringify(data)});location.href=`/terminal?session=${encodeURIComponent(session.tmux_name)}`;}catch(error){status.textContent=error.message;}};
-$$('[data-mobile-tab]').forEach((x)=>x.onclick=()=>select(x.dataset.mobileTab));$('#mobile-refresh').onclick=()=>{renderSessions();renderPlans();renderTree();};const layout=localStorage.getItem('agent-console-layout')||'auto';$('#mobile-layout').value=layout;$('#mobile-layout').onchange=()=>{const v=$('#mobile-layout').value;localStorage.setItem('agent-console-layout',v);if(v==='desktop')location.href='/desktop';};select('sessions');start().catch((e)=>{$('#mobile-sessions').textContent=e.message;});
+form.onsubmit=async(e)=>{e.preventDefault();if(creatingSession)return;creatingSession=true;const submit=$('button[type=submit]',form);submit.disabled=true;const status=$('#mobile-form-status');status.textContent='Creating…';const data=Object.fromEntries(new FormData(form));data.worktree=form.elements.worktree.checked;for(const key of ['name','task','agent_mode','provider','model','project_id'])if(!data[key])data[key]=null;try{const session=await api('/api/sessions',{method:'POST',body:JSON.stringify(data)});location.href=`/terminal?session=${encodeURIComponent(session.tmux_name)}`;}catch(error){status.textContent=error.message;creatingSession=false;submit.disabled=false;}};
+$$('[data-mobile-tab]').forEach((x)=>x.onclick=()=>select(x.dataset.mobileTab));$('#mobile-refresh').onclick=()=>{renderSessions();renderPlans();renderTree();};let layout='auto';try{layout=localStorage.getItem('agent-console-layout')||'auto';}catch{}$('#mobile-layout').value=layout;$('#mobile-layout').onchange=()=>{const v=$('#mobile-layout').value;try{localStorage.setItem('agent-console-layout',v);}catch{}if(v==='desktop')location.href='/desktop';};select('sessions');start().catch((e)=>{$('#mobile-sessions').textContent=e.message;});
 $$('[data-close]').forEach((btn)=>btn.addEventListener('click',()=>{const d=document.getElementById(btn.dataset.close);if(d)d.close();}));
 $('#mobile-estimate').onclick=estimate;
-$('#mobile-kill-confirm').onclick=async()=>{if(!pending)return;const allow=$('#mobile-kill-allow').checked;await api(`/api/sessions/${encodeURIComponent(pending.tmux_name)}/kill`,{method:'POST',body:JSON.stringify({confirmed:true,allow_unmanaged:allow,understand_unmanaged:allow})});document.getElementById('mobile-kill-dialog').close();pending=null;await renderSessions();};
-$('#mobile-attention-save').onclick=async()=>{if(!pending)return;const state=$('#mobile-attention-state').value;const note=$('#mobile-attention-note').value||null;await api(`/api/sessions/${encodeURIComponent(pending.tmux_name)}/attention`,{method:'PATCH',body:JSON.stringify({state,note})});document.getElementById('mobile-attention-dialog').close();pending=null;await renderSessions();};
+$('#mobile-kill-confirm').onclick=async()=>{
+ const s=pendingKill,button=$('#mobile-kill-confirm'),dialog=$('#mobile-kill-dialog'),request=killRequest;
+ if(!s||button.disabled||sessionMutations.has(s.id||s.tmux_name))return;
+ const current=()=>request===killRequest&&dialog.open;
+ const allow=$('#mobile-kill-allow').checked;button.disabled=true;sessionBusy(s,true);$('#mobile-kill-status').textContent='Stopping…';
+ try{
+  await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/kill`,{method:'POST',body:JSON.stringify({confirmed:true,allow_unmanaged:allow,understand_unmanaged:allow})});
+  if(current()){dialog.close();pendingKill=null;}await renderSessions();
+ }catch(e){if(current())$('#mobile-kill-status').textContent=e.message;else sessionStatus(`${s.tmux_name}: ${e.message}`);}
+ finally{sessionBusy(s,false);if(current())button.disabled=false;}
+};
+$('#mobile-attention-save').onclick=async()=>{
+ const s=pendingAttention,button=$('#mobile-attention-save'),dialog=$('#mobile-attention-dialog'),request=attentionRequest;
+ if(!s||button.disabled)return;const current=()=>request===attentionRequest&&dialog.open;
+ const state=$('#mobile-attention-state').value,note=$('#mobile-attention-note').value||null;
+ button.disabled=true;$('#mobile-attention-status').textContent='Saving…';
+ try{
+  await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/attention`,{method:'PATCH',body:JSON.stringify({state,note})});
+  if(current()){dialog.close();pendingAttention=null;}await renderSessions();
+ }catch(e){if(current())$('#mobile-attention-status').textContent=e.message;else sessionStatus(`${s.tmux_name}: ${e.message}`);}
+ finally{if(current())button.disabled=false;}
+};
 $('#mobile-plan-copy').onclick=()=>{if(currentPlanId)copyText('agentctl plan execute '+currentPlanId);};
-$('#mobile-delegate').onsubmit=async(e)=>{e.preventDefault();const f=$('#mobile-delegate');const d=Object.fromEntries(new FormData(f));await api(`/api/sessions/${encodeURIComponent(d.parent)}/delegations`,{method:'POST',body:JSON.stringify({profile:d.profile,tool:d.tool,auth_context:d.auth_context,agent_mode:d.agent_mode,task:d.task,repository:d.repository,name:d.name||null})});document.getElementById('mobile-delegate-dialog').close();await renderTree();};
+$('#mobile-delegate').onsubmit=async(e)=>{
+ e.preventDefault();if(creatingChild)return;
+ const f=$('#mobile-delegate'),dialog=$('#mobile-delegate-dialog'),button=$('button[type=submit]',f),request=delegateRequest;
+ const d=Object.fromEntries(new FormData(f)),current=()=>request===delegateRequest&&dialog.open;
+ creatingChild=true;button.disabled=true;$('#mobile-delegate-status').textContent='Creating…';
+ try{
+  await api(`/api/sessions/${encodeURIComponent(d.parent)}/delegations`,{method:'POST',body:JSON.stringify({profile:d.profile,tool:d.tool,auth_context:d.auth_context,agent_mode:d.agent_mode,task:d.task,repository:d.repository,name:d.name||null})});
+  if(current())dialog.close();await renderTree();
+ }catch(e){if(current())$('#mobile-delegate-status').textContent=e.message;else sessionStatus(`${d.parent}: ${e.message}`);}
+ finally{creatingChild=false;button.disabled=false;}
+};

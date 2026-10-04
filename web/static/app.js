@@ -1,9 +1,11 @@
-import { initTheme } from '/static/theme.js?v=8';
+import { projectActions } from '/static/project-actions.js?v=1';
+import { copyText } from '/static/clipboard.js?v=1';
+import { initTheme } from '/static/theme.js?v=10';
 import { skillActionMessage, skillToolDiagnostic } from '/static/skill-diagnostics.js?v=1';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = { identity: null, sessions: [], plans: [], tree: { roots: [], delegations: [] }, view: 'sessions', selectedSession: null };
+const state = { identity: null, sessions: [], plans: [], tree: { roots: [], delegations: [] }, view: 'sessions', selectedSession: null, selectedSessionId: null };
 const viewTitles = { sessions: 'Sessions', projects: 'Projects', profiles: 'Profiles', skills: 'Skills', jevghost: 'Jev Ghost', orchestration: 'Orchestration', new: 'New session' };
 const activeEl = $('#active-sessions');
 const historyEl = $('#session-history');
@@ -21,6 +23,7 @@ const delegateForm = $('#delegate-form');
 const planDialog = $('#plan-dialog');
 const planForm = $('#plan-form');
 const reviewDialog = $('#review-dialog');
+const navigationDialog = $('#navigation-dialog');
 const inspector = $('#session-inspector');
 const attentionForm = $('#attention-form');
 const terminalDock = $('#terminal-dock');
@@ -29,6 +32,15 @@ const groupForm = $('#group-form');
 const groupDetailDialog = $('#group-detail-dialog');
 const terminalTabs = new Map();
 let activeTerminal = null;
+let profileEditorRequest = 0;
+let planRequest = 0;
+let delegateRequest = 0;
+let reviewRequest = 0;
+let viewRequest = 0;
+let refreshRequest = 0;
+let orchestrationRequest = 0;
+const attentionPending = new Set();
+const attentionDrafts = new Map();
 
 const attentionLabels = {
   normal: 'Normal',
@@ -36,7 +48,8 @@ const attentionLabels = {
   blocked: 'Blocked',
   ready_for_review: 'Ready for review',
 };
-const attentionPriority = { blocked: 0, needs_input: 1, ready_for_review: 2, normal: 3 };
+let inspectorReturnFocus = null;
+let inspectorReturnSession = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
@@ -60,20 +73,9 @@ function showNotice(message, kind = 'success') {
   clearTimeout(showNotice.timer); showNotice.timer = setTimeout(() => { noticeEl.hidden = true; }, 5000);
 }
 
-async function copyText(value) {
-  if (window.isSecureContext && navigator.clipboard?.writeText) {
-    try { await navigator.clipboard.writeText(value); return true; } catch { /* fallback */ }
-  }
-  const fallback = $('#clipboard-fallback');
-  fallback.value = value; fallback.classList.remove('visually-hidden'); fallback.select();
-  const copied = document.execCommand?.('copy') || false;
-  fallback.classList.add('visually-hidden'); fallback.value = '';
-  return copied;
-}
-
 async function copyName(name) {
-  const copied = await copyText(name);
-  showNotice(copied ? `Copied ${name}` : 'Copy was blocked by the browser', copied ? 'success' : 'error');
+  const copied = await copyText(name, { title: 'Copy session name' });
+  if (copied) showNotice(`Copied ${name}`);
 }
 
 function formatActivity(value) {
@@ -108,6 +110,8 @@ function updateDockLayout() {
 function activateTerminal(name) {
   if (!terminalTabs.has(name)) return;
   activeTerminal = name;
+  const selected = terminalTabs.get(name);
+  selected.focusRequested = true; selected.focusOrigin = document.activeElement;
   terminalDock.hidden = false;
   terminalDock.classList.remove('collapsed');
   terminalTabs.forEach(({ tab, frame }, tabName) => {
@@ -122,8 +126,10 @@ function activateTerminal(name) {
 
 function requestTerminalFocus(name) {
   const item = terminalTabs.get(name);
-  if (!item) return;
-  if (activeTerminal !== name || item.frame.hidden) return;
+  if (!item?.loaded || !item.focusRequested) return;
+  item.focusRequested = false;
+  if (activeTerminal !== name || item.frame.hidden || document.querySelector('dialog[open]')) return;
+  if (document.activeElement !== item.focusOrigin && document.activeElement !== document.body && document.activeElement !== item.frame) return;
   try {
     item.frame.contentWindow?.postMessage({ type: 'agent-console:focus-terminal' }, window.location.origin);
   } catch { /* same-origin, unreachable */ }
@@ -133,7 +139,7 @@ function closeTerminal(name) {
   const item = terminalTabs.get(name);
   if (!item) return;
   item.frame.src = 'about:blank';
-  item.frame.remove(); item.tab.remove(); terminalTabs.delete(name);
+  item.frame.remove(); item.tab.parentElement.remove(); terminalTabs.delete(name);
   if (activeTerminal === name) {
     const next = [...terminalTabs.keys()].at(-1) || null;
     activeTerminal = null;
@@ -144,26 +150,36 @@ function closeTerminal(name) {
 }
 
 function openTerminal(name) {
+  if (window.matchMedia('(max-width: 760px)').matches) {
+    location.href = `/terminal?session=${encodeURIComponent(name)}`;
+    return;
+  }
   if (terminalTabs.has(name)) { activateTerminal(name); return; }
   if (terminalTabs.size >= 4) {
     showNotice('Four terminal tabs are already open. Close one before attaching another.', 'error');
     return;
   }
+  const item = { name, sessionId: state.sessions.find(session => session.tmux_name === name)?.id, loaded: false };
   const tab = document.createElement('button');
   tab.type = 'button'; tab.className = 'terminal-tab'; tab.setAttribute('role', 'tab');
-  tab.innerHTML = `<span>${escapeHtml(name)}</span><span class="terminal-tab-close" role="button" aria-label="Close ${escapeHtml(name)}">×</span>`;
-  tab.onclick = (event) => {
-    if (event.target.closest('.terminal-tab-close')) { closeTerminal(name); return; }
-    activateTerminal(name);
-  };
+  tab.textContent = name;
+  tab.onclick = () => activateTerminal(item.name);
+  const wrapper = document.createElement('div'); wrapper.className = 'terminal-tab-item';
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'terminal-tab-close';
+  close.setAttribute('aria-label', `Close ${name}`); close.textContent = '×';
+  close.onclick = () => { closeTerminal(item.name); (terminalTabs.get(activeTerminal)?.tab || $('#refresh')).focus(); };
+  wrapper.append(tab, close);
   const frame = document.createElement('iframe');
   frame.className = 'terminal-embed'; frame.title = `Terminal ${name}`;
-  frame.src = `/terminal?session=${encodeURIComponent(name)}&embed=1`; frame.hidden = true;
+  frame.src = `/terminal?session=${encodeURIComponent(name)}&embed=1${item.sessionId ? `&session_id=${encodeURIComponent(item.sessionId)}` : ''}`; frame.hidden = true;
   frame.addEventListener('load', () => {
-    requestTerminalFocus(name);
+    if (terminalTabs.get(item.name)?.frame !== frame) return;
+    item.loaded = true;
+    requestTerminalFocus(item.name);
   });
-  $('#terminal-tabs').append(tab); $('#terminal-frames').append(frame);
-  terminalTabs.set(name, { tab, frame }); activateTerminal(name);
+  $('#terminal-tabs').append(wrapper); $('#terminal-frames').append(frame);
+  Object.assign(item, { tab, frame, close });
+  terminalTabs.set(name, item); activateTerminal(name);
 }
 
 function renderWaitStatus(session) {
@@ -207,7 +223,14 @@ async function waitForChildren(name, button) {
 }
 
 function renderInspector(session) {
-  state.selectedSession = session.tmux_name;
+  const opening = inspector.hidden;
+  if (opening || state.selectedSessionId !== session.id) {
+    const opener = document.activeElement;
+    inspectorReturnFocus = opener.closest('.session-row')?.dataset.session === session.tmux_name ? opener : null;
+    inspectorReturnSession = session.tmux_name;
+  }
+  state.selectedSession = session.tmux_name; state.selectedSessionId = session.id;
+  inspectorReturnSession = session.tmux_name;
   $('#inspector-name').textContent = session.tmux_name;
   $('#inspector-content').innerHTML = `
     <div class="inspector-state">${attentionBadge(session)}<span class="badge ${session.running ? 'live' : 'stopped'}">${escapeHtml(session.live_state)}</span></div>
@@ -222,42 +245,61 @@ function renderInspector(session) {
       <div><dt>Parent / plan</dt><dd>${escapeHtml(session.parent_session || 'Root')} · ${escapeHtml(session.linked_plan_id || 'No plan')}</dd></div>
       <div><dt>Process / socket</dt><dd>${escapeHtml(session.current_command || 'None')} · ${escapeHtml(session.socket_scope)}</dd></div>
       <div><dt>Clients</dt><dd>${session.attached_clients} attached</dd></div>
-      <div><dt>Children</dt><dd>${session.child_count || 0} / ${session.total_child_count || 0} active</dd></div>
+      <div><dt>Children</dt><dd>${session.child_count || 0} active · ${session.total_child_count || 0} total</dd></div>
       <div><dt>Last activity</dt><dd title="${escapeHtml(session.last_activity || '')}">${formatActivity(session.last_activity)}</dd></div>
       <div><dt>Attention updated</dt><dd>${escapeHtml(session.attention_updated_by || 'Never')} · ${formatActivity(session.attention_updated_at)}</dd></div>
     </dl>
     <div class="brief-block"><h3>Stored brief</h3><p>${escapeHtml(session.initial_task || 'No brief recorded.')}</p></div>
     <div id="inspector-wait-status"></div>`;
-  attentionForm.elements.state.value = session.attention_state || 'normal';
-  attentionForm.elements.note.value = session.attention_note || '';
-  attentionForm.dataset.session = session.tmux_name; $('#attention-status').textContent = '';
-  const actions = $('#inspector-actions'); actions.replaceChildren();
-  const addButton = (label, handler, className = '') => {
-    const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.className = className; button.onclick = handler; actions.append(button); return button;
-  };
-  if (session.actions.includes('attach')) addButton('Open terminal dock', () => openTerminal(session.tmux_name), 'primary');
-  if (session.actions.includes('attach')) addButton('Open dedicated terminal', () => window.open(`/terminal?session=${encodeURIComponent(session.tmux_name)}`, '_blank', 'noopener'));
-  addButton('Copy name', () => copyName(session.tmux_name));
-  addButton('Review output', () => showReview(session.tmux_name));
-  if (session.running) addButton('Delegate', () => openDelegate(session));
-  if (session.total_child_count) {
-    const waitBtn = addButton('Wait for children', () => waitForChildren(session.tmux_name, waitBtn));
-  }
-  for (const [operation, label] of [['interrupt', 'Interrupt'], ['restart', 'Restart agent'], ['kill', 'Kill']]) {
-    if (!session.actions.includes(operation)) continue;
-    const button = addButton(label, () => lifecycle(session, operation, button), operation === 'kill' ? 'danger' : '');
+  const draft = attentionDrafts.get(session.id);
+  attentionForm.elements.state.value = draft?.state ?? session.attention_state ?? 'normal';
+  attentionForm.elements.note.value = draft?.note ?? session.attention_note ?? '';
+  attentionForm.dataset.session = session.tmux_name; attentionForm.dataset.sessionId = session.id; $('#attention-status').textContent = '';
+  $('button[type="submit"]', attentionForm).disabled = attentionPending.has(session.id);
+  const actions = $('#inspector-actions');
+  const actionSignature = JSON.stringify([session.id, session.tmux_name, session.running, session.actions, !!session.total_child_count]);
+  if (actions.dataset.sessionActions !== actionSignature) {
+    actions.dataset.sessionActions = actionSignature;
+    actions.replaceChildren();
+    const latest = () => state.sessions.find(item => item.id === session.id && item.tmux_name === session.tmux_name) || session;
+    const addButton = (label, handler, className = '') => {
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.className = className; button.onclick = handler; actions.append(button); return button;
+    };
+    if (session.actions.includes('attach')) addButton('Open terminal dock', () => openTerminal(session.tmux_name), 'primary');
+    if (session.actions.includes('attach')) addButton('Open dedicated terminal', () => window.open(`/terminal?session=${encodeURIComponent(session.tmux_name)}`, '_blank', 'noopener'));
+    addButton('Copy name', () => copyName(session.tmux_name));
+    addButton('Review output', () => showReview(session.tmux_name));
+    if (session.running) addButton('Delegate', () => openDelegate(latest()));
+    if (session.total_child_count) {
+      const waitBtn = addButton('Wait for children', () => waitForChildren(session.tmux_name, waitBtn));
+    }
+    for (const [operation, label] of [['interrupt', 'Interrupt'], ['restart', 'Restart agent'], ['kill', 'Kill']]) {
+      if (!session.actions.includes(operation)) continue;
+      const button = addButton(label, () => lifecycle(latest(), operation, button), operation === 'kill' ? 'danger' : '');
+    }
   }
   inspector.hidden = false;
   renderWaitStatus(session);
   renderSessions();
+  if (opening) $('#inspector-close').focus({ preventScroll: true });
 }
 
-function closeInspector() {
-  inspector.hidden = true; state.selectedSession = null; renderSessions();
+function closeInspector(restoreFocus = true) {
+  inspector.hidden = true; state.selectedSession = null; state.selectedSessionId = null; renderSessions();
+  if (restoreFocus) {
+    const row = $$('.session-row').find(node => node.dataset.session === inspectorReturnSession);
+    const target = inspectorReturnFocus?.isConnected ? inspectorReturnFocus : row;
+    target?.focus({ preventScroll: true });
+  }
 }
+
 
 function selectView(view, updateHash = true) {
-  state.view = viewTitles[view] ? view : 'sessions';
+  closeSessionMenu();
+  if (navigationDialog.open) navigationDialog.close();
+  const nextView = viewTitles[view] ? view : 'sessions';
+  if (nextView !== state.view) viewRequest++;
+  state.view = nextView;
   $$('[data-view-panel]').forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== state.view; });
   $$('[data-view]').forEach((button) => {
     if (button.dataset.view === state.view) button.setAttribute('aria-current', 'page');
@@ -314,14 +356,20 @@ async function lifecycle(session, operation, button) {
 }
 
 async function showReview(name) {
+  const request = ++reviewRequest;
+  const current = () => request === reviewRequest && reviewDialog.open;
+  const sessionId = state.sessions.find(session => session.tmux_name === name)?.id;
+  const query = new URLSearchParams({ lines: '200' });
+  if (sessionId) query.set('session_id', sessionId);
   $('#review-title').textContent = `Review · ${name}`;
   $('#review-notice').textContent = 'Loading bounded read-only terminal output…';
   $('#review-content').textContent = ''; reviewDialog.showModal();
   try {
-    const review = await api(`/api/sessions/${encodeURIComponent(name)}/review?lines=200`);
+    const review = await api(`/api/sessions/${encodeURIComponent(name)}/review?${query}`);
+    if (!current()) return;
     $('#review-notice').textContent = `${review.notice} Source: ${review.source}${review.truncated ? ' · byte limit applied' : ''}.`;
     $('#review-content').textContent = review.content || 'No captured output is available.';
-  } catch (error) { $('#review-notice').textContent = error.message || String(error); }
+  } catch (error) { if (current()) $('#review-notice').textContent = error.message || String(error); }
 }
 
 function updateContextSelect(toolSelect, contextSelect) {
@@ -330,51 +378,146 @@ function updateContextSelect(toolSelect, contextSelect) {
 }
 
 async function openDelegate(session) {
-  delegateForm.reset(); delegateForm.elements.parent.value = session.tmux_name;
+  const request = ++delegateRequest, view = viewRequest;
+  const current = () => request === delegateRequest && view === viewRequest;
+  delegateForm.reset(); $('button[type="submit"]', delegateForm).disabled = false; delegateForm.elements.parent.value = session.tmux_name;
   delegateForm.elements.repository.value = session.repository || '';
-  $('#delegate-parent').textContent = `Parent: ${session.tmux_name} · ${session.child_count}/${state.tree.max_children_per_parent || 3} children`;
+  const childLimit=state.tree.max_children_per_parent??0;
+  $('#delegate-parent').textContent = `Parent: ${session.tmux_name} · ${session.child_count||0}${childLimit>0?'/'+childLimit:''} active children${childLimit>0?'':' · no per-parent limit'}`;
   try {
     const allProfiles = await api('/api/profiles');
+    if (!current()) return;
     const parentProfile = session.profile || 'general';
     const parentMeta = allProfiles.find((p) => p.name === parentProfile) || {};
-    const allowed = parentMeta.allowed_delegation_profiles || [];
+    const allowed = (parentMeta.allowed_delegation_profiles || []).filter(name =>
+      session.agent_mode !== 'plan' || allProfiles.find(profile => profile.name === name)?.read_write_capability === 'read_only');
     delegateForm.elements.profile.replaceChildren(...allowed.map((name) => {
       const p = state.identity.profiles.find((x) => x.name === name) || {};
       return new Option(p.display_name || name, name, false, name === 'planner');
     }));
   } catch {
+    if (!current()) return;
     delegateForm.elements.profile.replaceChildren(...state.identity.profiles.filter((p) => p.read_write_capability === 'read_only').map((p) => new Option(p.display_name || p.name, p.name, false, p.name === 'planner')));
   }
   const toolSelect = delegateForm.elements.tool;
-  toolSelect.replaceChildren(...state.identity.tool_status.filter((item) => item.status === 'ready' && item.name !== 'claude').map((item) => new Option(item.name, item.name, false, item.name === state.identity.default_tool)));
+  toolSelect.replaceChildren(...state.identity.tool_status.filter((item) => item.status === 'ready').map((item) => new Option(item.name, item.name, false, item.name === state.identity.default_tool)));
   updateContextSelect(toolSelect, delegateForm.elements.auth_context);
   $('#delegate-mode-field').hidden = toolSelect.value !== 'opencode'; $('#delegate-status').textContent = '';
   delegateDialog.showModal();
 }
 
+let openSessionMenu = null;
+
+function positionSessionMenu() {
+  if (!openSessionMenu) return;
+  const { summary, popover } = openSessionMenu;
+  const anchor = summary.getBoundingClientRect();
+  const margin = 8, gap = 5;
+  popover.style.maxHeight = `${Math.max(44, window.innerHeight - margin * 2)}px`;
+  const box = popover.getBoundingClientRect();
+  const below = window.innerHeight - anchor.bottom - gap - margin;
+  const above = anchor.top - gap - margin;
+  const top = box.height <= below || below >= above ? anchor.bottom + gap : anchor.top - gap - box.height;
+  popover.style.left = `${Math.max(margin, Math.min(anchor.right - box.width, window.innerWidth - box.width - margin))}px`;
+  popover.style.top = `${Math.max(margin, Math.min(top, window.innerHeight - box.height - margin))}px`;
+}
+
+function closeSessionMenu(restoreFocus = false) {
+  if (!openSessionMenu) return;
+  const { menu, summary } = openSessionMenu;
+  openSessionMenu = null;
+  menu.open = false;
+  summary.setAttribute('aria-expanded', 'false');
+  if (restoreFocus && summary.isConnected) summary.focus({ preventScroll: true });
+}
+
+function showSessionMenu(menu) {
+  closeSessionMenu();
+  const summary = $('summary', menu), popover = $('.action-menu-popover', menu);
+  menu.open = true;
+  summary.setAttribute('aria-expanded', 'true');
+  openSessionMenu = { menu, summary, popover, name: menu.dataset.session, id: menu.dataset.sessionId };
+  positionSessionMenu();
+}
+
+document.addEventListener('pointerdown', event => {
+  if (openSessionMenu && !openSessionMenu.menu.contains(event.target)) closeSessionMenu();
+});
+document.addEventListener('keydown', event => {
+  if (!openSessionMenu) return;
+  if (event.key === 'Escape') {
+    event.preventDefault(); event.stopImmediatePropagation(); closeSessionMenu(true); return;
+  }
+  if (!openSessionMenu.menu.contains(event.target)) return;
+  const buttons = $$('button:not(:disabled)', openSessionMenu.popover);
+  const index = buttons.indexOf(document.activeElement);
+  let next;
+  if (event.key === 'ArrowDown') next = buttons[(index + 1) % buttons.length];
+  if (event.key === 'ArrowUp') next = index < 0 ? buttons.at(-1) : buttons[(index + buttons.length - 1) % buttons.length];
+  if (event.key === 'Home') next = buttons[0];
+  if (event.key === 'End') next = buttons.at(-1);
+  if (next) { event.preventDefault(); event.stopImmediatePropagation(); next.focus(); }
+}, true);
+document.addEventListener('focusin', event => {
+  if (openSessionMenu && !openSessionMenu.menu.contains(event.target)) closeSessionMenu();
+});
+window.addEventListener('resize', positionSessionMenu);
+window.addEventListener('scroll', positionSessionMenu, true);
+
 function renderSession(session, historyRow = false) {
   const row = document.createElement('tr'); row.className = 'session-row'; row.tabIndex = 0;
+  const latest = () => state.sessions.find(item => item.id === session.id && item.tmux_name === session.tmux_name) || session;
+  row.dataset.session = session.tmux_name;
+  row.dataset.menuActions = JSON.stringify([session.running, session.actions]);
   if (state.selectedSession === session.tmux_name) row.classList.add('selected');
   const attach = session.actions.includes('attach') ? '<button class="primary compact" data-attach>Attach</button>' : '';
   row.innerHTML = `<td><div class="state-stack">${attentionBadge(session)}<span class="badge ${session.running ? 'live' : 'stopped'}">${escapeHtml(session.live_state || (session.running ? 'tmux live' : 'stopped'))}</span></div></td><th scope="row"><span class="session-name">${escapeHtml(session.tmux_name)}</span>${session.attention_note ? `<span class="row-note">${escapeHtml(session.attention_note)}</span>` : ''}</th><td>${escapeHtml(session.tool || 'legacy')}<span class="subtle">${escapeHtml(session.agent_mode || session.provider || 'native')}</span></td><td>${escapeHtml(session.profile || 'legacy')}</td><td class="repo-cell" title="${escapeHtml(session.repository || session.worktree || 'No repository')}">${escapeHtml(session.repository || session.worktree || '—')}</td><td title="${escapeHtml(session.last_activity || '')}">${formatActivity(session.last_activity)}</td><td>${session.attached_clients}</td><td><div class="session-actions">${attach}<details class="action-menu"><summary aria-label="More actions">•••</summary><div class="action-menu-popover"><button data-copy-name>Copy name</button><button data-review>Review output</button>${session.running ? '<button data-delegate>Delegate</button>' : ''}${actionButton(session, 'interrupt', 'Interrupt')}${actionButton(session, 'restart', 'Restart agent')}${actionButton(session, 'kill', 'Kill', 'danger')}</div></details></div></td>`;
+  const menu = $('.action-menu', row), summary = $('summary', menu);
+  menu.dataset.session = session.tmux_name;
+  menu.dataset.sessionId = session.id;
+  summary.setAttribute('aria-expanded', 'false');
+  summary.addEventListener('click', event => {
+    event.preventDefault();
+    if (menu.open) closeSessionMenu(); else showSessionMenu(menu);
+  });
+  $('.action-menu-popover', menu).addEventListener('click', event => {
+    if (event.target.closest('button')) closeSessionMenu();
+  });
   $('[data-attach]', row)?.addEventListener('click', () => openTerminal(session.tmux_name));
   $('[data-copy-name]', row).onclick = () => copyName(session.tmux_name);
   $('[data-review]', row).onclick = () => showReview(session.tmux_name);
-  $('[data-delegate]', row)?.addEventListener('click', () => openDelegate(session));
-  $$('[data-action]', row).forEach((button) => button.addEventListener('click', () => lifecycle(session, button.dataset.action, button)));
-  row.addEventListener('click', (event) => { if (!event.target.closest('button,a,summary,details')) renderInspector(session); });
-  row.addEventListener('keydown', (event) => { if (event.key === 'Enter') renderInspector(session); });
+  $('[data-delegate]', row)?.addEventListener('click', () => openDelegate(latest()));
+  $$('[data-action]', row).forEach((button) => button.addEventListener('click', () => lifecycle(latest(), button.dataset.action, button)));
+  row.addEventListener('click', (event) => { if (!event.target.closest('button,a,summary,details')) renderInspector(latest()); });
+  row.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && event.target === row) {
+      event.preventDefault(); event.stopPropagation(); renderInspector(latest());
+    }
+  });
   if (historyRow) row.classList.add('history-row');
   return row;
 }
 
+function stableSessionOrder(a, b) {
+  if (a.running !== b.running) return a.running ? -1 : 1;
+  return String(a.created_at || '').localeCompare(String(b.created_at || '')) ||
+    String(a.id || a.tmux_name).localeCompare(String(b.id || b.tmux_name));
+}
+
 function renderSessions() {
-  const filtered = state.sessions.filter(sessionMatches).sort((a, b) => {
-    if (a.running !== b.running) return a.running ? -1 : 1;
-    const attention = (attentionPriority[a.attention_state || 'normal'] ?? 9) - (attentionPriority[b.attention_state || 'normal'] ?? 9);
-    if (attention) return attention;
-    return String(b.last_activity || '').localeCompare(String(a.last_activity || ''));
-  });
+  // Keep the actual pointer/keyboard target mounted while a menu is being used.
+  // A visually identical replacement still loses a click held across a poll.
+  if (openSessionMenu) {
+    const current = state.sessions.find(session => session.tmux_name === openSessionMenu.name);
+    const row = openSessionMenu.menu.closest('tr');
+    const availableActions = current ? JSON.stringify([current.running, current.actions]) : null;
+    if (current && current.id === openSessionMenu.id && sessionMatches(current) && row.dataset.menuActions === availableActions) {
+      positionSessionMenu();
+      return;
+    }
+    closeSessionMenu(true);
+  }
+  const filtered = state.sessions.filter(sessionMatches).sort(stableSessionOrder);
   const active = filtered.filter((session) => session.running); const stopped = filtered.filter((session) => !session.running);
   activeEl.replaceChildren(...active.map((session) => renderSession(session)));
   if (!active.length) activeEl.innerHTML = '<tr><td colspan="8" class="empty">No active sessions match these filters.</td></tr>';
@@ -402,10 +545,12 @@ function renderTreeNode(session) {
 }
 
 async function renderOrchestration() {
+  const request = ++orchestrationRequest;
   const [groups, tree] = await Promise.all([
     api('/api/session-groups').catch(() => []),
     Promise.resolve(state.tree),
   ]);
+  if (request !== orchestrationRequest) return;
   const groupEl = document.createElement('div'); groupEl.className = 'panel';
   groupEl.innerHTML = '<div class="panel-heading"><h3>Session groups</h3><button id="new-group-btn" class="compact">New group</button></div>';
   const groupList = document.createElement('div'); groupList.className = 'tree-list';
@@ -415,9 +560,8 @@ async function renderOrchestration() {
     groupList.innerHTML = '<p class="empty">No session groups yet. Create one to coordinate multiple sessions.</p>';
   }
   groupEl.append(groupList);
-  $('#new-group-btn')?.addEventListener('click', openNewGroup);
+  $('#new-group-btn', groupEl).addEventListener('click', openNewGroup);
   treeEl.replaceChildren(groupEl, ...state.tree.roots.map(renderTreeNode));
-  if (!state.tree.roots.length && !groups.length) treeEl.innerHTML = '<p class="empty">No sessions discovered.</p>';
   const activePlans = state.plans.filter(p => p.status === 'planned' || p.status === 'executing');
   plansEl.replaceChildren(...activePlans.map((plan) => {
     const row = document.createElement('article'); row.className = 'plan-row';
@@ -560,6 +704,10 @@ async function openGroupTerminals(groupId, groupName) {
     const result = await api(`/api/session-groups/${encodeURIComponent(groupId)}/open`, { method: 'POST' });
     const available = result.available || [];
     const unavailable = result.unavailable || [];
+    if (available.length && window.matchMedia('(max-width: 760px)').matches) {
+      openTerminal(available[0].tmux_name);
+      return;
+    }
     let opened = 0;
     for (const s of available) {
       if (terminalTabs.size >= 4) break;
@@ -577,14 +725,21 @@ async function openGroupTerminals(groupId, groupName) {
 }
 
 async function openPlan(planId) {
-  planForm.reset(); $('#plan-title').textContent = 'Loading plan…'; $('#plan-meta').textContent = ''; $('#plan-content').textContent = ''; $('#plan-status').textContent = '';
+  const request = ++planRequest;
+  const current = () => request === planRequest && planDialog.open;
+  const submit = $('button[type="submit"]', planForm);
+  planForm.reset(); submit.disabled = true;
+  $('#plan-title').textContent = 'Loading plan…'; $('#plan-meta').textContent = '';
+  $('#plan-content').textContent = ''; $('#plan-status').textContent = ''; $('#revision-warning').hidden = true;
   planDialog.showModal();
   try {
     const plan = await api(`/api/plans/${encodeURIComponent(planId)}`);
+    if (!current()) return;
     planForm.elements.plan_id.value = plan.id; $('#plan-title').textContent = plan.title || plan.id;
     $('#plan-meta').textContent = `${plan.status} · ${plan.repository || 'No repository'} · revision ${plan.revision_state}`;
     $('#plan-content').textContent = plan.plan; $('#revision-warning').hidden = plan.revision_state !== 'changed';
-  } catch (error) { $('#plan-status').textContent = error.message || String(error); }
+    submit.disabled = false;
+  } catch (error) { if (current()) $('#plan-status').textContent = error.message || String(error); }
 }
 
 async function renderProfiles() {
@@ -609,37 +764,54 @@ function profileCard(entry) {
 }
 
 async function openProfileEditor(name) {
+  const request = ++profileEditorRequest;
+  const dialog = $('#profile-editor-dialog');
+  const current = () => request === profileEditorRequest && dialog.open;
   const form = $('#profile-editor-form'); form.reset();
+  const submit = $('button[type="submit"]', form);
+  submit.disabled = true; form.elements.content.disabled = true;
   form.elements.profile_name.value = name;
   $('#profile-editor-title').textContent = `Edit: ${name}`;
+  $('#profile-editor-meta').textContent = '';
   $('#profile-editor-status').textContent = 'Loading…';
-  $('#profile-editor-dialog').showModal();
+  dialog.showModal();
   try {
     const data = await api(`/api/profiles/${encodeURIComponent(name)}`);
+    if (!current()) return;
     form.elements.content.value = data.content || '';
     const metaHtml = [
-      `<span>${data.read_write_capability}</span>`,
-      `<span>worktree: ${data.worktree_requirement}</span>`,
-      `<span>status: ${data.status}</span>`,
+      `<span>${escapeHtml(data.read_write_capability)}</span>`,
+      `<span>worktree: ${escapeHtml(data.worktree_requirement)}</span>`,
+      `<span>status: ${escapeHtml(data.status)}</span>`,
       data.requires_human_approval ? '<span>requires approval</span>' : '',
-      data.replacement_profile ? `<span>replaces: ${data.replacement_profile}</span>` : '',
+      data.replacement_profile ? `<span>replaces: ${escapeHtml(data.replacement_profile)}</span>` : '',
     ].filter(Boolean).join(' ');
     $('#profile-editor-meta').innerHTML = metaHtml;
     $('#profile-editor-status').textContent = '';
-  } catch (e) { $('#profile-editor-status').textContent = e.message; }
+    form.elements.content.disabled = false; submit.disabled = false;
+  } catch (e) { if (current()) $('#profile-editor-status').textContent = e.message; }
 }
 
 $('#profile-editor-form').onsubmit = async (event) => {
-  event.preventDefault(); const submit = $('button[type="submit"]', event.target); submit.disabled = true;
+  event.preventDefault();
+  const form = event.target, dialog = $('#profile-editor-dialog');
+  const submit = $('button[type="submit"]', form);
+  if (submit.disabled) return;
+  const request = profileEditorRequest, name = form.elements.profile_name.value;
+  const current = () => request === profileEditorRequest && dialog.open;
+  submit.disabled = true;
   const status = $('#profile-editor-status'); status.textContent = 'Saving…';
   try {
-    await api(`/api/profiles/${encodeURIComponent(event.target.elements.profile_name.value)}`, {
-      method: 'PUT', body: JSON.stringify({ content: event.target.elements.content.value }),
+    await api(`/api/profiles/${encodeURIComponent(name)}`, {
+      method: 'PUT', body: JSON.stringify({ content: form.elements.content.value }),
     });
-    status.textContent = 'Saved.';
-    setTimeout(() => { $('#profile-editor-dialog').close(); }, 800);
-    renderProfiles();
-  } catch (e) { status.textContent = e.message; } finally { submit.disabled = false; }
+    if (current()) {
+      status.textContent = 'Saved.';
+      setTimeout(() => { if (current()) dialog.close(); }, 800);
+    }
+    renderProfiles().catch(error => showNotice(error.message, 'error'));
+  } catch (e) { if (current()) status.textContent = e.message; }
+  finally { if (current()) submit.disabled = false; }
 };
 
 $('#refresh-profiles').onclick = renderProfiles;
@@ -837,8 +1009,30 @@ async function renderJevGhost() {
 
 $('#jev-ghost-refresh').onclick = renderJevGhost;
 
+let projectListGeneration = 0;
+let projectDetailContext = null;
+const projectDetailDialog = $('#project-detail-dialog');
+const currentProjectDetail = context => projectDetailContext === context && projectDetailDialog.open;
+projectDetailDialog.addEventListener('close', () => {
+  if (!projectDetailDialog.open) {
+    projectDetailContext = null;
+    delete $('#project-assign-select').dataset.projectId;
+  }
+});
+
 async function renderProjects() {
-  const projects = await api('/api/projects');
+  const generation = ++projectListGeneration;
+  let projects;
+  try { projects = await api('/api/projects'); }
+  catch (error) {
+    if (generation === projectListGeneration) showNotice(`Could not refresh projects: ${error.message}`, 'error');
+    return;
+  }
+  if (generation !== projectListGeneration) return;
+  const select = newForm.elements.project_id;
+  const choice = select.value;
+  select.replaceChildren(new Option('None', ''), ...projects.map(p => new Option(`${p.name}${p.repository ? ' · ' + p.repository : ''}`, p.id)));
+  select.value = projects.some(p => p.id === choice) ? choice : '';
   $('#projects-list').replaceChildren(...projects.map(projectCard));
 }
 
@@ -853,14 +1047,26 @@ function projectCard(project) {
   const desc = document.createElement('p'); desc.textContent = project.description || '';
   const actions = document.createElement('div'); actions.className = 'dialog-actions';
   const viewBtn = document.createElement('button'); viewBtn.textContent = 'View sessions'; viewBtn.onclick = () => openProjectDetail(project.id, project.name);
-  actions.append(viewBtn);
+  actions.append(viewBtn, projectActions(project, {api, refresh: renderProjects}));
   card.append(header, meta, desc, actions);
   return card;
 }
 
 async function openProjectDetail(id, name) {
+  const context = {id, name};
+  projectDetailContext = context;
+  $('#project-detail-title').textContent = name;
+  $('#project-detail-repo').textContent = '';
+  $('#project-detail-status').textContent = 'Loading…';
+  $('#project-detail-sessions').replaceChildren();
+  const assignSelect = $('#project-assign-select');
+  assignSelect.replaceChildren(new Option('Select session…', ''));
+  delete assignSelect.dataset.projectId;
+  $('#project-assign-btn').disabled = true;
+  if (!projectDetailDialog.open) projectDetailDialog.showModal();
   try {
     const project = await api(`/api/projects/${encodeURIComponent(id)}`);
+    if (!currentProjectDetail(context)) return;
     $('#project-detail-title').textContent = name;
     $('#project-detail-repo').textContent = project.repository ? `Repository: ${project.repository}` : 'No repository';
     $('#project-detail-status').textContent = `Status: ${project.status} · ${(project.sessions || []).length} session(s)`;
@@ -871,22 +1077,25 @@ async function openProjectDetail(id, name) {
       el.innerHTML = `<div class="session-title"><span>${escapeHtml(s.tmux_name || 'unknown')}</span><span class="badge ${s.status === 'detached' ? 'live' : 'stopped'}">${escapeHtml(s.profile || '')}</span></div><p class="meta">${escapeHtml(s.tool || '')} · ${escapeHtml(s.attention_state || 'normal')}${s.initial_task ? ` · ${escapeHtml(s.initial_task)}` : ''}</p>`;
       const unassignBtn = document.createElement('button'); unassignBtn.textContent = 'Unassign'; unassignBtn.className = 'danger';
       unassignBtn.onclick = async () => {
+        if (!currentProjectDetail(context) || unassignBtn.disabled) return;
+        unassignBtn.disabled = true;
         try {
           await api(`/api/projects/${encodeURIComponent(id)}/unassign`, { method: 'POST', body: JSON.stringify({ session_name: s.tmux_name }) });
-          openProjectDetail(id, name);
-        } catch (e) { showNotice(e.message, 'error'); }
+          if (currentProjectDetail(context)) openProjectDetail(id, name);
+          await renderProjects();
+        } catch (e) { if (currentProjectDetail(context)) showNotice(e.message, 'error'); }
+        finally { unassignBtn.disabled = false; }
       };
       el.append(unassignBtn);
       list.append(el);
     });
     if (!sessions.length) list.innerHTML = '<p class="empty">No sessions assigned to this project.</p>';
-    const assignSelect = $('#project-assign-select');
     const availSessions = (state.sessions || []).filter((s) => s.running && !sessions.find((ps) => ps.tmux_name === s.tmux_name));
     assignSelect.replaceChildren(...availSessions.map((s) => new Option(s.tmux_name, s.tmux_name)));
     assignSelect.prepend(new Option('Select session…', ''));
     assignSelect.dataset.projectId = id;
-    $('#project-detail-dialog').showModal();
-  } catch (e) { showNotice(e.message, 'error'); }
+    $('#project-assign-btn').disabled = false;
+  } catch (e) { if (currentProjectDetail(context)) { $('#project-detail-status').textContent = 'Unable to load project.'; showNotice(e.message, 'error'); } }
 }
 
 $('#new-project-form').onsubmit = async (event) => {
@@ -895,19 +1104,23 @@ $('#new-project-form').onsubmit = async (event) => {
   try {
     await api('/api/projects', { method: 'POST', body: JSON.stringify({ name: event.target.elements.name.value, repository: event.target.elements.repository.value || null, description: event.target.elements.description.value || null }) });
     status.textContent = 'Created.'; $('#new-project-dialog').close();
-    renderProjects();
+    await renderProjects();
   } catch (e) { status.textContent = e.message; } finally { submit.disabled = false; }
 };
 $('#new-project-btn').onclick = () => { $('#new-project-form').reset(); $('#new-project-status').textContent = ''; $('#new-project-dialog').showModal(); };
 $('#project-assign-btn').onclick = async () => {
+  const context = projectDetailContext;
   const select = $('#project-assign-select');
   const sessionName = select.value;
-  const projectId = select.dataset.projectId;
-  if (!sessionName || !projectId) return;
+  const button = $('#project-assign-btn');
+  if (!context || !currentProjectDetail(context) || button.disabled || !sessionName || select.dataset.projectId !== context.id) return;
+  button.disabled = true;
   try {
-    await api(`/api/projects/${encodeURIComponent(projectId)}/assign`, { method: 'POST', body: JSON.stringify({ session_name: sessionName }) });
-    openProjectDetail(projectId, $('#project-detail-title').textContent);
-  } catch (e) { showNotice(e.message, 'error'); }
+    await api(`/api/projects/${encodeURIComponent(context.id)}/assign`, { method: 'POST', body: JSON.stringify({ session_name: sessionName }) });
+    if (currentProjectDetail(context)) openProjectDetail(context.id, context.name);
+    await renderProjects();
+  } catch (e) { if (currentProjectDetail(context)) showNotice(e.message, 'error'); }
+  finally { if (currentProjectDetail(context)) button.disabled = false; }
 };
 
 function updateAgentModeField() {
@@ -1027,23 +1240,34 @@ async function estimateModelUsage() {
 }
 
 async function refresh() {
+  const request = ++refreshRequest;
   const [sessions, plans, tree] = await Promise.all([api('/api/sessions?state=all'), api('/api/plans'), api('/api/delegations')]);
+  if (request !== refreshRequest) return;
   state.sessions = sessions; state.plans = plans; state.tree = tree;
-  for (const name of [...terminalTabs.keys()]) {
-    const session = sessions.find((item) => item.tmux_name === name);
-    if (!session?.running) closeTerminal(name);
+  for (const [name, item] of [...terminalTabs]) {
+    const session = sessions.find(session => item.sessionId ? session.id === item.sessionId : session.tmux_name === name);
+    if (!session?.running) { closeTerminal(name); continue; }
+    if (session.tmux_name !== name) {
+      item.name = session.tmux_name;
+      item.tab.textContent = item.name; item.frame.title = `Terminal ${item.name}`;
+      item.close.setAttribute('aria-label', `Close ${item.name}`);
+      terminalTabs.delete(name); terminalTabs.set(item.name, item);
+      if (activeTerminal === name) activeTerminal = item.name;
+      item.frame.contentWindow?.postMessage({type:'agent-console:refresh-identity',session_id:item.sessionId}, location.origin);
+    }
   }
-  renderSessions(); renderOrchestration();
+  renderSessions(); await renderOrchestration();
+  if (request !== refreshRequest) return;
   if (state.selectedSession) {
-    const selected = sessions.find((item) => item.tmux_name === state.selectedSession);
-    if (selected) renderInspector(selected); else closeInspector();
+    const selected = sessions.find((item) => item.id === state.selectedSessionId);
+    if (selected) renderInspector(selected); else closeInspector(false);
   }
 }
 
 async function start() {
   initTheme([$('#theme-select'), $('#mobile-theme-select')]);
-  const layout = localStorage.getItem('agent-console-layout') || 'auto'; $('#layout-select').value = layout;
-  $('#layout-select').onchange = () => { const value=$('#layout-select').value; localStorage.setItem('agent-console-layout', value); if(value==='mobile') location.href='/mobile'; };
+  let layout = 'auto'; try { layout = localStorage.getItem('agent-console-layout') || 'auto'; } catch {} $('#layout-select').value = layout;
+  $('#layout-select').onchange = () => { const value=$('#layout-select').value; try { localStorage.setItem('agent-console-layout', value); } catch {} if(value==='mobile') location.href='/mobile'; };
   state.identity = await api('/api/me'); $('#identity').textContent = `${state.identity.login} · ${state.identity.access_surface}`;
   const readyCount = state.identity.tool_status.filter((item) => item.status === 'ready').length;
   $('#provider-summary').textContent = `${readyCount}/${state.identity.tool_status.length} providers ready`;
@@ -1074,33 +1298,47 @@ async function start() {
   newForm.elements.profile.onchange = () => { const p = state.identity.profiles.find(x => x.name === newForm.elements.profile.value); newForm.elements.worktree.checked = p ? p.worktree_requirement !== 'none' : false; updateAgentModeField(); };
   delegateForm.elements.tool.onchange = () => { updateContextSelect(delegateForm.elements.tool, delegateForm.elements.auth_context); $('#delegate-mode-field').hidden = delegateForm.elements.tool.value !== 'opencode'; };
   updateNewToolFields(); selectView(location.hash.slice(1) || 'sessions', false); await refresh();
-  (async () => {
-    try {
-      const projects = await api('/api/projects');
-      const projSelect = newForm.elements.project_id;
-      projSelect.replaceChildren(...projects.map((p) => new Option(`${p.name}${p.repository ? ' · ' + p.repository : ''}`, p.id)));
-      projSelect.prepend(new Option('None', ''));
-    } catch {}
-  })();
+  renderProjects().catch(() => {});
   setInterval(() => { if (!document.hidden && !$$('dialog').some((dialog) => dialog.open)) refresh().catch((error) => showNotice(error.message, 'error')); }, 10000);
 }
 
 $$('[data-view]').forEach((button) => button.addEventListener('click', () => selectView(button.dataset.view)));
 window.addEventListener('hashchange', () => selectView(location.hash.slice(1), false));
+const phoneNavigation = matchMedia('(max-width:760px)');
+$('#open-navigation').onclick = () => { navigationDialog.showModal(); $('#open-navigation').setAttribute('aria-expanded', 'true'); };
+navigationDialog.addEventListener('close', () => {
+  $('#open-navigation').setAttribute('aria-expanded', 'false');
+  if (phoneNavigation.matches) $('#open-navigation').focus({preventScroll:true});
+});
+phoneNavigation.addEventListener('change', () => { if (!phoneNavigation.matches && navigationDialog.open) navigationDialog.close(); });
 $('#rail-toggle').onclick = () => { document.body.classList.toggle('rail-collapsed'); const collapsed = document.body.classList.contains('rail-collapsed'); $('#rail-toggle').setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation'); };
 $$('[data-close]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
 $$('#filter-search, #filter-tool, #filter-profile, #filter-state, #filter-attention').forEach((control) => control.addEventListener('input', renderSessions));
 $$('[data-attention-filter]').forEach((button) => button.onclick = () => { $('#filter-attention').value = button.dataset.attentionFilter; renderSessions(); });
 $('#inspector-close').onclick = closeInspector;
 
+attentionForm.addEventListener('input', () => {
+  attentionDrafts.set(attentionForm.dataset.sessionId, { state: attentionForm.elements.state.value, note: attentionForm.elements.note.value });
+});
 attentionForm.onsubmit = async (event) => {
-  event.preventDefault(); const name = attentionForm.dataset.session; const submit = $('button[type="submit"]', attentionForm);
+  event.preventDefault(); const name = attentionForm.dataset.session, id = attentionForm.dataset.sessionId; const submit = $('button[type="submit"]', attentionForm);
+  if (attentionPending.has(id)) return;
+  const submitted = { state: attentionForm.elements.state.value, note: attentionForm.elements.note.value };
+  attentionPending.add(id);
   submit.disabled = true; $('#attention-status').textContent = 'Updating…';
   try {
-    const session = await api(`/api/sessions/${encodeURIComponent(name)}/attention`, { method: 'PATCH', body: JSON.stringify({ state: attentionForm.elements.state.value, note: attentionForm.elements.note.value || null }) });
-    const index = state.sessions.findIndex((item) => item.tmux_name === name); if (index >= 0) state.sessions[index] = session;
-    renderInspector(session); renderSessions(); renderOrchestration(); $('#attention-status').textContent = 'State updated';
-  } catch (error) { $('#attention-status').textContent = error.message; } finally { submit.disabled = false; }
+    const session = await api(`/api/sessions/${encodeURIComponent(name)}/attention`, { method: 'PATCH', body: JSON.stringify({ state: submitted.state, note: submitted.note || null }) });
+    const draft = attentionDrafts.get(id);
+    if (!draft || (draft.state === submitted.state && draft.note === submitted.note)) attentionDrafts.delete(id);
+    const index = state.sessions.findIndex((item) => item.id === id); if (index >= 0) state.sessions[index] = session;
+    renderSessions(); renderOrchestration().catch(error => showNotice(error.message, 'error'));
+    if (state.selectedSessionId === id && !inspector.hidden) {
+      renderInspector(session); $('#attention-status').textContent = 'State updated';
+    }
+  } catch (error) {
+    if (state.selectedSessionId === id && !inspector.hidden) $('#attention-status').textContent = error.message;
+    else showNotice(`${name}: ${error.message}`, 'error');
+  } finally { attentionPending.delete(id); submit.disabled = attentionPending.has(state.selectedSessionId); }
 };
 
 $('#terminal-dock-collapse').onclick = () => { terminalDock.classList.toggle('collapsed'); updateDockLayout(); };
@@ -1124,7 +1362,7 @@ $('#terminal-dock-handle').addEventListener('pointerdown', (event) => {
   window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop, { once: true });
 });
 (function restoreDock() {
-  const saved = localStorage.getItem('agent-console-dock-height');
+  let saved; try { saved = localStorage.getItem('agent-console-dock-height'); } catch {}
   if (saved) {
     const h = parseInt(saved, 10);
     if (h > 0 && h <= window.innerHeight - 56) { terminalDock.style.height = `${h}px`; updateDockLayout(); }
@@ -1133,13 +1371,16 @@ $('#terminal-dock-handle').addEventListener('pointerdown', (event) => {
 
 window.addEventListener('keydown', (event) => {
   const target = event.target;
-  if (target.closest('input,textarea,select,button,dialog,[contenteditable="true"],.terminal-dock')) return;
-  const active = state.sessions.filter(sessionMatches).filter((session) => session.running);
-  const currentIndex = Math.max(0, active.findIndex((session) => session.tmux_name === state.selectedSession));
+  if (event.key === 'Escape' && !inspector.hidden && !$$('dialog').some(dialog => dialog.open) && !target.closest('.terminal-dock')) {
+    event.preventDefault(); closeInspector(); return;
+  }
+  if (target.closest('input,textarea,select,button,dialog,[contenteditable="true"],.terminal-dock,.action-menu')) return;
+  const active = state.sessions.filter(sessionMatches).filter((session) => session.running).sort(stableSessionOrder);
+  const currentName = target.closest('.session-row')?.dataset.session || state.selectedSession;
+  const currentIndex = Math.max(0, active.findIndex((session) => session.tmux_name === currentName));
   if (event.key === '/') { event.preventDefault(); $('#filter-search').focus(); }
   else if (event.key.toLowerCase() === 'n') selectView('new');
   else if (event.key.toLowerCase() === 't' && state.selectedSession) openTerminal(state.selectedSession);
-  else if (event.key === 'Escape' && !inspector.hidden) closeInspector();
   else if (event.key === 'ArrowDown' && active.length) { event.preventDefault(); renderInspector(active[Math.min(active.length - 1, currentIndex + 1)]); }
   else if (event.key === 'ArrowUp' && active.length) { event.preventDefault(); renderInspector(active[Math.max(0, currentIndex - 1)]); }
   else if (event.key === 'Enter' && state.selectedSession) {
@@ -1148,7 +1389,11 @@ window.addEventListener('keydown', (event) => {
 });
 
 newForm.onsubmit = async (event) => {
-  event.preventDefault(); formStatus.textContent = 'Creating…'; const submit = $('button[type="submit"]', newForm); submit.disabled = true;
+  event.preventDefault(); const submit = $('button[type="submit"]', newForm);
+  if (submit.disabled) return;
+  const view = viewRequest;
+  const current = () => view === viewRequest && state.view === 'new';
+  formStatus.textContent = 'Creating…'; submit.disabled = true;
   const data = Object.fromEntries(new FormData(newForm)); data.worktree = newForm.elements.worktree.checked;
   if (data.tool === 'codex' || data.tool === 'codex-pro') {
     data.model = data.codex_model || null;
@@ -1157,30 +1402,54 @@ newForm.onsubmit = async (event) => {
   }
   delete data.codex_model; delete data.codex_effort; delete data.codex_plan_effort;
   for (const key of ['name', 'task', 'agent_mode', 'provider', 'model', 'reasoning_effort', 'plan_reasoning_effort', 'project_id']) if (!data[key]) data[key] = null;
-  try { const session = await api('/api/sessions', { method: 'POST', body: JSON.stringify(data) }); await refresh(); selectView('sessions'); renderInspector(session); openTerminal(session.tmux_name); submit.disabled = false; }
-  catch (error) { formStatus.textContent = error.message; submit.disabled = false; }
+  try {
+    const session = await api('/api/sessions', { method: 'POST', body: JSON.stringify(data) });
+    await refresh(); formStatus.textContent = `Created ${session.tmux_name}`;
+    if (current()) { selectView('sessions'); renderInspector(session); openTerminal(session.tmux_name); }
+    else showNotice(`Created ${session.tmux_name}`);
+  } catch (error) {
+    formStatus.textContent = error.message;
+    if (!current()) showNotice(`Session creation: ${error.message}`, 'error');
+  } finally { submit.disabled = false; }
 };
 
 delegateForm.onsubmit = async (event) => {
-  event.preventDefault(); const submit = $('button[type="submit"]', delegateForm); submit.disabled = true; $('#delegate-status').textContent = 'Creating read-only child…';
+  event.preventDefault(); const submit = $('button[type="submit"]', delegateForm);
+  if (submit.disabled) return;
+  const request = delegateRequest;
+  const current = () => request === delegateRequest && delegateDialog.open;
+  submit.disabled = true; $('#delegate-status').textContent = 'Creating child…';
   const data = Object.fromEntries(new FormData(delegateForm)); const parent = data.parent; delete data.parent;
   for (const key of ['name', 'repository', 'agent_mode', 'auth_context']) if (!data[key]) data[key] = null;
-  try { const result = await api(`/api/sessions/${encodeURIComponent(parent)}/delegations`, { method: 'POST', body: JSON.stringify(data) }); delegateDialog.close(); await refresh(); showNotice(`Created ${result.session.tmux_name}`); }
-  catch (error) { $('#delegate-status').textContent = error.message; } finally { submit.disabled = false; }
+  try { const result = await api(`/api/sessions/${encodeURIComponent(parent)}/delegations`, { method: 'POST', body: JSON.stringify(data) }); if (current()) delegateDialog.close(); await refresh(); showNotice(`Created ${result.session.tmux_name}`); }
+  catch (error) { if (current()) $('#delegate-status').textContent = error.message; else showNotice(`${parent}: ${error.message}`, 'error'); }
+  finally { if (request === delegateRequest) submit.disabled = false; }
 };
 
 planForm.onsubmit = async (event) => {
-  event.preventDefault(); const submit = $('button[type="submit"]', planForm); submit.disabled = true; $('#plan-status').textContent = 'Creating isolated implementation session…';
+  event.preventDefault(); const submit = $('button[type="submit"]', planForm);
+  if (submit.disabled || !planForm.elements.plan_id.value) return;
+  const request = planRequest;
+  submit.disabled = true; $('#plan-status').textContent = 'Creating isolated implementation session…';
   const data = Object.fromEntries(new FormData(planForm)); const planId = data.plan_id; delete data.plan_id; data.confirmed = true;
   data.allow_revision_change = planForm.elements.allow_revision_change.checked; if (!data.name) data.name = null;
-  try { const session = await api(`/api/plans/${encodeURIComponent(planId)}/execute`, { method: 'POST', body: JSON.stringify(data) }); planDialog.close(); await refresh(); selectView('sessions'); renderInspector(session); openTerminal(session.tmux_name); }
-  catch (error) { $('#plan-status').textContent = error.message; submit.disabled = false; }
+  try {
+    const session = await api(`/api/plans/${encodeURIComponent(planId)}/execute`, { method: 'POST', body: JSON.stringify(data) });
+    const current = request === planRequest && planDialog.open;
+    if (current) planDialog.close();
+    await refresh();
+    if (current && request === planRequest && !planDialog.open) {
+      selectView('sessions'); renderInspector(session); openTerminal(session.tmux_name);
+    } else { showNotice(`Created ${session.tmux_name} from plan ${planId}`); }
+  } catch (error) { if (request === planRequest && planDialog.open) $('#plan-status').textContent = error.message; }
+  finally { if (request === planRequest) submit.disabled = false; }
 };
 
 $('#refresh').onclick = async (event) => {
-  event.currentTarget.disabled = true;
+  const button = event.currentTarget;
+  button.disabled = true;
   try { await refresh(); showNotice('Console refreshed'); } catch (error) { showNotice(error.message, 'error'); }
-  finally { event.currentTarget.disabled = false; }
+  finally { button.disabled = false; }
 };
 
 start().catch((error) => showNotice(error.message || String(error), 'error'));

@@ -1,45 +1,34 @@
-const STORAGE_KEY = 'agent-console-theme';
-const VALID_THEMES = new Set(['system', 'light', 'dark']);
+import '/static/theme-bootstrap.js?v=1';
 
-export function currentTheme() {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  return VALID_THEMES.has(stored) ? stored : 'system';
-}
-
-export function applyTheme(theme) {
-  const selected = VALID_THEMES.has(theme) ? theme : 'system';
-  document.documentElement.dataset.theme = selected;
-  document.documentElement.style.colorScheme = selected === 'system' ? 'light dark' : selected;
-  return selected;
-}
+const appearance = window.AgentConsoleAppearance;
+export function currentTheme() { return appearance.state().mode; }
+export function applyTheme(mode) { return appearance.set({...appearance.state(), mode}).mode; }
 
 export function initTheme(select, onChange = () => {}) {
   const controls = Array.isArray(select) ? select.filter(Boolean) : select ? [select] : [];
-  const media = matchMedia('(prefers-color-scheme: dark)');
-  const update = () => {
-    const selected = applyTheme(currentTheme());
-    controls.forEach((control) => { control.value = selected; });
-    onChange(selected);
-  };
-  update();
-  controls.forEach((control) => control.addEventListener('change', () => {
-    const selected = applyTheme(control.value);
-    localStorage.setItem(STORAGE_KEY, selected);
-    controls.forEach((other) => { other.value = selected; });
-    onChange(selected);
-  }));
-  media.addEventListener?.('change', () => {
-    if (currentTheme() === 'system') onChange('system');
+  const palettes = [...document.querySelectorAll('[data-palette-select]')];
+  appearance.subscribe(({mode, palette}) => {
+    controls.forEach(control => { control.value = mode; });
+    palettes.forEach(control => { control.value = palette; });
+    onChange(mode);
   });
+  controls.forEach(control => control.addEventListener('change', () => appearance.set({...appearance.state(), mode: control.value})));
+  palettes.forEach(control => control.addEventListener('change', () => appearance.set({...appearance.state(), palette: control.value})));
   return currentTheme();
 }
 
 export function xtermTheme() {
   const styles = getComputedStyle(document.documentElement);
-  return {
-    background: styles.getPropertyValue('--terminal-bg').trim(),
-    foreground: styles.getPropertyValue('--terminal-text').trim(),
-    cursor: styles.getPropertyValue('--focus').trim(),
-    selectionBackground: styles.getPropertyValue('--terminal-selection').trim(),
+  const value = name => styles.getPropertyValue(name).trim();
+  const theme = {
+    background: value('--terminal-bg'), foreground: value('--terminal-text'),
+    cursor: value('--terminal-cursor'), cursorAccent: value('--terminal-bg'),
+    selectionBackground: value('--terminal-selection'),
+    selectionInactiveBackground: value('--terminal-selection-inactive'),
   };
+  for (const name of ['black','red','green','yellow','blue','magenta','cyan','white',
+    'brightBlack','brightRed','brightGreen','brightYellow','brightBlue','brightMagenta','brightCyan','brightWhite']) {
+    theme[name] = value(`--ansi-${name}`);
+  }
+  return theme;
 }

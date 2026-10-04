@@ -14,10 +14,13 @@ Hermes already accepted any catalogue model id, so this only changed Pi.
 ## Installation and credential provisioning
 
 Install pi under `~/.local` with the pinned `pi-runtime` Node (22.22.2). The
-deployed harness is `@earendil-works/pi-coding-agent` 0.85.1: the retired
-`@mariozechner` scope is no longer published, and `scripts/pi-wrapper` in this
-repository still names it, so install the harness by hand (or repair that wrapper)
-until it is corrected. Install `scripts/pi-wrapper` as
+verified native MCP harness is `@earendil-works/pi-coding-agent` **0.99.2**.
+`scripts/pi-wrapper` names this scope and passes through arguments without
+rewriting generated MCP configuration. Managed contexts do not source host
+credential files or invoke a legacy MCP normalizer after Console resolves the
+environment. Empty and suppressed project variables remain empty/absent. It
+preserves an explicit theme and supplies a readable dark default only when no
+theme is set. Standalone invocation retains its host compatibility path. Install it as
 `~/.local/bin/pi-agent-console` and set `AGCONSOLE_PI_BIN` to that absolute path
 in Console's runtime.env.
 Pi resolves an `api_key` entry through its config-value expansion: from pi 0.74
@@ -45,7 +48,8 @@ timestamp, never the key. Rerun to refresh the catalogue or rotate the key.
 
 ## Launch behavior and limitations
 
-Session launchers source the selected secret file at runtime. Pi gets a private
+The private launch bootstrap passes the resolved environment literally, including
+selected credential-file defaults and global/project overrides. Pi gets a private
 models.json with the `$CMD_API_KEY` environment reference and
 `--append-system-prompt` pointing to Console's context file; its `auth.json` is
 (re)written to the same reference so a previously stored literal is never kept
@@ -53,32 +57,30 @@ on disk. Hermes gets a private HERMES_HOME/config.yaml with `${CMD_API_KEY}`; it
 wrapper reads the Console context into HERMES_EPHEMERAL_SYSTEM_PROMPT at launch,
 including after a rename/restart.
 
-Both harnesses also receive their MCP client configuration from the release
-rather than from host-edited wrappers. For every server in the adapter's
-descriptor table, Pi's per-session `mcp.json` (the highest-precedence Pi config)
-gets a `bearerTokenEnv` entry when the token variable is present in the Console
-process environment, and Hermes' `config.yaml` gets an `mcp_servers` entry with a
-`${VAR}` authorization header. Only variable **names** are stored, and
-`<NAME>_URL` overrides the default endpoint.
+Both harnesses receive generated MCP configuration for credential-enabled n8n,
+Directus, OpenRouter and Bushi servers. Pi uses native `headers`, `timeout` in
+seconds and `exposure: codemode`; Hermes uses `mcp_servers` with the same headers
+and timeout. Only `${VAR}` references are written. URL overrides are
+`N8N_MCP_URL`, `DIRECTUS_MCP_URL`, `OPENROUTER_MCP_URL` and `BUSHI_MCP_URL`.
+The 1200-second Bushi timeout preserves long browser operations.
 
-Absence must mean absence, not inheritance. Pi's per-session file outranks the
-user-global `~/.config/mcp/mcp.json` and discovered host configs, so a descriptor
-server whose token is missing is written there as an explicit `disabled` entry
-(`{"disabled": true}`); a host-global entry for the same name is therefore
-suppressed instead of being inherited and failing at connect time. The file is
-rewritten on every launch, so removing a credential cannot leave a stale active
-entry. Unrelated servers (for example `openrouter` from the shared config) are
-untouched. Hermes has no shared MCP source, so an absent token simply omits the
-`mcp_servers` block.
+Missing credentials produce `{url, enabled: false}` in Pi and omit the Hermes
+entry. Relaunch regenerates the managed configuration, dropping stale active
+entries. Pi's trusted project `.pi/mcp.json` can override the agent-directory
+file; Hermes may add portable plugin servers. This is configuration delivery,
+not complete tool isolation. See [native MCP verification](NATIVE_MCP_VERIFICATION.md).
+Existing host wrappers are retained until their separate deployment is reviewed;
+the source adapters need no legacy MCP translation or server merge.
 The user still sends the stored session brief explicitly in the composer.
 
 Both desktop and mobile expose the selected context's model catalogue. The CLI
 accepts `--model` and validates it against that context. Unsupported agent-mode
 and reasoning-effort pins fail clearly. Console profile instructions reach both
 harnesses, but neither adapter enforces a sandbox, read-only execution, or human
-approval. Per-session assigned-skill isolation is unsupported; existing guards
-reject profiles with assigned skills. Hermes's private home does not inherit
-shared native memory/skills/config. The native tool remains otherwise available.
+approval. Pi receives Console-selected copied skills in its private agent directory,
+while native project/settings/package discovery remains active. Hermes receives
+shared selections through `skills.external_dirs`; per-profile isolation remains
+unsupported. Neither placement claims to suppress all native sources.
 
 Existing OpenRouter contexts and files are preserved for rollback; the new
 Pi/Hermes adapters require verified CommandCode contexts. Old persisted
@@ -97,3 +99,15 @@ Before activation, snapshot runtime.env, auth-contexts.json, the existing
 credential (if any), wrappers, runner and selected-release target. Retain the
 previous release. Restore those files and the selected symlink, then restart
 only the web service to roll back; do not terminate existing tmux sessions.
+
+## Updating an existing host wrapper
+
+A custom installed launcher does not change when Console selects a new release.
+Before deploying this fix, compare its current hash with the reviewed preimage,
+back it up privately, and atomically install the reviewed `scripts/pi-wrapper`
+bytes at the existing `AGCONSOLE_PI_BIN` path. Keep standalone `pi` and unrelated
+host customizations intact. Verify the installed wrapper with dummy credential
+files, an inert native CLI and temporary HOME; never use real credential values
+in test output. Confirm override, empty/suppressed values, disabled native MCP
+entries, explicit theme and selected skill links survive. Future Pi launches and
+explicit restarts receive the change; existing processes keep their environment.

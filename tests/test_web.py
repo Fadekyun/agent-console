@@ -32,6 +32,80 @@ from agent_console.web import create_app
     "tmux required",
 )
 class WebTests(unittest.TestCase):
+    def test_git_skill_import_requires_identity_and_preserves_selected_revision(self):
+        path = '/api/skill-registry/imports'
+        payload = {'source':'https://example.invalid/skills.git', 'revision':'main', 'subdirectory':'guides/fixture'}
+        with patch('agent_console.skill_registry.SkillRegistry.stage_git', return_value={'id':'import-fixture','hash':'a'*64}) as stage:
+            self.assertEqual(self.client.post(path,json=payload).status_code,403)
+            stage.assert_not_called()
+            response = self.client.post(path,json=payload,headers=self.headers)
+            self.assertEqual(response.status_code,200,response.text)
+            stage.assert_called_once_with(payload['source'],revision='main',subdirectory='guides/fixture')
+        with patch('agent_console.skill_git.GitReader.fetch') as fetch:
+            secret_source='https://user:private-value@example.invalid/repo'
+            response=self.client.post(path,json={'source':secret_source},headers=self.headers)
+            self.assertEqual(response.status_code,400,response.text)
+            self.assertNotIn('private-value',response.text)
+            fetch.assert_not_called()
+        response=self.client.post(path,json={'source':str(self.workspace),'revision':'main'},headers=self.headers)
+        self.assertEqual(response.status_code,400)
+
+    def test_recipe_configuration_and_continuation_require_operator_auth(self):
+        request = {'tool':'shell','profile':'general','repository':str(self.workspace),'task':'Inspect the fixture'}
+        endpoint = '/api/workbench/launches'
+        self.assertEqual(self.client.post(endpoint+'/preview',json={'request':request}).status_code,403)
+        self.assertEqual(self.client.post('/api/workbench/recipes',json={'title':'Fixture','request':request}).status_code,403)
+        recipe = self.client.post('/api/workbench/recipes',json={'title':'Fixture','request':request},headers=self.headers)
+        self.assertEqual(recipe.status_code,200,recipe.text)
+        request = recipe.json()['request']
+        preview = self.client.post(endpoint+'/preview',json={'request':request},headers=self.headers)
+        self.assertEqual(preview.status_code,200,preview.text)
+        payload = {'request':request,'request_key':'api-recipe','expected_hash':preview.json()['hash']}
+        self.assertEqual(self.client.post(endpoint,json=payload).status_code,403)
+        run = self.client.post(endpoint,json=payload,headers=self.headers)
+        self.assertEqual(run.status_code,200,run.text);identity=run.json()['session_id']
+        self.assertEqual(self.client.post(endpoint,json=payload,headers=self.headers).json()['session_id'],identity)
+        path = '/api/workbench/sessions/'+identity+'/configuration'
+        self.assertEqual(self.client.get(path).status_code,403)
+        config = self.client.get(path,headers=self.headers).json()
+        self.assertEqual(config['latest']['config']['tool'],'shell')
+        self.assertEqual(config['latest']['request_id'],'api-recipe')
+        self.assertIsInstance(config['latest']['sequence'], str)
+        self.assertGreater(int(config['latest']['sequence']), 2**53)
+        self.manager.kill(run.json()['name'])
+        continuation = {'request':config['latest']['config']|{'task':'Continue fixture'},'source_session_id':identity}
+        reviewed = self.client.post(endpoint+'/preview',json=continuation,headers=self.headers)
+        self.assertEqual(reviewed.status_code,200,reviewed.text)
+        continued=self.client.post(endpoint,json=continuation|{'expected_hash':reviewed.json()['hash'],'request_key':'api-continuation'},headers=self.headers)
+        self.assertEqual(continued.status_code,200,continued.text)
+        self.assertEqual(self.manager.inspect(continued.json()['name'])['parent_session_id'],identity)
+        self.assertEqual(self.client.get(endpoint+'/api-continuation').status_code,403)
+        self.assertEqual(self.client.post(endpoint+'/preview',json={'request':{'tool':'shell'}},headers=self.headers).status_code,400)
+
+    def test_workbench_ownership_results_history_and_authentication(self):
+        from agent_console.workflow_service import WorkflowService
+        first=self.manager.create(tool='shell',profile='general',name='workbench-first')
+        second=self.manager.create(tool='shell',profile='general',name='workbench-second')
+        svc=WorkflowService(self.manager)
+        svc.attach(first['id'],second['id'],purpose='Connected check',dependencies=[],expected_version=0,actor='test')
+        svc.publish(second['id'],{'kind':'final','outcome':'fail','summary':'One check failed','checks':[],'artifacts':[],'request_key':'result-1'},'test')
+        self.assertEqual(self.client.get('/api/workbench').status_code,403)
+        response=self.client.get('/api/workbench',headers=self.headers);self.assertEqual(response.status_code,200,response.text)
+        view=response.json();node=next(n for n in view['nodes'] if n['id']==second['id'])
+        self.assertEqual(node['owner_id'],first['id']);self.assertEqual(node['mechanical'],'running');self.assertEqual(node['attention'],'normal');self.assertEqual(node['result_state'],'failed')
+        self.assertEqual(view['groups'][0]['children_total'],1)
+        path='/api/workbench/sessions/'+second['id']+'/history'
+        self.assertEqual(self.client.get(path).status_code,403)
+        history=self.client.get(path,headers=self.headers).json();self.assertTrue(any(e['action']=='result.published' for e in history['events']))
+        self.assertNotIn('evidence_capability',json.dumps(view)+json.dumps(history))
+        endpoint='/api/workbench/sessions/'+first['id']+'/history'
+        self.assertEqual(self.client.get(endpoint).status_code,403)
+        self.manager.kill(first['tmux_name'])
+        with self.manager.database.connect() as db:
+            db.execute("UPDATE sessions SET execution_kind='integration-plan' WHERE id=?",(first['id'],))
+        self.assertEqual(self.client.get(endpoint,headers=self.headers).status_code,200)
+        self.assertEqual(self.client.get('/api/workbench/sessions/missing/history',headers=self.headers).status_code,400)
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
@@ -68,7 +142,7 @@ class WebTests(unittest.TestCase):
         self.manager = SessionManager(settings)
         codex_home = self.manager.auth.codex_home("default")
         (codex_home / "auth.json").write_text("{}\n", encoding="utf-8")
-        self.client = TestClient(create_app(self.manager))
+        self.client = TestClient(create_app(self.manager), client=("127.0.0.1", 50000))
         self.headers = {"Tailscale-User-Login": "test@example.com"}
 
     def tearDown(self) -> None:
@@ -79,6 +153,271 @@ class WebTests(unittest.TestCase):
             os.environ.pop("AGCONSOLE_SKILLS_ROOT", None)
         self.temp.cleanup()
 
+    def test_registry_import_requires_identity_and_exact_revision(self) -> None:
+        source = self.workspace / "import-me"
+        source.mkdir()
+        (source / "SKILL.md").write_text("---\nname: import-me\ndescription: Fixture guide\nmetadata:\n  agent-console/version: '1'\n---\nRead the scope.\n")
+        route = "/api/skill-registry/imports"
+        self.assertEqual(self.client.post(route, json={"source": str(source)}).status_code, 403)
+        staged = self.client.post(route, json={"source": str(source)}, headers=self.headers)
+        self.assertEqual(staged.status_code, 200, staged.text)
+        data = staged.json()
+        target = Path(os.environ["AGCONSOLE_SKILLS_ROOT"]) / "import-me"
+        self.assertFalse(target.exists())
+        activation = route + "/" + data["id"] + "/activate"
+        stale = self.client.post(activation, json={"expected_hash": "a" * 64}, headers=self.headers)
+        self.assertEqual(stale.status_code, 400)
+        self.assertFalse(target.exists())
+        active = self.client.post(activation, json={"expected_hash": data["hash"]}, headers=self.headers)
+        self.assertEqual(active.status_code, 200, active.text)
+        self.assertEqual(active.json()["trust"], "reviewed")
+        self.assertTrue((target / "SKILL.md").is_file())
+        outside = self.client.post(route, json={"source": str(self.workspace.parent)}, headers=self.headers)
+        self.assertEqual(outside.status_code, 400)
+
+    def test_registry_preview_tracks_hash_approval_and_drift(self) -> None:
+        source = Path(os.environ["AGCONSOLE_SKILLS_ROOT"]) / "test-skill-for-web"
+        (source / "agent-console.json").write_text(json.dumps({"version": 1, "approval": "ask"}))
+        assigned = self.client.post("/api/skills/assign", json={"profile":"general", "skill_name":"test-skill-for-web"}, headers=self.headers)
+        self.assertEqual(assigned.status_code, 200, assigned.text)
+        payload = {"profile":"general", "tool":"codex", "repository":str(self.workspace)}
+        preview = self.client.post("/api/skill-registry/preview", json=payload, headers=self.headers)
+        self.assertEqual(preview.status_code, 200, preview.text)
+        data = preview.json()
+        self.assertFalse(data["validation"]["valid"])
+        self.assertEqual(data["policies"][0]["effective_policy"], "ask")
+        revision = data["policies"][0]["hash"]
+        approved = self.client.post("/api/skill-registry/test-skill-for-web/approve", json={"profile":"general", "expected_hash":revision}, headers=self.headers)
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertTrue(self.client.post("/api/skill-registry/preview", json=payload, headers=self.headers).json()["validation"]["valid"])
+        with (source / "SKILL.md").open("a") as stream:
+            stream.write("Changed instructions.\n")
+        self.assertFalse(self.client.post("/api/skill-registry/preview", json=payload, headers=self.headers).json()["validation"]["valid"])
+        stale = self.client.post("/api/skill-registry/test-skill-for-web/approve", json={"profile":"general", "expected_hash":revision}, headers=self.headers)
+        self.assertEqual(stale.status_code, 400)
+
+    def test_session_delivery_receipt_survives_kill(self) -> None:
+        session = self.manager.create(tool="shell", profile="general", name="receipt-fixture")
+        route = "/api/sessions/receipt-fixture/skills"
+        before = self.client.get(route, headers=self.headers)
+        self.assertEqual(before.status_code, 200, before.text)
+        self.assertEqual(before.json()["session_id"], session["id"])
+        self.assertEqual(before.json()["latest"]["skills"], [])
+        self.manager.kill("receipt-fixture")
+        self.assertEqual(self.client.get(route, headers=self.headers).json(), before.json())
+
+    def test_session_delivery_receipt_rejects_reused_name_identity(self) -> None:
+        original = self.manager.create(tool="shell", profile="general", name="skill-identity")
+        self.manager.rename("skill-identity", "skill-renamed")
+        replacement = self.manager.create(tool="shell", profile="general", name="skill-identity")
+        route = "/api/sessions/skill-identity/skills"
+        with patch("agent_console.skill_api.read_deliveries") as read:
+            response = self.client.get(route, params={"session_id": original["id"]}, headers=self.headers)
+            self.assertEqual(response.status_code, 409, response.text)
+            read.assert_not_called()
+        for name, identity in (("skill-renamed", original["id"]), ("skill-identity", replacement["id"])):
+            response = self.client.get(f"/api/sessions/{name}/skills", params={"session_id": identity}, headers=self.headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["session_id"], identity)
+        self.assertEqual(self.client.get(route, headers=self.headers).json()["session_id"], replacement["id"])
+
+    def test_versioned_result_and_two_session_handoff(self) -> None:
+        source=self.manager.create(tool="shell",profile="general",name="result-source")
+        target=self.manager.create(tool="shell",profile="general",name="result-target")
+        file=self.workspace / "candidate.txt";file.write_text("Selected revision")
+        route=f"/api/sessions/{source['id']}/results"
+        payload={"kind":"ready","outcome":"pass","summary":"Candidate ready","checks":["Targeted test passed"],"artifacts":[{"path":"candidate.txt"}],"request_key":"ready-1"}
+        self.assertEqual(self.client.post(route,json=payload).status_code,403)
+        response=self.client.post(route,json=payload,headers=self.headers)
+        self.assertEqual(response.status_code,200,response.text)
+        result=response.json()
+        self.assertEqual(self.client.post(route,json=payload,headers=self.headers).json()['id'],result['id'])
+        file.write_text("Later edit")
+        artifact=self.client.get(f"/api/results/{result['id']}/artifacts/0",headers=self.headers)
+        self.assertEqual(artifact.content,b"Selected revision")
+        sent=self.client.post(f"/api/results/{result['id']}/send",json={"target_session_id":target['id'],"request_key":"send-1"},headers=self.headers)
+        self.assertEqual(sent.status_code,200,sent.text)
+        item=sent.json();inbox=f"/api/sessions/{target['id']}/inbox"
+        self.assertEqual(self.client.get(inbox,headers=self.headers).json()['items'][0]['state'],'queued')
+        for state in ['delivered','consumed']:
+            ack=self.client.post(inbox+f"/{item['id']}/ack",json={"state":state},headers=self.headers)
+            self.assertEqual(ack.status_code,200,ack.text)
+            self.assertEqual(ack.json()['state'],state)
+        self.manager.rename('result-target','result-renamed')
+        self.assertEqual(self.client.get(inbox,headers=self.headers).json()['items'][0]['state'],'consumed')
+        self.manager.kill('result-source');self.manager.kill('result-renamed')
+        self.assertEqual(self.client.get(route,headers=self.headers).json()['results'][0]['id'],result['id'])
+
+    def test_existing_session_connections_require_identity_and_preserve_process(self) -> None:
+        source=self.manager.create(tool="shell",profile="general",name="graph-source")
+        target=self.manager.create(tool="shell",profile="general",name="graph-target")
+        route=f"/api/sessions/{source['id']}/connections"
+        payload={'session_id':target['id'],'purpose':'Use this exact checkpoint','expected_version':0,
+                 'dependencies':[{'source_id':source['id'],'readiness':'after-ready'}]}
+        self.assertEqual(self.client.post(route+'/attach',json=payload).status_code,403)
+        invalid=self.client.post(route+'/attach',json={**payload,'session_id':'graph-target'},headers=self.headers)
+        self.assertEqual(invalid.status_code,400)
+        response=self.client.post(route+'/attach',json=payload,headers=self.headers)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['version'],1)
+        self.assertEqual(self.manager.inspect('graph-target')['id'],target['id'])
+        self.assertTrue(self.manager.inspect('graph-target')['running'])
+        published=self.client.post(f"/api/sessions/{source['id']}/results",json={'kind':'ready','outcome':'pass','summary':'Ready input','request_key':'graph-publish'},headers=self.headers)
+        self.assertEqual(published.status_code,200,published.text)
+        graph=self.client.get(route,headers=self.headers).json()
+        delivery={'expected_version':1,'expected_signature':graph['readiness'][target['id']]['signature']}
+        deliver_route=f"/api/sessions/{target['id']}/connections/deliver"
+        first=self.client.post(deliver_route,json=delivery,headers=self.headers)
+        self.assertEqual(first.status_code,200,first.text)
+        self.assertEqual(self.client.post(deliver_route,json=delivery,headers=self.headers).json()['id'],first.json()['id'])
+        inbox=self.client.get(f"/api/sessions/{target['id']}/inbox",headers=self.headers).json()
+        self.assertEqual(len(inbox['items']),1)
+        self.assertEqual(inbox['items'][0]['result']['summary'],'Ready input')
+        cycle={'expected_version':1,'dependencies':[{'source_id':target['id'],'readiness':'after-final'}]}
+        self.assertEqual(self.client.post(route+'/dependencies',json=cycle,headers=self.headers).status_code,400)
+        self.assertEqual(self.client.get(route,headers=self.headers).json()['version'],1)
+
+    def test_workflow_suggestion_review_and_policy_require_operator_identity(self) -> None:
+        from agent_console.workflow_engine import DEFAULT_POLICY
+        source=self.manager.create(tool="shell",profile="general",name="workflow-api-source")
+        base=f"/api/sessions/{source['id']}/workflow"
+        payload={'task':'Check a bounded candidate','reason':'Independent evidence is useful','expected_output':'One useful result',
+                 'config':{'tool':'shell','profile':'general','worktree':False},'dependencies':[],'request_key':'proposal-1'}
+        self.assertEqual(self.client.post(base+'/proposals',json=payload).status_code,403)
+        proposed=self.client.post(base+'/proposals',json=payload,headers=self.headers)
+        self.assertEqual(proposed.status_code,200,proposed.text);step=proposed.json()
+        self.assertEqual(step['decision'],'proposed');self.assertEqual(step['attempts'],[])
+        self.assertEqual(self.client.post(base+'/proposals',json=payload,headers=self.headers).json()['id'],step['id'])
+        preview=self.client.post(f"/api/workflow/steps/{step['id']}/preview",json={},headers=self.headers)
+        self.assertEqual(preview.status_code,400);self.assertIn('native workflow',preview.text)
+        rejected=self.client.post(f"/api/workflow/steps/{step['id']}/review",json={'decision':'rejected','expected_version':1},headers=self.headers)
+        self.assertEqual(rejected.status_code,200,rejected.text)
+        self.assertEqual(rejected.json()['decision'],'rejected')
+        policy={'policy':DEFAULT_POLICY,'expected_version':0}
+        self.assertEqual(self.client.post(base+'/policy',json=policy).status_code,403)
+        self.assertEqual(self.client.post(base+'/policy',json=policy,headers=self.headers).status_code,200)
+        paused=self.client.post(base+'/control',json={'state':'paused'},headers=self.headers)
+        self.assertEqual(paused.json()['policy']['state'],'paused')
+
+    def test_native_reporting_can_suggest_but_cannot_accept_or_expand_envelope(self) -> None:
+        import hashlib
+        source=self.manager.create(tool="shell",profile="general",name="workflow-agent-source")
+        token='fixture-workflow-capability'
+        with self.manager.database.connect() as db:db.execute('UPDATE sessions SET evidence_capability_hash=? WHERE id=?',(hashlib.sha256(token.encode()).hexdigest(),source['id']))
+        headers={'Authorization':'Bearer '+token,'X-Agent-Console-Session':source['id']}
+        payload={'task':'Check one thing','reason':'A distinct useful task','expected_output':'A result',
+                 'config':{'tool':'codex','profile':'planner'},'dependencies':[{'source_id':source['id'],'readiness':'after-final'}],'request_key':'agent-proposal'}
+        response=self.client.post('/api/agent-workflow',json={'command':'propose','payload':payload},headers=headers)
+        self.assertEqual(response.status_code,200,response.text);step=response.json()
+        self.assertEqual(step['decision'],'proposed');self.assertEqual(step['actor'],'session:'+source['id'])
+        self.assertEqual(self.client.post(f"/api/workflow/steps/{step['id']}/review",json={'decision':'accepted','expected_version':1,'preview_hash':'x'},headers=headers).status_code,403)
+        self.assertEqual(self.client.post('/api/agent-workflow',json={'command':'configure','payload':{}},headers=headers).status_code,422)
+
+    def test_workflow_agent_capability_cannot_impersonate_peer(self) -> None:
+        from agent_console.workflow_service import WorkflowService
+        source=self.manager.create(tool="shell",profile="general",name="cap-source")
+        target=self.manager.create(tool="shell",profile="general",name="cap-target")
+        cap='test-capability'
+        with self.manager.database.connect() as db:
+            db.execute('UPDATE sessions SET evidence_capability_hash=? WHERE id=?',(hashlib.sha256(cap.encode()).hexdigest(),source['id']))
+        service=WorkflowService(self.manager)
+        with patch.dict(os.environ,{'AGENT_CONSOLE_SESSION_ID':source['id'],'AGENT_CONSOLE_EVIDENCE_CAPABILITY':cap}):
+            self.assertEqual(service.current()['id'],source['id'])
+            with self.assertRaises(PermissionError):service.current(target['id'])
+        with patch.dict(os.environ,{'AGENT_CONSOLE_SESSION_ID':source['id'],'AGENT_CONSOLE_EVIDENCE_CAPABILITY':'wrong'}):
+            with self.assertRaises(PermissionError):service.current()
+
+    def test_agent_reporting_endpoint_is_capability_bound(self) -> None:
+        source=self.manager.create(tool="shell",profile="general",name="report-source")
+        other=self.manager.create(tool="shell",profile="general",name="report-other")
+        cap='reporting-fixture-capability'
+        with self.manager.database.connect() as db:
+            db.execute('UPDATE sessions SET evidence_capability_hash=? WHERE id=?',(hashlib.sha256(cap.encode()).hexdigest(),source['id']))
+        headers={'Authorization':'Bearer '+cap,'X-Agent-Console-Session':source['id']}
+        command={'command':'publish','payload':{'kind':'final','outcome':'pass','summary':'Native reporting works','request_key':'native-1'}}
+        self.assertEqual(self.client.post('/api/agent-workflow',json=command).status_code,403)
+        self.assertEqual(self.client.post('/api/agent-workflow',json=command,headers={**headers,'X-Agent-Console-Session':other['id']}).status_code,403)
+        response=self.client.post('/api/agent-workflow',json=command,headers=headers)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['session_id'],source['id'])
+        self.assertNotIn(cap,response.text)
+        ack=self.client.post('/api/agent-workflow',json={'command':'ack','payload':{'item_id':'wrong','state':'delivered'}},headers=headers)
+        self.assertEqual(ack.status_code,400)
+
+    def test_terminal_history_controls_do_not_send_program_input(self) -> None:
+        import time
+        self.manager.create(tool="shell", profile="general", name="scroll-history")
+        with patch.object(self.manager.tmux, "scroll_history") as scroll:
+            with self.client.websocket_connect("/ws/sessions/scroll-history", headers=self.headers) as ws:
+                ws.send_text(json.dumps({"type": "scroll", "lines": -12}))
+                for _ in range(40):
+                    if scroll.called:
+                        break
+                    time.sleep(0.025)
+                scroll.assert_called_with("scroll-history", -12)
+                ws.send_text(json.dumps({"type": "scroll", "lines": 0}))
+                for _ in range(40):
+                    if scroll.call_count == 2:
+                        break
+                    time.sleep(0.025)
+                scroll.assert_called_with("scroll-history", 0)
+                ws.send_text(json.dumps({"type": "scroll", "lines": -5000}))
+                ws.send_text(json.dumps({"type": "detach"}))
+                try:
+                    while True:
+                        ws.receive_bytes()
+                except WebSocketDisconnect:
+                    pass
+                self.assertEqual(scroll.call_count, 2)
+        self.assertTrue(self.manager.tmux.exists("scroll-history"))
+
+    def test_tmux_history_returns_to_live_view(self) -> None:
+        import time
+        self.manager.create(tool="shell", profile="general", name="history-buffer")
+        self.manager.tmux.run("send-keys", "-t", "history-buffer", "for i in $(seq 1 200); do echo HISTORY_$i; done", "Enter")
+        for _ in range(40):
+            if "HISTORY_200" in self.manager.tmux.run("capture-pane", "-p", "-t", "history-buffer").stdout:
+                break
+            time.sleep(0.025)
+        self.manager.tmux.scroll_history("history-buffer", -20)
+        mode = self.manager.tmux.run("display-message", "-p", "-t", "history-buffer", "#{pane_in_mode}").stdout.strip()
+        self.assertEqual(mode, "1")
+        position = self.manager.tmux.run("display-message", "-p", "-t", "history-buffer", "#{scroll_position}").stdout.strip()
+        self.assertGreater(int(position), 0)
+        self.manager.tmux.scroll_history("history-buffer", 0)
+        self.assertEqual(self.manager.tmux.run("display-message", "-p", "-t", "history-buffer", "#{pane_in_mode}").stdout.strip(), "0")
+        with self.assertRaises(ValueError):
+            self.manager.tmux.scroll_history("history-buffer", -5000)
+
+    def test_workbench_selection_and_current_link_validation(self) -> None:
+        with patch.dict(os.environ, {"AGENT_CONSOLE_UI": "workbench", "AGENT_CONSOLE_CURRENT_URL": "https://console.example/"}):
+            self.assertIn('workbench.js', self.client.get("/", headers=self.headers).text)
+            self.assertEqual(self.client.get("/api/interface", headers=self.headers).json()["current_url"], "https://console.example/")
+        with patch.dict(os.environ, {"AGENT_CONSOLE_CURRENT_URL": "javascript:alert(1)"}):
+            self.assertEqual(self.client.get("/api/interface", headers=self.headers).json()["current_url"], "")
+        self.assertEqual(self.client.get("/work").status_code, 403)
+        self.assertIn('app.js', self.client.get("/desktop", headers=self.headers).text)
+
+    def test_human_add_child_keeps_role_and_enforces_capacity(self) -> None:
+        parent = self.manager.create(tool="shell", profile="planner", name="human-parent")
+        endpoint = "/api/sessions/human-parent/children"
+        payload = {"tool": "shell", "profile": "coder", "task": "Explicit implementation task"}
+        self.assertEqual(self.client.post(endpoint, json=payload).status_code, 403)
+        response = self.client.post(endpoint, json={**payload, "name": "human-child"}, headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        child = response.json()
+        self.assertEqual(child["parent_session_id"], parent["id"])
+        self.assertEqual(child["profile"], "coder")
+        self.assertEqual(self.manager.inspect("human-parent")["profile"], "planner")
+        self.assertEqual(self.client.post(endpoint, json={**payload, "name": "human-child-2"}, headers=self.headers).status_code, 200)
+        limited = self.client.post(endpoint, json={**payload, "name": "human-child-3"}, headers=self.headers)
+        self.assertEqual(limited.status_code, 400)
+        self.assertIn("child-session limit", limited.json()["detail"])
+        # Automatic delegation still cannot escalate a planner to a coder.
+        denied = self.client.post("/api/sessions/human-parent/delegations", json=payload, headers=self.headers)
+        self.assertEqual(denied.status_code, 400)
+        self.assertIn("cannot delegate", denied.json()["detail"])
+
     def test_lifespan_keeps_live_wal_sidecars_for_guarded_inspection(self) -> None:
         from agent_console.inspection import InspectionUnavailable, read_session_snapshot
 
@@ -88,7 +427,7 @@ class WebTests(unittest.TestCase):
         with self.assertRaises(InspectionUnavailable):
             read_session_snapshot(database)
         with patch("agent_console.web.Settings.from_env", return_value=self.manager.settings):
-            with TestClient(create_app(self.manager)):
+            with TestClient(create_app(self.manager), client=("127.0.0.1", 50000)):
                 self.assertTrue(read_session_snapshot(database)["ok"])
         with self.assertRaises(InspectionUnavailable):
             read_session_snapshot(database)
@@ -100,6 +439,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
         me = self.client.get("/api/me", headers=self.headers).json()
+        self.assertEqual(me["session_limits"], {"managed": 4, "children": self.manager.settings.max_children_per_parent})
         self.assertEqual(me["default_tool"], "codex")
         self.assertEqual(me["default_agent_modes"]["codex"], "auto")
         profiles = me["profiles"]
@@ -346,7 +686,7 @@ class WebTests(unittest.TestCase):
         with patch.object(
             self.manager,
             "_launch_spec",
-            return_value=LaunchSpec(["/usr/bin/zsh", "-l"], {}, []),
+            return_value=LaunchSpec(["/bin/bash", "-l"], {}, []),
         ):
             executed = self.client.post(
                 "/api/plans/web-plan/execute",

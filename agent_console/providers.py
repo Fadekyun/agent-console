@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,11 +34,24 @@ TOOL_BINARIES = {
 }
 
 
+@lru_cache(maxsize=32)
+def _workflow_probe(binary,mtime,size):
+    try:
+        help_result=subprocess.run([binary,'exec','--help'],capture_output=True,text=True,timeout=5,check=False)
+        version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=5,check=False)
+        if help_result.returncode or not all(flag in help_result.stdout for flag in ['--output-schema','--output-last-message','--sandbox']):
+            return {'supported':False,'reason':'installed CLI lacks the required native task flags'}
+        return {'supported':True,'version':version.stdout.strip()[:100] if not version.returncode else 'unknown','binary':binary}
+    except (OSError,subprocess.TimeoutExpired):return {'supported':False,'reason':'native task capability probe failed or timed out'}
+
+
 @dataclass(frozen=True)
 class LaunchSpec:
     argv: list[str]
     environment: dict[str, str]
     secret_files: list[Path]
+    resolved_environment: dict[str, str] | None = None
+    environment_revision: int | None = None
 
 
 class ProviderAdapter:
@@ -63,6 +77,10 @@ class ProviderAdapter:
     def can_isolate_skills(self) -> bool:
         capability = SKILL_TOOL_CAPABILITIES.get(self.tool)
         return bool(capability and capability.can_isolate_skills)
+
+    @property
+    def can_run_workflow_task(self) -> bool:
+        return False
 
     @property
     def can_run_planning_task(self) -> bool:
@@ -150,6 +168,26 @@ def _codex_pin_args(
 
 class CodexAdapter(ProviderAdapter):
     tool = "codex"
+
+    @property
+    def can_run_workflow_task(self) -> bool:
+        return True
+
+    def workflow_info(self):
+        try:stat=self.binary.stat()
+        except OSError:return {'supported':False,'reason':'tool launcher is missing'}
+        return _workflow_probe(str(self.binary),stat.st_mtime_ns,stat.st_size)
+
+    def workflow_argv(self, interactive_argv, *, schema, output, read_only):
+        argv=list(interactive_argv)
+        # Unattended steps never approve new permissions. Read-only roles stay
+        # read-only even when interactive Plan sessions opt into network access.
+        argv[argv.index('--ask-for-approval')+1]='never'
+        argv[argv.index('--sandbox')+1]='read-only' if read_only else 'workspace-write'
+        for index in range(len(argv)-2,-1,-1):
+            if argv[index:index+2]==['-c','sandbox_workspace_write.network_access=true']:
+                del argv[index:index+2]
+        return argv+['exec','--skip-git-repo-check','--output-schema',str(schema),'--output-last-message',str(output),'-']
 
     @property
     def can_run_planning_task(self) -> bool:
@@ -283,8 +321,19 @@ class CommandCodeAdapter(ProviderAdapter):
         environment: dict[str, str],
         isolated_skills_root: Path,
     ) -> None:
-        # Only Hermes needs an explicit directory list; pi discovers its skills
-        # through its own per-session agent directory.
+        # Both paths point to the immutable Console-selected snapshot. Other
+        # native project/plugin sources remain the harness's responsibility.
+        if self.tool == "pi":
+            agent_dir = environment.get("PI_CODING_AGENT_DIR")
+            if not agent_dir:
+                raise ValueError("Pi skill delivery requires its per-session agent directory")
+            target = Path(agent_dir) / "skills"
+            if target.is_symlink() and target.resolve() == isolated_skills_root.resolve():
+                return
+            if target.exists() or target.is_symlink():
+                raise ValueError("Pi skills directory already exists; preserve it and review delivery")
+            target.symlink_to(isolated_skills_root, target_is_directory=True)
+            return
         if self.tool != "hermes":
             return
         hermes_home = environment.get("HERMES_HOME")
@@ -311,7 +360,7 @@ class CommandCodeAdapter(ProviderAdapter):
         environment = {"AGENT_CONSOLE_CONTEXT_FILE": str(context_path)}
         # MCP entries are generated per session from variable names only, so a
         # session never depends on a host-global hand-edited harness config.
-        mcp_servers = session_mcp_servers()
+        mcp_servers = session_mcp_servers(kwargs.get("resolved_environment"))
         if self.tool == "pi":
             write_private_json(root / "models.json", {"providers": {"commandcode": {
                 "baseUrl": context["base_url"], "api": "openai-completions",
@@ -321,8 +370,7 @@ class CommandCodeAdapter(ProviderAdapter):
             }}})
             ensure_pi_auth_env_reference(root / "auth.json")
             per_session_mcp = pi_mcp_config(mcp_servers)
-            if per_session_mcp["mcpServers"]:
-                write_private_json(root / "mcp.json", per_session_mcp)
+            write_private_json(root / "mcp.json", per_session_mcp)
             environment["PI_CODING_AGENT_DIR"] = str(root)
             argv = [str(self.binary), "--provider", "commandcode", "--model", model,
                     "--append-system-prompt", str(context_path)]

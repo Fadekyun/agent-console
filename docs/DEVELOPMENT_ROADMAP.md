@@ -1,8 +1,248 @@
+## Remaining interaction fixes — 2026-10-04 (#141)
+
+- Fixed: cancelled New session drafts now retain their own root, child, step, recipe and continuation context while the page is open; confirmed creation and explicit discard clear the appropriate draft.
+- Fixed: Output/Skills stable identity checks and stale response suppression; project detail/mutation dialog races and fresh New session project choices.
+- Verification includes asynchronous response ordering, uncertain launch retries and desktop/phone form interactions. Persistent drafts across page reload remain outside this change.
+
+## Terminal control clarity — 2026-10-03 (#141)
+
+- Replaced terminal More text/native marker with a stable 44px chevron and explicit accessible expanded state.
+- Consolidated duplicate copy/read entry points into one selection-aware Copy control while retaining selectable text, paging and clipboard fallbacks.
+- Existing keyboard, focus, viewport and clipboard checks cover the simplified toolbar; native Theme dropdown interaction remains usable in Chromium desktop/phone layouts.
+
+## Theme, clipboard and continuing UI audit — 2026-10-03 (#141)
+
+- Fixed: low-contrast hovered primary controls and focus rings; theme/palette selectors hidden in embedded and phone terminals; unthemed links/mobile surfaces.
+- Fixed: delayed clipboard permission results replacing newer drafts or reopening dismissed views, repeated Paste and missing selectable Copy fallbacks. IME confirmation remains composition rather than submission.
+- Fixed: cross-session Results refresh and connection skill receipt races; result draft preservation/error locality; stale full-control creation/delegation/review responses.
+- Verification covers real localhost clipboard access and separate insecure-HTTP fallback tests; rendered interaction colors supplement token contrast tests. Physical-device and cross-browser checks remain external verification work.
+
+## Session identity and responsive audit — 2026-10-03 (#141)
+
+- Fixed: concurrent rename/reconciliation duplicate identities, occupied-name metadata overwrite, missing-file rename failures, and false stopped status after tmux observation failures. Staged metadata and bounded terminal calls reduce partial rename failures; websocket attachment and scroll stay bound to the intended identity.
+- Fixed: renamed selection/dock continuity, private draft ownership, browser history after name reuse, late creation/recipe/continuation responses and cross-session history contamination. Mobile lifecycle errors and overlapping refreshes now preserve usable state.
+- Fixed: long-name mobile card overflow, deep-tree title height, cramped search, link/form spacing, overlapping mobile navigation, tablet header overlap, multiline composer sizing and delayed dock focus theft.
+- Verification includes concurrency and failure injection, strict identity guards and geometry/hit testing across five viewport widths. Filesystem/process crashes during cross-resource operations and physical phone keyboard behavior are not claimed as exhaustively tested.
+- Remaining design work: a primary Workbench project picker and selected-child wait controls.
+
+## Deep interaction audit — 2026-10-03 (#141)
+
+- Addressed: session More menus clipped by table scrolling, keyboard propagation and refresh replacement; terminal menu viewport limits, touch targets and delayed connection focus; Open work pointer continuity, long Workbench title overflow and direct Settings readiness; confirmation for write-only environment deletion.
+- Verification emphasizes reachable controls and unchanged intended targets over basic visibility assertions. The dedicated insecure-HTTP clipboard suite runs in CI.
+- Deferred design work: Workbench project picker, and consolidated secondary navigation.
+
+## Publication acceptance fixes — 2026-10-03 (#141)
+
+- Implemented: environment drafts survive failed writes and clear after successful writes, including refresh failures; corrected CI whitespace findings.
+- Implemented: touch-accessible Workbench Refresh restores bootstrap retry on narrow screens.
+- Implemented: isolated test harnesses and npm assets in Python CI; updated terminal dock regression for accessible sibling controls. Narrow full-control terminal actions now open the standalone terminal.
+- Confirmed follow-up opportunities: project selection for fresh roots in Workbench; selected-child waits in the UI.
+- Optional future additions: installed-wrapper drift diagnostics and opt-in attention notifications.
+
+## Verified follow-up fixes — 2026-10-03 (#141)
+
+- Implemented: consistent detection of incomplete managed CLI contexts before local workflow writers or session readers; actionable recovery without removing session identity markers.
+- Implemented: managed Pi wrapper preserves resolved project environment and native MCP config; standalone compatibility remains separate. Rollout must update the installed wrapper as well as the selected Console release.
+- Implemented: repeatable `session wait-for-children --child ID_OR_NAME` resolves a direct-child batch to durable IDs, preserving historical outcomes and unscoped behavior.
+- Verification: independent verifier confirmation, synthetic actual-wrapper execution, scoped-wait regressions, integrated CLI/session checks and live rollout evidence in FOLLOWUP_VERIFICATION_20261003.md.
+- Remaining external verification: physical iOS/Android keyboards/selection/orientation; public review PR now runs remote CI.
+
+## Exact session targeting — 2026-10-03 (#141)
+
+- Implemented: exact tmux session/pane targets across controls, reads, launchers and browser terminal attachment; prefix-related child sessions cannot substitute for a stopped parent.
+- Verification: isolated real tmux regressions and live parent/child checks in OVERHAUL_VERIFICATION_20261003.md.
+
+## Frontend audit and CLI parity follow-up — 2026-10-03 (#141)
+
+- Implemented: compact accessible SVG controls, named dialogs, keyboard terminal close, HTTP-IP clipboard fallback, and project editing/deletion in full desktop/mobile controls.
+- Implemented: default unlimited per-parent children, active-only capacity accounting, and owner project/environment CLI commands with safe secret input and managed-session authority checks.
+- Implemented: environment scope race protection, profile/attention/plan request guards, mobile duplicate-submit prevention and group navigation, recovered bootstrap, paginated release candidates, and truthful skill-sync diagnostics.
+- Implemented: local owner `workflow manage` policy/review/control/reconciliation, connection attachment/dependencies/delivery, and exact-candidate release commands share the web request schemas. Structured input uses bounded JSON files/stdin; managed sessions cannot open these local writer routes.
+- Implemented: local owner `session create --parent` accepts a name or durable ID and inherits project/repository like human Add session, while managed callers retain delegation restrictions.
+- Guide rollout: all seven guides are verified; Workbench, Coordination and Release `.2` owner-CLI updates were applied to canonical/mirror libraries and verified through fresh delivery receipts.
+- Verification: OVERHAUL_VERIFICATION_20261003.md; physical mobile keyboards and native non-Linux adapters require suitable devices/runners.
+
+## Console usability, role/skill delivery, environment and maintenance — 2026-10-03 (#141)
+
+- Implemented: stable session cards/tree nodes, root-first opening, pointer-safe Add session, preserved focus/scroll, and simple shared palettes.
+- Implemented: project-scoped bounded session reads for every role, explicit descendant controls, no read-only delegation escalation, customized profile diagnostics, and native selected-skill adapters.
+- Implemented: private write-only global/project environment UI/API, deterministic precedence, suppression, multiline values, quotas, project cleanup, and shared process/MCP launch resolution.
+- Implemented: preserved installer configuration, candidate-local Python dependencies, private identity-checked canaries, durable session comparison, and systemd/LaunchAgent/WSL2/Docker maintenance paths.
+- Verification and deployment status: OVERHAUL_VERIFICATION_20261003.md. Native macOS/WSL2/Docker execution and broken local Claude executable remain explicit verification gaps until suitable runners/binary are available.
+- Retired by operator scope: obsolete inference gateway issues #63, #65–70, #72–73. AI routing/self-improvement stays deferred; ordinary sessions require no workflow publication or review chain.
+
+## Persistent Add session controls — 2026-10-03 (#90)
+
+- Completed in v0.24.1. Eligible tree rows always show Add session; hover and keyboard focus highlight the control without changing row height. Existing mobile touch targets and child creation behavior are preserved.
+
+## Hide/Restore stopped sessions, paginated History, compact summaries, phone connection label — 2026-10-02 (#90)
+
+- Completed in v0.24.0. Reversible persisted stopped-session Hide/Restore with collapsed paginated History; visible running children are never hidden; explicit reviewed acknowledgement preserves result outcomes; recovered refresh notices; matched-child direct links on root search cards; compact work summaries with full task search; visible phone terminal connection label. No DB schema change; new private workbench-visibility.json in state directory.
+
+## Consolidated terminal lifecycle controls — 2026-10-02 (#90)
+
+- While an open terminal is visible, the session heading hides its Open terminal and Stop session actions so the terminal header is the single lifecycle location; the heading actions are restored when the terminal closes. Visibility is computed centrally in `syncTerminalVisibility()` so refreshes cannot re-show a duplicate Stop.
+- Phone outer headers stay one compact row (Sessions + Stop + Close) with 44px targets; the outer connection status is kept as screen-reader-only text and mirrored onto the Sessions control, because the embedded terminal hides its own connection line. Full screen remains desktop-only.
+- Remaining: physical mobile keyboard/orientation verification.
+
+## Session viewport correction — 2026-10-02 (#90)
+
+- Open desktop sessions allocate remaining viewport space to the terminal instead of a fixed 540px panel. Long heading text stays on one line with full-text titles; tree and details have independent scrolling.
+- Remove the duplicate embedded Full screen action; retain expansion in the containing workbench and standalone terminal.
+- Further consolidation of parent and embedded toolbar rows remains a separate UI change. Physical mobile keyboard and trackpad verification remains open.
+
+## Progressive console controls — 2026-10-02 (#90)
+
+- Implemented the next UI pass: optional composer, compact terminal menu, collapsible sidebar/branches and full-screen session navigation, plus secondary attention/settings disclosures.
+- Compared seven terminal architectures in CONSOLE_SIMPLIFICATION.md. Retain one xterm/PTY/tmux stack and the existing multi-layer session and scheduling model.
+
+## Native terminal scrolling — 2026-10-02 (#90)
+
+- Corrected the full-screen/trackpad gap in prior shell-only verification: preserve xterm native mouse input instead of unconditionally entering tmux copy mode.
+- Open-source comparison and preferred architecture are recorded in TERMINAL_REFERENCES.md. Retain xterm and the current session/auth backend; use ttyd's input-forwarding pattern rather than replacing the complete Console.
+
+## Terminal interaction and session lifecycle — 2026-10-02 (#90)
+
+- Combined typing/history scrolling, hidden-view PTY detachment, focus and viewport handling, visible stop action, and saved recent output address functional friction.
+- Main cap is configurable and raised to 24; Settings reports the active value.
+- Further UI simplification is proposed in UI_REVIEW_20261002.md: compact tree, progressive terminal controls and a consolidated details drawer. Implemented in the subsequent 0.23.0 interface pass.
+
+## Native session-tree awareness — 2026-10-02 (#90)
+
+- Live group discovery and relative/stable-ID output reads work across native harnesses without workflow state or published results.
+- Default context and operating guides distinguish related conversations from delegated work. New children need no automatic reviewer or wait chain; scheduled workflows remain optional.
+- Existing Add session keeps the ordinary harness/settings picker and starts a direct child.
+
+## Simpler everyday sessions — 2026-10-02 (#90)
+
+- Manual Add session now creates a child directly, including Pi/Hermes interactive sessions. Scheduled follow-ups remain opt-in and reviewed.
+- Recipe/continuation starts need one explicit action; validation runs internally and uncertain responses reuse the same receipt.
+- Updated operating guides remove routine review chains and repeat approval requests. Existing authorization, repository rules, skill trust and explicit release boundaries remain in effect.
+
+## Staging revamp completed — 2026-10-02 (#90 / #140 / #6)
+
+- Workbench, optional connected-session growth, results/release controls and the portable skills control plane are implemented and published together to the isolated staging console.
+- Final requirement mapping and verification are in [FINAL_STAGING_ACCEPTANCE.md](FINAL_STAGING_ACCEPTANCE.md). Earlier checkpoints below are historical and their remaining-work notes are superseded by that audit.
+- Current remains independently usable through the version chooser. Physical-phone feedback and a separately authorized current-console cutover remain follow-up review; missing provider accounts continue to explain setup requirements.
+
+## Native skill matrix and final surfaces — 2026-10-02 (#6 / #90)
+
+- v0.20 records actual native discovery for every supported harness, including all seven rewritten guides. Claude's previously ineffective environment override is replaced by supported additional-directory delivery; explicit restart upgrades legacy launchers and retains native account configuration.
+- OpenCode1.18.31 joins the verified gate. Codex/Claude/Hermes keep their compatibility policy while unknown versions are marked unverified; static inventories no longer claim exhaustive configured-source inspection.
+- Package/profile CLI validation, unassignment alias and per-harness Skills diagnostics complete the identified UI/CLI gaps. Full Workbench desktop/phone fixture acceptance passes; final live publication/current preservation remain in the audit.
+
+## Native MCP parity — 2026-10-02 (#6 / #123)
+
+- v0.19.3 emits native Pi configuration and matches Hermes server selection/timeouts. Installed native clients verified four local authenticated tool calls each without wrapper translation. Disabled/relaunch and trusted-project precedence are explicit; host configuration remains untouched.
+- This completes the bounded MCP configuration correction. Full provider skill discovery and remaining Workbench acceptance stay tracked in `FULL_REVAMP_ACCEPTANCE.md`.
+
+## Shared launch validation — 2026-10-02 (#90 / #140)
+
+- v0.19.2 uses the creation validator for reviewed connected steps and compares the admitted configuration before native startup. Inherited projects and actual narrowed native sandbox are now part of the review/receipt contract.
+- Live audit also removed the maintenance guide's default General assignment to restore ordinary Shell launches; Orchestrator retains it. Final provider and Workbench acceptance remain in the full audit.
+
+## Live Git import verification — 2026-10-02 (#6)
+
+- v0.19.1 corrects generated-default provenance labels exposed by live staging inspection. The actual pinned fetch remained unreviewed and unactivated; its exact commit/hash and the updated guide's actual session copy were verified.
+
+## Git skill provenance — 2026-10-02 (#6)
+
+- v0.19 stages a selected Git HTTPS tree at an exact resolved commit, without hooks, checkout filters or installers. UI/CLI inspect before activation; fetched origin survives review and delivery, and local edits do not masquerade as the original commit.
+- Real transport, Git-object, authorization and responsive interaction evidence supports the completed provenance criterion. Provider matrix and final Workbench/UI/CLI acceptance remain tracked in `FULL_REVAMP_ACCEPTANCE.md`.
+
+## Pi skill delivery — 2026-10-02 (#6)
+
+- v0.18 connects Pi's private agent directory to immutable selected skills and adds a verified 0.99.2 capability. Pi/OpenCode exact-version gates apply to selected-skill launch/restart as well as sync.
+- Installed native Pi/Hermes readers discover the new guide bundles; tmux integration checks distinguish copied delivery and explicit refresh from model use. Full provider configuration/version audit and Git import remain open in `FULL_REVAMP_ACCEPTANCE.md`.
+
+## Operating guides completed — 2026-10-02 (#140 / #6)
+
+- v0.17.3 documents all seven canonical guide bundles and their staging role assignments. New coding, coordination, verification and skills guides preserve one-session completion, bounded optional expansion, exact input/check binding and existing authorization.
+- Validated packages, eight effective previews and three actual copied-session deliveries support guide completion alongside the recorded real two-session handoff. Remaining provider/version discovery, Git import and final Workbench acceptance stay tracked in `FULL_REVAMP_ACCEPTANCE.md`.
+
+## Release acceptance checkpoint — 2026-10-02 (#140)
+
+- Verified one real isolated target apply, an unknown external outcome, web restart and read-only reconciliation to the exact candidate without a duplicate. Unknown release attention clears only after observation.
+- Canonical release guide is validated, assigned to staging release sessions and verified in a fresh Codex Pro snapshot. Four remaining role bundles plus skills/provider discovery and the final full-revamp audit remain open.
+- v0.17.2 aligns evidence controls for phone widths. Evidence and limits are recorded in `WORKFLOW_RELEASE_VERIFICATION.md`.
+
+## Release status follow-up — 2026-10-02 (#140)
+
+- v0.17.1 keeps release history current while preserving the candidate form, and discards obsolete concurrent loads. Live target verification continues to use one durable attempt through lost acknowledgment/restart.
+
+## Connected release actions — 2026-10-02 (#140)
+
+- v0.17 connects immutable candidate results and check evidence to exact operator action/target grants and durable adapter attempts. Explicit observation resolves uncertain external outcomes; retries remain separate and bounded by fresh evidence. Small tasks can use their own checks.
+- Trusted adapters are configured host-locally; no automatic release authority is added to agent suggestions/envelopes. Unknown releases appear in Work attention, and Pause/Stop cover dispatch and interruption.
+- See `WORKFLOW_RELEASES.md` for configuration, protocol, recovery, validation and rollback. Remaining skills/provider/guide and final full-revamp acceptance work remains tracked in `FULL_REVAMP_ACCEPTANCE.md`.
+
+## Staging reliability — 2026-10-02 (#90 / #140)
+
+- v0.16.3: history covers all persisted session kinds, session mutations remain pending/deduplicated through polling and navigation, and stale continuation responses are discarded.
+- Workflow review includes role text identity; the dispatcher checks the role actually used by the new session before releasing native execution. Changed roles require review, including admission races. Failed-input isolation has native adapter regression coverage.
+- Full revamp acceptance remains tracked in `FULL_REVAMP_ACCEPTANCE.md`; external release gates and remaining skills/provider guide work are still open.
+
 # Development Roadmap
+
+### 2026-10-02 — #90 lossless configuration receipt IDs
+
+- Recovery checks exposed JavaScript rounding of nanosecond receipt IDs. APIs now use decimal strings without rewriting historical records; full receipt equality is verified across staging rollback.
+
+### 2026-10-02 — #90 launch feedback cleanup
+
+- Real staging verification confirmed recipe execution, preserved dirty worktree and one attributed input. Clear save-only feedback once launching, and omit inapplicable model controls from Shell configuration.
+
+### 2026-10-02 — #90 recipes and recorded configuration
+
+- Added reusable task/settings recipes, actual launch preview, explicit launch receipts and idempotent request handling. Shared validation covers repository/project, roles, account/model settings and skill policy.
+- Configuration inspection retains safe model/effort/role/launcher/skill details after Stop. Reviewed continuation preserves the existing workspace and sends the selected latest result; changed or unknown settings are explained without silent replay. This starts a new conversation, and supervised workflow retries remain in Next steps.
+- Remaining shared-state/pending checks, release gates, guide rewrite and skill-provider verification stay tracked in `FULL_REVAMP_ACCEPTANCE.md`.
+
+### 2026-10-02 — #90 terminal clipboard correction
+
+- Real staging tests found Copy selection losing its selection on pointer focus. Preserve it and expose manual copy fallback for denied clipboard access; verify real PTY scrolling, alternate-screen paging/capture, phone viewport changes and independent terminal drafts. Full workbench scope remains tracked in `FULL_REVAMP_ACCEPTANCE.md`.
+
+### 2026-10-02 — #90 shared work and ownership overview
+
+- Unified main navigation with connected ownership/logical steps and current native bindings, retaining historical attempts. Added distinct status fields, priority groups, results/child progress, warnings, locally persisted filters, keyboard focus preservation and bounded history.
+- Manual Add session can propose work beneath an unlaunched step; alongside work uses its workflow root as the native launch parent until the logical owner launches. Required-input semantics remain explicit.
+- Recipes, exact-configuration continuation and effective configuration remain the next workbench requirements; the full terminal/skills/release audit remains open.
+
+### 2026-10-02 — #90 compact workflow details
+
+- Long next-step prompts use a short heading with full task/configuration available on demand. Result handoff forms are collapsed until requested; stopped workflow guidance is trimmed. Tested across desktop and phone widths.
+
+### 2026-10-02 — #140 live native completion hardening
+
+- Live acceptance exposed conflicting interactive completion instructions and companion DB contention. Native attempts now use runner-owned structured completion; WAL permits status reads during native result commits. Canonical results guide follows the same contract.
+
+### 2026-10-02 — #140 reviewed native dispatch
+
+- Added bounded proposals and Add session review, suggestion-only defaults, explicit auto scopes/budgets, immutable preview hashes and capability-probed native Codex/Pro adapters.
+- Durable attempts reconcile restart without duplicate task input; upstream changes coalesce behind the active attempt, limits include reruns, and pause/stop preserve history. Unknown launches require operator evidence before retry.
+- API/CLI/UI use the existing graph, result and inbox contracts. Exact-candidate external release gates, unified ownership navigation and the full canonical guide/provider matrix remain in progress; see `FULL_REVAMP_ACCEPTANCE.md`.
+
+### 2026-10-02 — #140 connected existing sessions
+
+- Delivered versioned ownership/input edges, durable-ID attachment, explicit readiness, join delivery, cycle checks and content-based transitive staleness. Existing sessions retain their process and skill snapshot. UI controls live under Results & handoffs → Connected inputs; native agents inspect with `agentctl workflow connections --current`.
+- Dispatch, proposals, auto envelopes and coalesced attempts are delivered in the next checkpoint below; exact-candidate release reconciliation remains open. The existing session tree is the launch-parent view; connected ownership is currently shown in Connected inputs. Unifying those views is still part of #90/#140 acceptance.
+
+
+### 2026-10-02 — #90 focused results view
+
+- Results and handoffs have a shared navigated view with collapsed publishing, immediate inbox access and return navigation. Desktop and phone journeys verify publishing and acknowledgment without nested session controls.
+- The broader #90/#140/#6 acceptance checklist remains open in `FULL_REVAMP_ACCEPTANCE.md`.
+
 
 This document tracks the planned and completed development work for Agent Console.
 
 ## Integration in progress
+
+- [ ] **Connected results and inbox** (2026-10-02, #140) — explicit ready/final reports, immutable selected artifacts, sequenced durable handoffs, delivered/consumed acknowledgments, capability-bound agent reporting and shared UI/CLI implemented. Native reporting avoids direct agent writes to Console state. Canonical guide and live staging proof ship with this increment; the remaining scheduler/graph contract stays open.
+
+- [x] **Staging navigation cleanup** (2026-10-02, #90) — route errors clear on recovery; phone navigation has a direct Skills tab; skill cards and policy actions are shortened for the selected policy. Verified in desktop and phone browser scenarios.
+
+- [ ] **Skills v2 registry and delivery** (2026-10-02, #6) — staged implementation: real YAML/namespaced policy, hash-bound trust and approvals, scoped resolution, immutable session copies, durable delivery history, workbench library/launch preview and CLI. Source validation is tracked in [SKILL_REGISTRY.md](SKILL_REGISTRY.md). The full epic remains open for remaining harness discovery and canonical guide migration; see [full revamp acceptance](FULL_REVAMP_ACCEPTANCE.md).
 
 - [ ] **Jev ghost probe review view** (2026-09-19, [#138](https://github.com/Fadekyun/agent-console/issues/138), part of [#133](https://github.com/Fadekyun/agent-console/issues/133)/[#135](https://github.com/Fadekyun/agent-console/issues/135)) — read-only `GET /api/jev-ghost` and a `Jev Ghost` dashboard view over the continuous probe's sanitized JSONL history (summary, streak, per-run typed answers, skill-path status). Reader is defensive and drops unknown fields; no credential value is read or returned. Source tests pass; independent review and deployment pending.
 
@@ -64,3 +304,15 @@ This document tracks the planned and completed development work for Agent Consol
 - [ ] Plugin system
 
 - [x] #107 — Pi harness and Hermes CommandCode contexts, exact authenticated DeepSeek V4.1 Flash defaults, native profile/session prompt delivery, runtime secret references, and explicit unsupported enforcement reporting (v0.7.0).
+
+## Connected Work persistent staging (#90)
+
+- Implemented for trial: opt-in Work home, phone full-screen terminal, explicit manual child sessions, draft/reconnect fixes and independent version switching.
+- Deployment and verification contract: [STAGING_WORKBENCH.md](STAGING_WORKBENCH.md).
+- Follow-up: adaptive suggestions/scheduling, durable results/inbox, exact effective-skill provenance and separately approved migration/cutover. Current console remains available throughout.
+
+### Native terminal clipboard and navigation follow-up (#141, 2026-10-04)
+
+- Fixed direct terminal paste being silently rerouted to a draft and Select-mode dragging being blocked by TUI mouse reporting. Preserve bracketed paste, terminal interrupts, and explicit toolbar draft review.
+- Simplified repeated Workbench branding and restored consistent responsive navigation, active destinations, skip-link focus, and full-control navigation reachability.
+- Further audit findings to address: context-keyed New session draft recovery, stable identity for Workbench output/skill reads, and stale project-detail response guards.

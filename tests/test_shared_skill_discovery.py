@@ -200,9 +200,9 @@ class SharedSkillMergeTests(unittest.TestCase):
         )
         isolated = Path(self.temp.name) / "isolated"
         isolate_skills(isolated, self.root, result["materialized"])
-        self.assertTrue((isolated / "assigned-one").is_symlink())
-        self.assertTrue((isolated / "shared-two").is_symlink())
-        self.assertEqual(sorted(p.name for p in isolated.iterdir()), ["assigned-one", "shared-two"])
+        self.assertTrue((isolated / "assigned-one").is_dir())
+        self.assertTrue((isolated / "shared-two").is_dir())
+        self.assertEqual(sorted(p.name for p in isolated.iterdir() if p.is_dir()), ["assigned-one", "shared-two"])
 
     def test_no_allowlist_keeps_assignment_only_behaviour(self) -> None:
         result = resolve_session_skills(
@@ -259,23 +259,31 @@ class SharedSkillSessionTests(unittest.TestCase):
             {
                 "codex": self.fake_agent,
                 "codex-pro": self.fake_agent,
+                "claude": self.fake_agent,
                 "hermes": self.fake_agent,
                 "opencode": self.fake_agent,
+                "pi": self.fake_agent,
             },
         )
         self.binary_patch.start()
+        # These tests use an inert launcher; native version/discovery is
+        # verified separately. Keep admission realistic for versioned adapters.
+        self.version_patch = mock.patch('agent_console.skills._default_version_probe',
+            side_effect=lambda tool, binary: '0.99.2' if tool == 'pi' else '1.18.30')
+        self.version_patch.start()
 
     def tearDown(self) -> None:
+        self.version_patch.stop()
         self.binary_patch.stop()
         self.env_patch.stop()
         subprocess.run(["tmux", "-L", self.socket, "kill-server"], capture_output=True)
         self.temp.cleanup()
 
-    def configure_commandcode(self) -> None:
+    def configure_commandcode(self, tool='hermes') -> None:
         from agent_console.commandcode import BASE_URL, DEFAULT_MODEL
 
         data = self.manager.auth._read()
-        data["contexts"]["hermes"]["commandcode-main"] = {
+        data["contexts"][tool]["commandcode-main"] = {
             "provider": "commandcode",
             "kind": "api-key",
             "secret_ref": "commandcode-main",
@@ -285,7 +293,7 @@ class SharedSkillSessionTests(unittest.TestCase):
             "enabled": True,
             "verified": True,
         }
-        data["defaults"]["hermes"] = "commandcode-main"
+        data["defaults"][tool] = "commandcode-main"
         self.manager.auth._write(data)
         secret = self.manager.auth.secret_path("commandcode-main")
         secret.write_text("export CMD_API_KEY=fixture-key\n", encoding="utf-8")
@@ -299,7 +307,7 @@ class SharedSkillSessionTests(unittest.TestCase):
             tool="codex", profile="general", name="codex-shared", repository=str(self.workspace)
         )
         isolated = self.isolated_root("codex-shared")
-        self.assertTrue((isolated / "typesafe-ai").is_symlink())
+        self.assertTrue((isolated / "typesafe-ai").is_dir())
         self.assertFalse((isolated / "unrelated-skill").exists())
         overlay_skills = self.settings.state_dir / "tool-overlays" / "codex-shared" / "codex-home" / "skills"
         self.assertTrue((overlay_skills / "typesafe-ai" / "SKILL.md").is_file())
@@ -309,9 +317,9 @@ class SharedSkillSessionTests(unittest.TestCase):
             tool="codex", profile="general", name="codex-restart", repository=str(self.workspace)
         )
         isolated = self.isolated_root("codex-restart")
-        (isolated / "typesafe-ai").unlink()
+        shutil.rmtree(isolated / "typesafe-ai")
         self.manager.restart("codex-restart")
-        self.assertTrue((isolated / "typesafe-ai").is_symlink())
+        self.assertTrue((isolated / "typesafe-ai").is_dir())
 
     def test_hermes_session_writes_shared_external_dirs(self) -> None:
         self.configure_commandcode()
@@ -324,8 +332,58 @@ class SharedSkillSessionTests(unittest.TestCase):
             config["skills"]["external_dirs"], [str(self.isolated_root("hermes-shared"))]
         )
         isolated = self.isolated_root("hermes-shared")
-        self.assertTrue((isolated / "typesafe-ai").is_symlink())
+        self.assertTrue((isolated / "typesafe-ai").is_dir())
         self.assertFalse((isolated / "unrelated-skill").exists())
+
+    def test_claude_native_additional_directory_and_legacy_restart_refresh(self) -> None:
+        data = self.manager.auth._read()
+        data['contexts']['claude']['default'].update(enabled=True, verified=True)
+        self.manager.auth._write(data)
+        assign_skill(self.manager.database, 'general', 'unrelated-skill', canonical_root=self.skills_root)
+        self.manager.create(tool='claude', profile='general', name='claude-shared', repository=str(self.workspace))
+        self.assertTrue((self.isolated_root('claude-shared') / 'unrelated-skill/SKILL.md').is_file())
+        added = self.settings.state_dir / 'tool-overlays/claude-shared/claude-skills'
+        delivered = added / '.claude/skills/typesafe-ai/SKILL.md'
+        original = delivered.read_bytes()
+        launcher = self.settings.state_dir / 'launchers/claude-shared.sh'
+        argument = ' --add-dir "$AGENT_CONSOLE_CLAUDE_SKILLS_DIR"'
+        self.assertEqual(launcher.read_text().count(argument), 1)
+        self.assertNotIn('CLAUDE_CONFIG_DIR=', launcher.read_text())
+        self.assertNotIn('CLAUDE_HOME=', launcher.read_text())
+        with (self.skills_root / 'typesafe-ai/SKILL.md').open('a') as stream:
+            stream.write('Updated canonical guide.\n')
+        self.assertEqual(delivered.read_bytes(), original)
+        # Simulate a pre-fix launcher: explicit restart upgrades it once.
+        launcher.write_text(launcher.read_text().replace(argument, ''))
+        self.manager.restart('claude-shared')
+        self.assertNotEqual(delivered.read_bytes(), original)
+        self.assertEqual(launcher.read_text().count(argument), 1)
+        self.manager.restart('claude-shared')
+        self.assertEqual(launcher.read_text().count(argument), 1)
+
+    def test_pi_assigned_and_shared_skills_remain_frozen_until_explicit_restart(self) -> None:
+        self.configure_commandcode('pi')
+        assign_skill(self.manager.database, 'general', 'unrelated-skill', canonical_root=self.skills_root)
+        session = self.manager.create(tool='pi', profile='general', name='pi-skills', repository=str(self.workspace))
+        native = self.settings.state_dir / 'contexts/pi-skills-pi/skills'
+        self.assertEqual(native.resolve(), self.isolated_root('pi-skills'))
+        original = (native / 'typesafe-ai/SKILL.md').read_bytes()
+        source = self.skills_root / 'typesafe-ai/SKILL.md'
+        source.write_bytes(original + b'\nChanged library content.\n')
+        self.assertEqual((native / 'typesafe-ai/SKILL.md').read_bytes(), original)
+        self.assertTrue((native / 'unrelated-skill/SKILL.md').is_file())
+        self.manager.restart('pi-skills')
+        self.assertEqual((native / 'typesafe-ai/SKILL.md').read_bytes(), source.read_bytes())
+        from agent_console.skill_registry import read_deliveries
+        self.assertEqual(read_deliveries(self.settings.state_dir, session['id'])['latest']['tool'], 'pi')
+
+    def test_unverified_pi_blocks_create_before_context_or_terminal(self) -> None:
+        self.configure_commandcode('pi')
+        with mock.patch('agent_console.skills._default_version_probe', return_value='0.99.1'):
+            with self.assertRaisesRegex(ValueError, 'verified harness version'):
+                self.manager.create(tool='pi', profile='general', name='pi-denied', repository=str(self.workspace))
+        self.assertFalse((self.settings.state_dir / 'contexts/pi-denied-pi').exists())
+        self.assertFalse(self.isolated_root('pi-denied').exists())
 
     def test_hermes_restart_adds_external_dirs_without_losing_config(self) -> None:
         self.configure_commandcode()
@@ -427,7 +485,7 @@ class SharedSkillSessionTests(unittest.TestCase):
             tool="codex", profile="general", name="codex-no-shared", repository=str(self.workspace)
         )
         isolated = settings.state_dir / "skills-isolated" / "codex-no-shared"
-        self.assertEqual(list(isolated.iterdir()), [])
+        self.assertEqual([p for p in isolated.iterdir() if p.is_dir()], [])
 
     def test_opencode_session_configures_isolated_skill_root(self) -> None:
         models = [{
@@ -438,6 +496,7 @@ class SharedSkillSessionTests(unittest.TestCase):
             "capabilities": {"reasoning": False, "attachment": False, "toolcall": True},
         }]
         with mock.patch.object(self.manager.models, "list", return_value={"models": models}):
+            assign_skill(self.manager.database, 'general', 'unrelated-skill', canonical_root=self.skills_root)
             self.manager.create(
                 tool="opencode", profile="general", name="opencode-shared",
                 repository=str(self.workspace),
@@ -452,10 +511,10 @@ class SharedSkillSessionTests(unittest.TestCase):
                     exports[key] = value
         content = json.loads(exports["OPENCODE_CONFIG_CONTENT"])
         self.assertEqual(content["skills"], [str(self.isolated_root("opencode-shared"))])
-        self.assertTrue((self.isolated_root("opencode-shared") / "typesafe-ai").is_symlink())
-        self.assertFalse((self.isolated_root("opencode-shared") / "unrelated-skill").exists())
+        self.assertTrue((self.isolated_root("opencode-shared") / "typesafe-ai").is_dir())
+        self.assertTrue((self.isolated_root("opencode-shared") / "unrelated-skill/SKILL.md").is_file())
 
-    def test_assigned_skill_still_blocks_non_isolating_harness(self) -> None:
+    def test_assigned_skill_reaches_hermes_native_external_dirs(self) -> None:
         self.configure_commandcode()
         _write_skill(self.skills_root, "assigned-hermes")
         assign_skill(
@@ -464,10 +523,13 @@ class SharedSkillSessionTests(unittest.TestCase):
             "assigned-hermes",
             canonical_root=self.skills_root,
         )
-        with self.assertRaisesRegex(RuntimeError, "cannot isolate per-session skills"):
-            self.manager.create(
-                tool="hermes", profile="general", name="hermes-assigned", repository=str(self.workspace)
-            )
+        self.manager.create(
+            tool="hermes", profile="general", name="hermes-assigned", repository=str(self.workspace)
+        )
+        delivered = self.isolated_root("hermes-assigned") / "assigned-hermes/SKILL.md"
+        self.assertTrue(delivered.is_file())
+        self.manager.restart("hermes-assigned")
+        self.assertTrue(delivered.is_file())
 
 
 if __name__ == "__main__":

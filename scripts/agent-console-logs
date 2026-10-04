@@ -1,3 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-journalctl --user -u agent-console-web.service -u agent-console-tailscale-tunnel.service "$@"
+if [ "$(uname -s)" = Darwin ]; then
+  exec tail -n 100 -F "${AGENT_CONSOLE_STATE_DIR:-$HOME/.local/share/agent-console}/logs/service.stdout.log" "${AGENT_CONSOLE_STATE_DIR:-$HOME/.local/share/agent-console}/logs/service.stderr.log"
+fi
+exec journalctl --user -u agent-console-web.service -u agent-console-tailscale-tunnel.service "$@"

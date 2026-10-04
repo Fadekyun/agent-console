@@ -77,8 +77,8 @@ class ProfileSchemaTests(unittest.TestCase):
                 f"{name} should have no mode constraints",
             )
 
-    def test_release_and_orchestrator_require_human_approval(self) -> None:
-        for name in ("release", "orchestrator"):
+    def test_release_requires_human_approval(self) -> None:
+        for name in ("release",):
             self.assertTrue(
                 PROFILE_SCHEMA[name]["requires_human_approval"],
                 f"{name} should require human approval",
@@ -86,7 +86,7 @@ class ProfileSchemaTests(unittest.TestCase):
 
     def test_other_profiles_do_not_require_human_approval(self) -> None:
         for name in ("general", "coder", "planner", "scout", "reviewer",
-                       "researcher", "verifier", "bugfix"):
+                       "researcher", "verifier", "bugfix", "orchestrator"):
             self.assertFalse(
                 PROFILE_SCHEMA[name]["requires_human_approval"],
                 f"{name} should not require human approval",
@@ -154,12 +154,12 @@ class ProfileSchemaTests(unittest.TestCase):
                     f"{name} should have read_only delegation permission",
                 )
 
-    def test_write_profiles_have_read_only_delegation_permission(self) -> None:
+    def test_write_profiles_can_delegate_authorized_write_work(self) -> None:
         for name, meta in PROFILE_SCHEMA.items():
             if meta["read_write_capability"] == "write":
                 self.assertEqual(
                     meta["delegation_permissions"],
-                    frozenset({"read_only"}),
+                    frozenset({"read_only", "write"}),
                     f"{name} should have read_only delegation permission set",
                 )
 
@@ -350,8 +350,8 @@ class CapabilityValidationTests(unittest.TestCase):
             self.assertTrue(result["allowed"], f"{profile}+hermes should be allowed")
             self.assertEqual(result["enforcement"], "unsupported")
 
-    def test_release_and_operator_are_pending_approval(self) -> None:
-        for profile in ("release", "operator"):
+    def test_release_is_pending_approval(self) -> None:
+        for profile in ("release",):
             result = validate_profile_capability(profile, "codex", "auto")
             self.assertTrue(result["allowed"], f"{profile}+codex should be allowed")
             self.assertEqual(result["enforcement"], "pending_approval")

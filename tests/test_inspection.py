@@ -373,6 +373,7 @@ class GuardedCurrentResolutionTests(unittest.TestCase):
     def _views(self, sessions):
         from agent_console.inspection_views import InspectionViews
         views = InspectionViews.__new__(InspectionViews)
+        views.current_id = None
         views.sessions = sessions
         return views
 

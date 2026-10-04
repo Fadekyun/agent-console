@@ -40,6 +40,21 @@ class SchemaCompatibilityTests(unittest.TestCase):
                         if row[3] and row[4] is None]
             conn.execute('INSERT INTO integration_requests ('+','.join(required)+') VALUES ('+','.join('?' for _ in required)+')', ['retained']*len(required))
 
+    def test_interrupted_release_column_migration_recovers_either_missing_column(self):
+        for missing, retained in [('release_blocked_reason','release_blocked_at'),
+                                  ('release_blocked_at','release_blocked_reason')]:
+            with self.subTest(missing=missing):
+                with sqlite3.connect(self.path) as conn:
+                    conn.execute("INSERT OR REPLACE INTO plans(id,status,created_at,artifact_dir,source) VALUES('partial','blocked','now','/tmp/fixture','fixture')")
+                    conn.execute(f"UPDATE plans SET {retained}='preserved-fixture'")
+                    # Simulate interruption after one of the two ALTERs committed.
+                    conn.execute(f'ALTER TABLE plans DROP COLUMN {missing}')
+                Database(self.path).migrate()
+                Database(self.path).migrate()
+                with sqlite3.connect(self.path) as conn:
+                    self.assertEqual(conn.execute(f"SELECT {retained}, {missing} FROM plans WHERE id='partial'").fetchone(),
+                                     ('preserved-fixture',None))
+
     def test_empty_feature_rollback_preserves_sessions_and_extension_layout(self):
         result = self.prepare()
         self.assertTrue(result['compatibility_rollback'])

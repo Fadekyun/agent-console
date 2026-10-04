@@ -1,4 +1,7 @@
 import { expect, test } from '@playwright/test';
+async function openInput(target){if(await target.locator('#input-drawer').isHidden())await target.locator('#toggle-composer').click();}
+async function openMore(target){if(!await target.locator('#terminal-more').evaluate(e=>e.open))await target.locator('#terminal-more > summary').click();}
+
 
 const SKILLS_RESPONSE = {
   entries: [
@@ -94,14 +97,16 @@ async function mockApi(page) {
   return { requests };
 }
 
-async function installFakeWebSocket(page) {
-  await page.addInitScript(() => {
+async function installFakeWebSocket(page, { nativeClipboard = false } = {}) {
+  await page.addInitScript(nativeClipboard => {
     window.__wsSent = [];
     window.__wsBytes = [];
     window.__fakeWs = null;
-    Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true });
-    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
-    document.execCommand = () => true;
+    if (!nativeClipboard) {
+      Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true });
+      Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+      document.execCommand = () => true;
+    }
     class FakeWebSocket {
       static OPEN = 1;
       constructor() {
@@ -124,7 +129,7 @@ async function installFakeWebSocket(page) {
       close() { this.readyState = 3; this.onclose?.({ code: 1000, reason: '' }); }
     }
     window.WebSocket = FakeWebSocket;
-  });
+  }, nativeClipboard);
 }
 
 test('responsive shell, theme persistence, and no horizontal overflow', async ({ page }, testInfo) => {
@@ -177,22 +182,22 @@ test('managed kill remains confirmed and state-aware', async ({ page }) => {
   await expect(page.locator('#session-history')).toContainText('codex-root');
 });
 
-test('terminal is scroll-first on mobile and peer insertion never auto-sends', async ({ page }, testInfo) => {
+test('terminal supports direct typing on mobile and peer insertion never auto-sends', async ({ page }, testInfo) => {
   await installFakeWebSocket(page);
   await mockApi(page);
   await page.goto('/terminal?session=codex-root');
   const mobile = testInfo.project.name !== 'desktop';
-  await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', mobile ? 'scroll' : 'type');
+  await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'type');
   if (mobile) {
-    expect(await page.locator('.xterm-viewport').evaluate((node) => getComputedStyle(node).touchAction)).toBe('pan-y');
-    await page.locator('[data-mode="type"]').click();
-    await page.locator('#composer').fill('line one');
+    expect(await page.locator('.xterm-viewport').evaluate((node) => getComputedStyle(node).touchAction)).toBe('none');
+    await openMore(page);await page.locator('[data-mode="type"]').click();
+    await openInput(page);await page.locator('#composer').fill('line one');
     await page.locator('#composer').press('Enter');
     await expect(page.locator('#composer')).toHaveValue('line one\n');
   }
-  await page.locator('#composer').fill('');
+  await openInput(page);await page.locator('#composer').fill('');
   const before = await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length);
-  await page.locator('#peers').click();
+  await openMore(page);await page.locator('#peers').click();
   await page.getByRole('button', { name: 'Insert review command' }).first().click();
   await expect(page.locator('#composer')).toHaveValue('agentctl session review opencode-scout');
   expect(await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length)).toBe(before);
@@ -206,8 +211,71 @@ test('terminal detach and reconnect remain explicit', async ({ page }) => {
   await installFakeWebSocket(page);
   await mockApi(page);
   await page.goto('/terminal?session=codex-root');
-  await page.locator('#detach').click();
+  await openMore(page);await page.locator('#detach').click();
   await expect.poll(async () => page.evaluate(() => window.__wsSent.some((value) => value.includes('detach')))).toBeTruthy();
+});
+
+test('terminal Copy selection preserves selected text and offers a denied-clipboard fallback', async ({ page }, testInfo) => {
+  await installFakeWebSocket(page); await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await expect(page.locator('.terminal-controls').getByRole('button', {name: /copy|read/i})).toHaveCount(1);
+  await expect(page.getByRole('button', {name: 'Copy terminal text', exact: true})).toBeVisible();
+  await page.locator('#copy-selection').click();
+  await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
+  await page.evaluate(() => {
+    document.execCommand = () => false;
+    const range = document.createRange(), selection = getSelection();
+    range.selectNodeContents(document.querySelector('#text-content'));
+    selection.removeAllRanges(); selection.addRange(range);
+  });
+  if (testInfo.project.name === 'desktop') await page.locator('#copy-dom-selection').click();
+  else await page.locator('#copy-dom-selection').tap();
+  await expect(page.locator('#copy-sheet')).toBeVisible();
+  await expect(page.locator('#copy-sheet-text')).toHaveValue(/PEER_OUTPUT/);
+  await page.locator('[data-close="copy-sheet"]').click();
+  await page.evaluate(() => { document.execCommand = () => { throw new Error('Clipboard blocked'); }; });
+  await page.locator('#copy-visible').click();
+  await expect(page.locator('#copy-sheet')).toBeVisible();
+  await expect(page.locator('#copy-sheet-text')).toHaveValue(/PEER_OUTPUT/);
+});
+
+test('closing terminal Text View during a pending refresh does not reopen it', async ({ page }) => {
+  await installFakeWebSocket(page); await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await page.locator('#copy-selection').click();
+  await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/sessions/codex-root/review?lines=1000&session_id=sess-root', async route => {
+    await pending;
+    await route.fulfill({json:{content:'NEW_CAPTURE',alternate_screen:false,capture_scope:'history',line_count:1}});
+  });
+  const response = page.waitForResponse('**/api/sessions/codex-root/review?lines=1000&session_id=sess-root');
+  await page.locator('#text-refresh').click();
+  await expect(page.locator('#text-refresh')).toBeDisabled();
+  await page.locator('[data-close="text-dialog"]').click();
+  release(); await response;
+  await expect(page.locator('#text-refresh')).toBeEnabled();
+  await expect(page.locator('#text-dialog')).toBeHidden();
+  await page.locator('#copy-selection').click();
+  await expect(page.locator('#text-content')).toHaveText('NEW_CAPTURE');
+});
+
+test('terminal native clipboard permission copies text and pastes only into the draft', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await installFakeWebSocket(page, { nativeClipboard: true }); await mockApi(page);
+  await page.goto('/terminal?session=codex-root');
+  await page.locator('#copy-selection').click();
+  await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
+  await page.locator('#copy-visible').click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('PEER_OUTPUT');
+  await page.locator('[data-close="text-dialog"]').click();
+  await openInput(page);await page.locator('#composer').fill('');
+  await page.evaluate(() => navigator.clipboard.writeText('review this pasted text'));
+  const sent = await page.evaluate(() => window.__wsSent.filter(x => x === 'terminal-bytes').length);
+  await page.locator('#paste-device').click();
+  await expect(page.locator('#composer')).toHaveValue('review this pasted text');
+  expect(await page.evaluate(() => window.__wsSent.filter(x => x === 'terminal-bytes').length)).toBe(sent);
 });
 
 test('brief preload, alternate-screen paging, and Text View never auto-send the brief', async ({ page }, testInfo) => {
@@ -216,7 +284,7 @@ test('brief preload, alternate-screen paging, and Text View never auto-send the 
   await expect(page.locator('#composer')).toHaveValue('Coordinate work');
   await expect(page.locator('#connection')).toHaveText('Connected');
   expect(await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length)).toBe(0);
-  await page.locator('#text-view').click();
+  await page.locator('#copy-selection').click();
   await expect(page.locator('#text-dialog')).toBeVisible();
   await expect(page.locator('#text-content')).toContainText('PEER_OUTPUT');
   await expect(page.locator('#text-scope')).toContainText('alternate-screen');
@@ -225,6 +293,7 @@ test('brief preload, alternate-screen paging, and Text View never auto-send the 
   if (testInfo.project.name !== 'desktop') {
     const before = await page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length);
     await page.locator('#text-dialog').evaluate((dialog) => dialog.close());
+    await openMore(page);await page.locator('[data-mode=scroll]').click();
     await page.locator('#terminal').dispatchEvent('touchstart', { touches: [{ identifier: 1, clientX: 100, clientY: 500 }] });
     await page.locator('#terminal').dispatchEvent('touchend', { changedTouches: [{ identifier: 1, clientX: 100, clientY: 300 }] });
     await expect.poll(() => page.evaluate(() => window.__wsSent.filter((value) => value === 'terminal-bytes').length)).toBeGreaterThan(before);
@@ -625,8 +694,11 @@ test('desktop terminal dock keeps four tabs connected and rejects a fifth', asyn
   await page.locator('#active-sessions .session-row').filter({ hasText: 'dock-four' }).locator('[data-attach]').click();
   await expect(page.locator('#notice')).toContainText('Four terminal tabs are already open');
   await expect(page.locator('.terminal-tab')).toHaveCount(4);
-  await page.locator('.terminal-tab').last().locator('.terminal-tab-close').click();
+  await page.getByRole('button', { name: 'Close dock-three', exact: true }).click();
   await expect(page.locator('.terminal-tab')).toHaveCount(3);
+  await expect(page.getByRole('tab', { name: 'dock-three', exact: true })).toHaveCount(0);
+  await expect(page.locator('.terminal-embed')).toHaveCount(3);
+  expect(await page.locator('.terminal-embed').evaluateAll((frames) => frames.map((frame) => frame.src))).toEqual(sources.slice(0, 3));
   await page.locator('#terminal-dock-collapse').click();
   await expect(page.locator('#terminal-dock')).toHaveClass(/collapsed/);
 });
@@ -1051,8 +1123,8 @@ function xtermFocus() {
 async function switchToType(page) {
   const body = page.locator('body');
   const current = await body.getAttribute('data-terminal-mode');
-  if (current !== 'type') {
-    await page.locator('[data-mode="type"]').click();
+  if (current !== 'type' || await page.evaluate(()=>matchMedia('(pointer: coarse)').matches)) {
+    await openMore(page);await page.locator('[data-mode="type"]').click();
     await expect(body).toHaveAttribute('data-terminal-mode', 'type');
   }
 }
@@ -1066,7 +1138,7 @@ test('dedicated terminal with stored brief keeps terminal focus, composer not fo
 });
 test('dedicated terminal without stored brief gets terminal focus', async ({ page }) => {
   await installFakeWebSocket(page); await mockApi(page);
-  await page.route('**/api/sessions/codex-root/brief', async (route) => {
+  await page.route('**/api/sessions/codex-root/brief?session_id=sess-root', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ session: 'codex-root', brief: null, stored_only: true }) });
   });
   await page.goto('/terminal?session=codex-root');
@@ -1103,21 +1175,21 @@ test('composer submission restores xterm focus in Type mode', async ({ page }) =
   await page.goto('/terminal?session=codex-root');
   await switchToType(page);
   await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
-  await page.locator('#composer').focus();
-  await page.locator('#composer').fill('printf hello');
+  await openInput(page);await page.locator('#composer').focus();
+  await openInput(page);await page.locator('#composer').fill('printf hello');
   await page.locator('#send-enter').click();
   await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
 });
 test('Scroll and Select modes remain intentionally non-focus', async ({ page }) => {
   await installFakeWebSocket(page); await mockApi(page);
   await page.goto('/terminal?session=codex-root');
-  await page.locator('[data-mode="scroll"]').click();
+  await openMore(page);await page.locator('[data-mode="scroll"]').click();
   await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'scroll');
   expect(await page.evaluate(xtermFocus)).toBeFalsy();
-  await page.locator('[data-mode="select"]').click();
+  await openMore(page);await page.locator('[data-mode="select"]').click();
   await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'select');
   expect(await page.evaluate(xtermFocus)).toBeFalsy();
-  await page.locator('[data-mode="type"]').click();
+  await openMore(page);await page.locator('[data-mode="type"]').click();
   await expect(page.locator('body')).toHaveAttribute('data-terminal-mode', 'type');
   await expect.poll(() => page.evaluate(xtermFocus)).toBeTruthy();
 });
@@ -1174,7 +1246,7 @@ test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Sele
   })).toBeFalsy();
 
   // Switch to Scroll mode in first terminal — focus must NOT be forced
-  await iframe1.locator('[data-mode="scroll"]').click();
+  await openMore(iframe1);await iframe1.locator('[data-mode="scroll"]').click();
   await expect(iframe1.locator('body')).toHaveAttribute('data-terminal-mode', 'scroll');
   // Tab-switch to second and back — postMessage must not force focus on Scroll mode
   await page.locator('.terminal-tab').nth(1).click();
@@ -1191,7 +1263,7 @@ test('dock terminal receives focus on open, tab switch, switch-back; Scroll/Sele
   })).toBeNull();
 
   // Switch back to Type mode — focus should be restored on tab switch
-  await iframe1.locator('[data-mode="type"]').click();
+  await openMore(iframe1);await iframe1.locator('[data-mode="type"]').click();
   await page.locator('.terminal-tab').nth(1).click();
   await page.locator('.terminal-tab').first().click();
   await expect.poll(async () => iframe1.evaluate(() => {
@@ -1222,4 +1294,236 @@ test('Codex model and effort controls send overrides and clear them for other to
   await expect.poll(() => requests.filter(r => r.path === '/api/sessions').length).toBe(2);
   const second = requests.filter(r => r.path === '/api/sessions')[1].body;
   expect(second).toMatchObject({ tool: 'shell', model: null, reasoning_effort: null, plan_reasoning_effort: null });
+});
+
+
+for(const limit of [0,5])test(`delegation displays active child capacity ${limit} without counting history`,async({page})=>{
+  await mockApi(page);
+  const root=session({child_count:4,total_child_count:19});
+  await page.route('**/api/delegations',route=>route.fulfill({json:{roots:[{...root,children:[]}],delegations:[],max_children_per_parent:limit}}));
+  await page.goto('/desktop');
+  await page.locator('[data-view="orchestration"]:visible').click();
+  await page.locator('.tree-node').first().locator('[data-delegate]').first().click();
+  await expect(page.locator('#delegate-parent')).toHaveText(`Parent: codex-root · ${limit?'4/5 active children':'4 active children · no per-parent limit'}`);
+});
+
+test('project dialog context rejects late details and mutations while project choices stay current', async ({page}) => {
+  await mockApi(page);
+  const projects = [
+    {id:'project-a',name:'Project A',status:'active',repository:'/workspace/a',sessions:[{tmux_name:'assigned-a',tool:'shell',profile:'general',status:'detached'}]},
+    {id:'project-b',name:'Project B',status:'active',repository:'/workspace/b',sessions:[]},
+  ];
+  const pending = [], detailRequests = [];
+  let hold = null, failHeld = false, holdLists = false, failNextList = false;
+  const pendingLists = [];
+  await page.route('**/api/projects**', async route => {
+    const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
+    const id = path.split('/')[3], action = path.split('/')[4];
+    if (path === '/api/projects') {
+      if (method === 'GET' && holdLists) {
+        const body = JSON.stringify(projects);
+        const failure = failNextList; failNextList = false;
+        await new Promise(resolve=>pendingLists.push(resolve));
+        await route.fulfill(failure ? {status:500,json:{detail:'Late project list failure'}} : {contentType:'application/json',body}); return;
+      }
+      if (method === 'POST') projects.push({id:projects.some(p=>p.id==='project-c') ? 'project-e' : 'project-c',status:'active',sessions:[],...request.postDataJSON()});
+      await route.fulfill({json:method === 'GET' ? projects : projects.at(-1)}); return;
+    }
+    const project = projects.find(p=>p.id===id);
+    if (method === 'GET') detailRequests.push(id);
+    if (hold === `${method}:${id}:${action || ''}`) {
+      hold = null;
+      const failure = failHeld; failHeld = false;
+      await new Promise(resolve=>pending.push(resolve));
+      if (failure) { await route.fulfill({status:403,json:{detail:'Late project failure'}}); return; }
+    }
+    if (action === 'assign') project.sessions.push({tmux_name:request.postDataJSON().session_name,status:'detached'});
+    else if (action === 'unassign') project.sessions = project.sessions.filter(s=>s.tmux_name!==request.postDataJSON().session_name);
+    else if (method === 'PUT') Object.assign(project, request.postDataJSON());
+    else if (method === 'DELETE') projects.splice(projects.indexOf(project),1);
+    await route.fulfill({json:project});
+  });
+  await page.goto('/desktop#projects');
+  const dialog = page.locator('#project-detail-dialog');
+  const card = name => page.locator('#projects-list .profile-card').filter({has:page.getByRole('heading',{name,exact:true,includeHidden:true})});
+  const open = async name => {
+    await card(name).getByRole('button',{name:'View sessions'}).click();
+    await expect(page.locator('#project-detail-title')).toHaveText(name);
+    await expect(page.locator('#project-assign-btn')).toBeEnabled();
+  };
+  const close = async () => {
+    await dialog.locator('[data-close="project-detail-dialog"]').click();
+    await expect(dialog).not.toBeVisible();
+  };
+  const release = async path => {
+    const response = page.waitForResponse(r=>new URL(r.url()).pathname===path);
+    pending.shift()(); await response;
+  };
+  // A late detail response must not replace a newer dialog.
+  hold = 'GET:project-a:';
+  await card('Project A').getByRole('button',{name:'View sessions'}).click();
+  await expect.poll(()=>pending.length).toBe(1);
+  await close(); await open('Project B');
+  await release('/api/projects/project-a');
+  await expect(page.locator('#project-detail-title')).toHaveText('Project B');
+  await expect(page.locator('#project-assign-select')).toHaveAttribute('data-project-id','project-b');
+  await close();
+  // Errors from superseded detail/assignment contexts must not alter B or notify it.
+  for (const action of ['detail', 'assignment']) {
+    hold = action === 'detail' ? 'GET:project-a:' : null;
+    failHeld = action === 'detail';
+    if (action === 'detail') await card('Project A').getByRole('button',{name:'View sessions'}).click();
+    else {
+      await open('Project A');
+      await page.locator('#project-assign-select').selectOption('codex-root');
+      hold = 'POST:project-a:assign'; failHeld = true;
+      await page.locator('#project-assign-btn').click();
+    }
+    await expect.poll(()=>pending.length).toBe(1);
+    await close(); await open('Project B');
+    await page.locator('#project-assign-select').selectOption('dock-two');
+    const notice = await page.locator('#notice').textContent();
+    await page.evaluate(()=>{
+      window.__projectNotices = 0;
+      window.__projectNoticeObserver = new MutationObserver(()=>window.__projectNotices++);
+      window.__projectNoticeObserver.observe(document.querySelector('#notice'),{childList:true,subtree:true,characterData:true,attributes:true});
+    });
+    await release(action === 'detail' ? '/api/projects/project-a' : '/api/projects/project-a/assign');
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    await expect(page.locator('#project-detail-title')).toHaveText('Project B');
+    await expect(page.locator('#project-detail-status')).toHaveText('Status: active · 0 session(s)');
+    await expect(page.locator('#project-assign-select')).toHaveValue('dock-two');
+    await expect(page.locator('#project-assign-btn')).toBeEnabled();
+    expect(await page.locator('#notice').textContent()).toBe(notice);
+    expect(await page.evaluate(()=>window.__projectNotices)).toBe(0);
+    await page.evaluate(()=>window.__projectNoticeObserver.disconnect());
+    await close();
+  }
+  // Closing a pending assignment must not reopen the dialog on completion.
+  await open('Project A');
+  await page.locator('#project-assign-select').selectOption('codex-root');
+  hold = 'POST:project-a:assign'; await page.locator('#project-assign-btn').click();
+  await expect.poll(()=>pending.length).toBe(1); await close();
+  const closedRefresh = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects' && r.request().method()==='GET');
+  await release('/api/projects/project-a/assign'); await closedRefresh;
+  await expect(dialog).not.toBeVisible();
+  // A late assignment must not refresh A over the newly opened B.
+  await open('Project A');
+  await page.locator('#project-assign-select').selectOption('opencode-scout');
+  hold = 'POST:project-a:assign'; await page.locator('#project-assign-btn').click();
+  await expect.poll(()=>pending.length).toBe(1); await close(); await open('Project B');
+  const beforeAssign = detailRequests.length;
+  const assignRefresh = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects' && r.request().method()==='GET');
+  await release('/api/projects/project-a/assign'); await assignRefresh;
+  expect(detailRequests.length).toBe(beforeAssign);
+  await expect(page.locator('#project-detail-title')).toHaveText('Project B');
+  await close();
+  // Reopening the same project is also a new context: retain its current selection.
+  await open('Project A'); hold = 'POST:project-a:unassign';
+  await dialog.locator('#project-detail-sessions article').filter({hasText:'assigned-a'}).getByRole('button',{name:'Unassign'}).click();
+  await expect.poll(()=>pending.length).toBe(1); await close(); await open('Project A');
+  await page.locator('#project-assign-select').selectOption('dock-two');
+  const beforeUnassign = detailRequests.length;
+  const unassignRefresh = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects' && r.request().method()==='GET');
+  await release('/api/projects/project-a/unassign'); await unassignRefresh;
+  expect(detailRequests.length).toBe(beforeUnassign);
+  await expect(page.locator('#project-assign-select')).toHaveValue('dock-two');
+  await close();
+  // Creation, edit and delete refresh New session options without losing valid choices.
+  await page.evaluate(()=>{location.hash='new';});
+  const choice = page.locator('#new-session [name="project_id"]');
+  await choice.selectOption('project-a');
+  await page.evaluate(()=>{location.hash='projects';});
+  await page.locator('#new-project-btn').click();
+  await page.locator('#new-project-form [name="name"]').fill('Project C');
+  await page.locator('#new-project-form button[type="submit"]').click();
+  await expect(choice.locator('option[value="project-c"]')).toHaveText('Project C');
+  await expect(choice).toHaveValue('project-a');
+  await card('Project A').getByRole('button',{name:'Edit project'}).click();
+  await page.locator('.project-editor [name="name"]').fill('Renamed A');
+  await page.locator('.project-editor').getByRole('button',{name:'Save project'}).click();
+  await expect(choice.locator('option[value="project-a"]')).toContainText('Renamed A');
+  await expect(choice).toHaveValue('project-a');
+  await card('Renamed A').getByRole('button',{name:'Edit project'}).click();
+  await page.locator('.project-editor').getByRole('button',{name:'Delete project',exact:true}).click();
+  await page.locator('.project-editor').getByRole('button',{name:'Delete permanently'}).click();
+  await expect(choice.locator('option[value="project-a"]')).toHaveCount(0);
+  await expect(choice).toHaveValue('');
+  // Reverse two list responses: keep the newer options and the user's latest valid choice.
+  await page.evaluate(()=>{location.hash='new';});
+  await expect(page.locator('[data-view-panel="new"]')).toBeVisible();
+  await choice.selectOption('project-c');
+  holdLists = true;
+  await page.evaluate(()=>{location.hash='projects';});
+  await expect.poll(()=>pendingLists.length).toBe(1);
+  projects.push({id:'project-d',name:'Newest project D',status:'active',sessions:[]});
+  await page.evaluate(()=>{location.hash='new';});
+  await expect(page.locator('[data-view-panel="new"]')).toBeVisible();
+  await page.evaluate(()=>{location.hash='projects';});
+  await expect.poll(()=>pendingLists.length).toBe(2);
+  await page.evaluate(()=>{location.hash='new';});
+  await expect(page.locator('[data-view-panel="new"]')).toBeVisible();
+  await choice.selectOption('project-b');
+  const newerResponse = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects');
+  pendingLists.pop()(); await newerResponse;
+  await expect(choice.locator('option[value="project-d"]')).toHaveText('Newest project D');
+  await expect(choice).toHaveValue('project-b');
+  const olderResponse = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects');
+  pendingLists.shift()(); await olderResponse;
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  await expect(choice.locator('option[value="project-d"]')).toHaveText('Newest project D');
+  await expect(choice).toHaveValue('project-b');
+  await expect(card('Newest project D')).toHaveCount(1);
+  holdLists = false;
+  // A superseded list rejection is silent, just like a superseded success.
+  await page.evaluate(()=>{location.hash='new';});
+  await expect(page.locator('[data-view-panel="new"]')).toBeVisible();
+  holdLists = true; failNextList = true;
+  await page.evaluate(()=>{location.hash='projects';});
+  await expect.poll(()=>pendingLists.length).toBe(1);
+  await page.evaluate(()=>{location.hash='new';});
+  await expect(page.locator('[data-view-panel="new"]')).toBeVisible();
+  await page.evaluate(()=>{location.hash='projects';});
+  await expect.poll(()=>pendingLists.length).toBe(2);
+  const freshList = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects' && r.status()===200);
+  pendingLists.pop()(); await freshList;
+  await expect(choice.locator('option[value="project-d"]')).toHaveText('Newest project D');
+  const previousNotice = await page.locator('#notice').textContent();
+  await page.evaluate(()=>{
+    window.__projectNotices = 0;
+    window.__projectNoticeObserver = new MutationObserver(()=>window.__projectNotices++);
+    window.__projectNoticeObserver.observe(document.querySelector('#notice'),{childList:true,subtree:true,characterData:true,attributes:true});
+  });
+  const staleFailure = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects' && r.status()===500);
+  pendingLists.shift()(); await staleFailure;
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  expect(await page.locator('#notice').textContent()).toBe(previousNotice);
+  expect(await page.evaluate(()=>window.__projectNotices)).toBe(0);
+  await page.evaluate(()=>window.__projectNoticeObserver.disconnect());
+  await expect(choice).toHaveValue('project-b');
+  await expect(choice.locator('option[value="project-d"]')).toHaveText('Newest project D');
+  holdLists = false;
+
+  // Successful creation followed by a failed refresh must not corrupt a reopened form.
+  const optionsBeforeFailure = await choice.locator('option').evaluateAll(options=>options.map(option=>({value:option.value,text:option.textContent})));
+  await page.locator('#new-project-btn').click();
+  await page.locator('#new-project-form [name="name"]').fill('Project E');
+  holdLists = true; failNextList = true;
+  await page.locator('#new-project-form button[type="submit"]').click();
+  await expect.poll(()=>pendingLists.length).toBe(1);
+  expect(projects.some(project=>project.id==='project-e' && project.name==='Project E')).toBe(true);
+  await expect(page.locator('#new-project-dialog')).not.toBeVisible();
+  await page.locator('#new-project-btn').click();
+  await page.locator('#new-project-form [name="name"]').fill('Next creation draft');
+  const failedRefresh = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects' && r.status()===500);
+  pendingLists.shift()(); await failedRefresh;
+  await expect(page.locator('#notice')).toContainText('Could not refresh projects: Late project list failure');
+  await expect(page.locator('#new-project-dialog')).toBeVisible();
+  await expect(page.locator('#new-project-status')).toHaveText('');
+  await expect(page.locator('#new-project-form [name="name"]')).toHaveValue('Next creation draft');
+  await expect(page.locator('#new-project-form button[type="submit"]')).toBeEnabled();
+  await expect(choice).toHaveValue('project-b');
+  expect(await choice.locator('option').evaluateAll(options=>options.map(option=>({value:option.value,text:option.textContent})))).toEqual(optionsBeforeFailure);
+  holdLists = false;
+
 });

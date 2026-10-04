@@ -89,13 +89,15 @@ All settings are controlled via environment variables. The installer uses sensib
 | `AGENT_CONSOLE_TRUSTED_HOSTS` | `localhost,127.0.0.1` | TrustedHostMiddleware allowlist |
 | `AGENT_CONSOLE_MAX_PTY_CLIENTS` | `2` | Max WebSocket PTY clients per session |
 | `AGENT_CONSOLE_MAX_SESSIONS` | `12` | Max managed sessions |
-| `AGENT_CONSOLE_MAX_CHILDREN` | `3` | Max children per parent session |
+| `AGENT_CONSOLE_MAX_CHILDREN` | `0` | Max active children per parent; `0` disables only this per-parent limit. Positive values enforce a limit; stopped/archived children do not count. |
 | `AGCONSOLE_CODEX_BIN` | (auto-detected) | Absolute path to Codex CLI binary |
 | `AGCONSOLE_CLAUDE_BIN` | (auto-detected) | Absolute path to Claude CLI binary |
 | `AGCONSOLE_OPENCODE_BIN` | (auto-detected) | Absolute path to OpenCode CLI binary |
 | `AGCONSOLE_HERMES_BIN` | (auto-detected) | Absolute path to Hermes CLI binary |
 | `AGCONSOLE_SKILLS_ROOT` | `~/codex/skills` | Canonical skills root directory |
 | `AGCONSOLE_RETAINED_SKILLS` | (empty) | Comma-separated skill names to retain |
+
+Manual Add session and agent delegation use the same admission lock and active-child capacity. Reserved, attached and detached children count; historical children do not. The default has no per-parent child limit, while the global `AGENT_CONSOLE_MAX_SESSIONS` budget and eight-level descendant-depth guard still apply. Existing explicit nonzero `AGENT_CONSOLE_MAX_CHILDREN` values remain enforced; set that value to `0` (or remove it) to opt out. Blank, malformed and negative environment values use the default `0`.
 
 ## Docker
 
@@ -297,3 +299,8 @@ MIT — see [LICENSE](LICENSE).
 ### Combined release preparation
 
 The combined candidate is tracked in [issue96](https://github.com/Fadekyun/agent-console/issues/96). See [actual skills and prepared delivery](docs/skill-delivery-audit.md) for the distinction between engine support, existing content, prepared helpers and installed/assigned state. The [schema11 rollback contract](docs/schema-rollback.md) permits a return to schema10 only with disabled planning and no retained request/noninteractive state. Native planning remains disabled/unverified; skill discovery and guarded SQL reads do not establish native provider containment.
+
+Local owner project and write-only environment commands are documented in
+[Selected-release entrypoints](docs/selected-release-entrypoints.md#local-owner-projects-and-environment).
+Secret environment values use stdin or a hidden terminal prompt; managed agent
+sessions cannot use these owner administration commands.

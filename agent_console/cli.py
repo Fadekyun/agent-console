@@ -17,6 +17,7 @@ from .secrets_store import migrate_openrouter_secret, secret_status, set_openrou
 from .skills import approve_superpower, doctor_skills, get_effective_skills, list_superpower_approvals, revoke_superpower, sync_skills
 from .validation import PROFILES, TOOLS
 from .inspection_views import inspection_route, read_route
+from .managed_context import has_managed_markers, managed_context
 
 
 def emit(value: Any) -> None:
@@ -63,7 +64,8 @@ def confirm_twice(prompt: str) -> bool:
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog="agentctl")
+    from .owner_cli import OwnerArgumentParser
+    root = OwnerArgumentParser(prog="agentctl")
     root.add_argument("--json", action="store_true", help="emit JSON (currently the default format)")
     commands = root.add_subparsers(dest="command", required=True)
 
@@ -83,8 +85,16 @@ def parser() -> argparse.ArgumentParser:
     session_commands.add_parser("list")
     tree = session_commands.add_parser("tree")
     tree.add_argument("--json", action="store_true")
+    tree.add_argument("--current", action="store_true", help="show only this session’s tree")
+    relatives = session_commands.add_parser("relatives", help="live context for this session’s tree")
+    relatives.add_argument("name", nargs="?")
+    relatives.add_argument("--current", action="store_true")
+    relatives.add_argument("--json", action="store_true")
     review = session_commands.add_parser("review")
-    review.add_argument("name")
+    review.add_argument("name", nargs="?")
+    review.add_argument("--relative", choices=["parent", "root", "child", "sibling", "ancestor", "descendant"])
+    review.add_argument("--index", type=int, help="1-based index from session relatives")
+    review.add_argument("--session-id", help="stable ID of a member of your tree")
     review.add_argument("--lines", type=int, default=200)
     review.add_argument("--json", action="store_true")
     inspect = session_commands.add_parser("inspect")
@@ -108,12 +118,13 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--tool", required=True, choices=sorted(TOOLS))
     create.add_argument("--profile", default="general", choices=sorted(PROFILES))
     create.add_argument("--name")
+    create.add_argument("--parent", help="parent session name or durable ID; inherits project and repository")
     create.add_argument("--task")
     create.add_argument("--repository")
     create.add_argument("--worktree", action="store_true")
     create.add_argument("--auth-context")
     create.add_argument("--agent-mode", choices=["plan", "build", "auto"])
-    create.add_argument("--provider", choices=["openrouter", "opencode"])
+    create.add_argument("--provider", choices=["openrouter", "opencode", "opencode-go"])
     create.add_argument("--model")
     create.add_argument("--effort", choices=sorted(CODEX_EFFORT_LEVELS),
                         help="Codex reasoning effort (codex/codex-pro only)")
@@ -155,6 +166,8 @@ def parser() -> argparse.ArgumentParser:
     archive.add_argument("--allow-unmanaged", action="store_true")
     wait_children = session_commands.add_parser("wait-for-children")
     wait_children.add_argument("name")
+    wait_children.add_argument("--child", dest="child_selectors", action="append", metavar="ID_OR_NAME",
+                               help="wait only for these direct children; repeat for a batch")
     wait_children.add_argument("--timeout", type=int, default=None)
     wait_children.add_argument("--poll-interval", type=int, default=None)
 
@@ -194,7 +207,7 @@ def parser() -> argparse.ArgumentParser:
     plan_promote.add_argument("--yes", action="store_true")
 
     delegate = commands.add_parser("delegate")
-    delegate.add_argument("profile", choices=["planner", "researcher", "reviewer", "scout"])
+    delegate.add_argument("profile", choices=sorted(PROFILES))
     delegate.add_argument("--parent", required=True)
     delegate.add_argument("--task", required=True)
     delegate.add_argument("--repository")
@@ -202,6 +215,7 @@ def parser() -> argparse.ArgumentParser:
     delegate.add_argument("--name")
     delegate.add_argument("--auth-context")
     delegate.add_argument("--agent-mode", choices=["plan", "build", "auto"])
+    delegate.add_argument("--provider", choices=["openrouter", "opencode", "opencode-go"])
     delegate.add_argument("--model", help="Model for the child (codex/codex-pro or provider-qualified OpenCode)")
     delegate.add_argument("--effort", choices=sorted(CODEX_EFFORT_LEVELS),
                           help="Codex reasoning effort (codex/codex-pro only)")
@@ -223,12 +237,14 @@ def parser() -> argparse.ArgumentParser:
 
     skills = commands.add_parser("skills")
     skills_commands = skills.add_subparsers(dest="skills_command", required=True)
+    from .skill_cli import add_commands
+    add_commands(skills_commands)
     skills_commands.add_parser("sync")
     skills_doctor = skills_commands.add_parser("doctor")
     skills_doctor.add_argument("--quiet", action="store_true")
     skills_effective = skills_commands.add_parser("effective")
     skills_effective.add_argument("profile", choices=sorted(PROFILES))
-    skills_validate = skills_commands.add_parser("validate")
+    skills_validate = skills_commands.add_parser("validate-profile", help="Validate effective assignments for a profile")
     skills_validate.add_argument("profile", choices=sorted(PROFILES))
     skills_approve = skills_commands.add_parser("approve")
     skills_approve.add_argument("profile", choices=sorted(PROFILES))
@@ -295,6 +311,10 @@ def parser() -> argparse.ArgumentParser:
     deploy_rollback.add_argument("--yes", action="store_true")
     deploy_commands.add_parser("doctor")
 
+    from .workflow_cli import add_commands as add_workflow_commands
+    add_workflow_commands(commands)
+    from .owner_cli import add_commands as add_owner_commands
+    add_owner_commands(commands)
     commands.add_parser("doctor")
     return root
 
@@ -303,8 +323,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         route = inspection_route(args)
+        context = managed_context() if args.command in {"session", "delegate"} else None
+        if args.command in {"project", "environment"}:
+            if has_managed_markers():
+                raise PermissionError("project and environment owner commands are unsupported in managed sessions; use a local human owner terminal")
+            from .owner_cli import run
+            emit(run(args, SessionManager()))
+            return 0
         if route is not None:
-            result = read_route(args, route)
+            if context is not None and route[0] == "session" and len(route) == 2:
+                from .session_client import managed_read
+                result = managed_read(args, route)
+            else:
+                result = read_route(args, route)
             if route == ("session", "tree") and not args.json:
                 print_session_tree(result)
             elif route == ("session", "review") and not args.json:
@@ -317,12 +348,25 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 emit(result)
             return 0
+        if args.command == "workflow":
+            if args.workflow_command == "manage":
+                from .operator_workflow_cli import run as run_owner_workflow
+                emit(run_owner_workflow(args, manager_factory=SessionManager))
+                return 0
+            from .workflow_cli import run as run_workflow_command
+            emit(run_workflow_command(args))
+            return 0
         if args.command == "skills":
+            from .skill_cli import COMMANDS, run as run_skill_command
+            if args.skills_command in COMMANDS:
+                result = run_skill_command(args)
+                emit(result)
+                return 1 if args.skills_command == 'validate' and not result['valid'] else 0
             if args.skills_command == "effective":
                 manager = SessionManager()
                 emit(get_effective_skills(manager.database, args.profile))
                 return 0
-            if args.skills_command == "validate":
+            if args.skills_command == "validate-profile":
                 manager = SessionManager()
                 from .skills import validate_profile_skills
                 result = validate_profile_skills(manager.database, args.profile)
@@ -377,6 +421,11 @@ def main(argv: list[str] | None = None) -> int:
             if exit_code:
                 print("agentctl: integration operation rejected", file=sys.stderr)
             return exit_code
+        from .session_client import handles, run as run_session_control
+        if handles(args) and context is not None:
+            result = run_session_control(args)
+            emit(result)
+            return result.get("exit_code", 0) if isinstance(result, dict) else 0
         manager = SessionManager()
         if args.command == "auth":
             if args.auth_command == "login":
@@ -501,13 +550,25 @@ def main(argv: list[str] | None = None) -> int:
             elif args.session_command == "attach":
                 manager.attach(args.name)
             elif args.session_command == "create":
+                parent = None
+                if args.parent:
+                    with manager.database.connect() as conn:
+                        rows = conn.execute("SELECT tmux_name FROM sessions WHERE id=? OR tmux_name=?",
+                                            (args.parent, args.parent)).fetchall()
+                    if len(rows) != 1:
+                        raise ValueError("Choose an existing, unambiguous parent session")
+                    parent = manager.inspect(rows[0]["tmux_name"])
+                    if not parent.get("managed") or parent.get("execution_kind") == "integration-plan":
+                        raise ValueError("Choose a managed interactive parent session")
                 emit(
                     manager.create(
                         tool=args.tool,
                         profile=args.profile,
                         name=args.name,
                         task=args.task,
-                        repository=args.repository,
+                        repository=args.repository or (parent.get("repository") if parent else None),
+                        parent_session_id=parent["id"] if parent else None,
+                        project_id=parent.get("project_id") if parent else None,
                         worktree=args.worktree,
                         auth_context=args.auth_context,
                         agent_mode=args.agent_mode,
@@ -532,6 +593,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.name,
                     timeout=args.timeout,
                     poll_interval=args.poll_interval,
+                    child_selectors=args.child_selectors,
                 )
                 if args.json:
                     emit(result)
@@ -646,6 +708,7 @@ def main(argv: list[str] | None = None) -> int:
                     auth_context=args.auth_context,
                     agent_mode=args.agent_mode,
                     model=args.model,
+                    provider=args.provider,
                     reasoning_effort=args.effort,
                     plan_reasoning_effort=args.plan_effort,
                 )
