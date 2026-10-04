@@ -2038,7 +2038,7 @@ class SessionManager:
                     f"discovery root. Remove assignments or use a tool that "
                     f"supports skill isolation (codex)."
                 )
-        auth_context = self.auth.get_context(tool, session.get("auth_context"))
+        auth_context = self.auth.get_context(tool, session.get("auth_context"), require_ready=True)
         adapter = provider_adapter(tool, self.auth)
         resolved_environment, environment_revision = self.environment.resolve(
             project_id, secret_files=adapter.secret_files(auth_context))

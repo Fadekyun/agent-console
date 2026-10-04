@@ -1,3 +1,10 @@
+## 0.28.19 — unreleased, 2026-10-04 (#163)
+
+- Impact: restarting a session now applies the same authentication readiness policy as creation. Disabled contexts, missing credentials and unsafe credential-file permissions reject restart before changing launcher, environment, skills or the running process. Ready contexts keep working.
+- Configuration/migration: none. Restore the selected authentication context to ready status before retrying a rejected restart. No live authentication settings are changed by this release.
+- Verification: three private inert-agent baseline cases reproduced the bypass; the ready-context control passed. All four cases passed after the guard, asserting unchanged launch assets and no tmux restart on rejection. Independent review and exact-head CI gate promotion.
+- Rollback: select the prior release through its schema guard and restart web only, preserving sessions and state. Earlier code can restart through a context that creation rejects.
+
 ## 0.28.18 — unreleased, 2026-10-04 (#157)
 
 - Impact: the pinned xterm adapter preserves non-composing IME text that arrives before keydown while an earlier Process key remains held. The settled fallback previously lost later characters in this sequence. Ordinary typing, real repeats, composition, screen-reader ownership and the prior repetition protection remain intact.
