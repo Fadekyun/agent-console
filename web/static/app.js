@@ -1153,7 +1153,7 @@ function updateAgentModeField() {
   select.value = preserve ? previous : fallback; field.dataset.tool = tool;
   $('#agent-mode-label').textContent = `${codexLike ? (tool === 'codex-pro' ? 'Codex Pro' : 'Codex') : 'OpenCode'} mode`;
   $('#agent-mode-help').textContent = codexLike
-    ? (select.value === 'plan' ? 'Read-only planning; no file or system changes.' : 'Workspace-write with approvals on request; not unrestricted host access.')
+    ? (select.value === 'plan' ? 'Read-only planning; no file or system changes.' : tool === 'codex-pro' ? 'Workspace-write with native automatic review; not unrestricted host access.' : 'Workspace-write with approvals on request; not unrestricted host access.')
     : (select.value === 'plan' ? 'Planning is the default.' : 'Build is explicitly write-capable.');
   select.onchange = updateAgentModeField;
 }

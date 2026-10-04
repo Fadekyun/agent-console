@@ -1248,6 +1248,58 @@ class SessionIntegrationTests(unittest.TestCase):
             self.assertEqual(self.manager.inspect("pin-child")["agent_mode"], "plan")
             self.manager.kill("pin-child")
 
+    def test_codex_pro_default_and_plan_survive_restart_and_delegation(self) -> None:
+        subprocess.run(["git", "init", "-q", str(self.workspace)], check=True)
+        (self.workspace / "README.md").write_text("Owned approval fixture\n")
+        subprocess.run(["git", "-C", str(self.workspace), "add", "README.md"], check=True)
+        subprocess.run([
+            "git", "-C", str(self.workspace), "-c", "user.name=Fixture",
+            "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"
+        ], check=True)
+        stub = Path(self.temp.name) / "codex-pro-approval-stub"
+        stub.write_text(
+            "#!/bin/sh\n"
+            "case \" $* \" in\n"
+            "  *\" --help \"*) echo '--approve-for-me --sandbox --output-schema --output-last-message'; exit 0 ;;\n"
+            "  *\" --version \"*) echo 'codex-cli 0.159.2'; exit 0 ;;\n"
+            "esac\nexec sleep 60\n"
+        )
+        stub.chmod(0o700)
+        (self.manager.auth.codex_home("default", tool="codex-pro") / "auth.json").write_text("{}\n")
+        parent = self.manager.create(tool="shell", profile="general", name="approval-parent")
+        with patch.dict(TOOL_BINARIES, {"codex-pro": stub}), patch.dict(
+            os.environ, {"AGCONSOLE_CODEX_PLAN_NETWORK_ACCESS": ""}
+        ):
+            child = self.manager.delegate(
+                profile="coder", parent=parent["id"], task="Bounded fixture work",
+                tool="codex-pro", name="approval-child",
+            )["session"]
+            self.assertEqual(child["agent_mode"], "auto")
+            self.assertEqual(child["permission_mode"], "workspace-write")
+            before = Path(child["launcher_path"]).read_text()
+            self.assertIn("--approve-for-me", before)
+            self.assertNotIn("--ask-for-approval", before)
+            self.manager.restart(child["tmux_name"])
+            self.assertIn("--approve-for-me", Path(child["launcher_path"]).read_text())
+            self.assertEqual(self.manager.inspect(child["tmux_name"])["id"], child["id"])
+            # Existing intentional/legacy arguments remain pinned on restart.
+            legacy_launcher = Path(child["launcher_path"])
+            legacy_launcher.write_text(legacy_launcher.read_text().replace(
+                "--approve-for-me", "--ask-for-approval on-request"
+            ))
+            self.manager.restart(child["tmux_name"])
+            self.assertNotIn("--approve-for-me", legacy_launcher.read_text())
+            self.assertIn("--ask-for-approval on-request", legacy_launcher.read_text())
+            plan = self.manager.create(
+                tool="codex-pro", profile="coder", name="approval-plan", agent_mode="plan"
+            )
+            self.assertEqual(plan["permission_mode"], "read-only")
+            self.manager.restart(plan["tmux_name"])
+            launcher = Path(plan["launcher_path"]).read_text()
+            self.assertNotIn("--approve-for-me", launcher)
+            self.assertIn("--ask-for-approval never", launcher)
+            self.assertIn("--sandbox read-only", launcher)
+
     def test_codex_plan_network_env_enables_network_sandbox(self) -> None:
         from agent_console.providers import TOOL_BINARIES
         stub = Path(self.temp.name) / "codex-net-stub"

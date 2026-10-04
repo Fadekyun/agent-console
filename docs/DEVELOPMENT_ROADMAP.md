@@ -1,3 +1,8 @@
+## Native Codex Pro automatic review — 2026-10-04 (#176)
+
+- Integrate the owner-authorized approval-default source with native flag support probes and explicit Plan/read-only workflow narrowing; preserve ordinary Codex and role/skill boundaries.
+- Cover provider argv and private create/delegate/restart paths. No live bulk restart, permission migration, purchase or model call; release requires manager batch approval after exact-head CI/review.
+
 ## Deterministic release-gate provenance fixtures — 2026-10-04 (#174)
 
 - Give each fixture repository distinct content and submit plan2 revision for plan2 evidence, preserving capability provenance rejection and production gate behavior.
