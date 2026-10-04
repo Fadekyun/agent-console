@@ -175,7 +175,7 @@ SKILL_TOOL_CAPABILITIES: dict[str, SkillToolCapability] = {
         # Package/settings/ancestor sources are also possible. Do not claim the
         # static inventory is exhaustive or that it suppresses native sources.
         configured_sources_inspected=False,
-        verified_versions=frozenset({"0.99.2"}),
+        verified_versions=frozenset({"0.99.2", "1.0.2"}),
         unverified_version_policy="skip",
     ),
     "opencode": SkillToolCapability(

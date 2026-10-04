@@ -1,3 +1,10 @@
+## 0.28.11 — unreleased, 2026-10-04 (#145)
+
+- Impact: admits the verified Pi 1.0.2 selected-skill delivery mechanism and names installed/verified versions when a runtime fails admission. Existing 0.99.2 support remains; unknown versions and prereleases fail closed.
+- Configuration/migration: none. No profile assignment, skill permission or runtime wrapper changes. Pi orchestrator profiles with incompatible assigned skills remain blocked; version verification does not override that policy.
+- Verification: disposable native loader probe checks selected snapshot paths, support files and absence of unselected skills without credentials/models; focused creation/restart, exact-version and policy-preservation regressions. See `PI_SKILL_DELIVERY.md` for reproduction and limits. Publication CI and independent review precede promotion.
+- Rollback: select retained v0.28.10 and restart web only, preserving live sessions/state. The previous release blocks selected-skill delivery on Pi 1.0.2.
+
 ## 0.28.10 — unreleased, 2026-10-04 (#143)
 
 - Impact: direct terminal typing no longer resends old hidden textarea content or multiplies a mobile edit through overlapping IME fallback handlers. Actual composition and deliberate repeated keys retain their normal behavior. Pending edits flush before focus changes and Enter; text typed while disconnected is kept in Input for explicit review, never automatically replayed.

@@ -377,6 +377,21 @@ class SharedSkillSessionTests(unittest.TestCase):
         from agent_console.skill_registry import read_deliveries
         self.assertEqual(read_deliveries(self.settings.state_dir, session['id'])['latest']['tool'], 'pi')
 
+    def test_pi_102_create_and_restart_keep_selected_snapshot_and_unknown_upgrade_fails_closed(self):
+        self.configure_commandcode('pi')
+        with mock.patch('agent_console.skills._default_version_probe', return_value='1.0.2'):
+            session = self.manager.create(tool='pi', profile='general', name='pi-102', repository=str(self.workspace))
+            native = self.settings.state_dir / 'contexts/pi-102-pi/skills'
+            self.assertEqual(native.resolve(), self.isolated_root('pi-102'))
+            self.manager.restart('pi-102')
+            self.assertEqual(native.resolve(), self.isolated_root('pi-102'))
+        launcher = Path(session['launcher_path']); before = launcher.read_bytes()
+        with mock.patch('agent_console.skills._default_version_probe', return_value='1.0.3'):
+            with self.assertRaisesRegex(ValueError, 'installed: 1.0.3'):
+                self.manager.restart('pi-102')
+        self.assertEqual(launcher.read_bytes(), before)
+        self.assertTrue(self.manager.inspect('pi-102')['running'])
+
     def test_unverified_pi_blocks_create_before_context_or_terminal(self) -> None:
         self.configure_commandcode('pi')
         with mock.patch('agent_console.skills._default_version_probe', return_value='0.99.1'):

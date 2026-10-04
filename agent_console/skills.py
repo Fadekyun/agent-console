@@ -1289,7 +1289,11 @@ def resolve_session_skills(
             validation["valid"] = False
             validation["issues"].append(
                 f"{tool} skill delivery requires a verified harness version: "
-                f"{delivery_version['version_state']}"
+                f"{delivery_version['version_state']} "
+                f"(installed: {delivery_version['installed_version'] or 'unknown'}; "
+                f"verified: {', '.join(sorted(capability.verified_versions)) or 'none'}). "
+                "Verify the installed runtime before extending compatibility; "
+                "profile and skill restrictions still apply."
             )
     return {
         "delivery_version": delivery_version,
