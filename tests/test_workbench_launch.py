@@ -80,6 +80,18 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual(response.json(), {'detail': 'Launch request not found'})
         self.assertEqual(self.manager.list_sessions(), [])
 
+    def test_launch_recovery_error_is_not_reported_as_a_missing_receipt(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from agent_console.workbench_launch_api import launch_routes
+
+        app = FastAPI()
+        app.include_router(launch_routes(self.manager, lambda: None))
+        with patch.object(LaunchCatalog, 'launch_status', side_effect=KeyError('Recovery data missing')):
+            with TestClient(app, raise_server_exceptions=False) as client:
+                response = client.get('/api/workbench/launches/existing-receipt')
+        self.assertEqual(response.status_code, 500)
+
     def test_profile_drift_requires_new_review_before_launch(self):
         preview = self.catalog.preview(self.request)
         (self.manager.settings.profile_dir/'general.md').write_text('Changed role')

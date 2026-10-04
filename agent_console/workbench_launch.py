@@ -24,6 +24,10 @@ CONFIG_KEYS = {'tool', 'profile', 'repository', 'worktree', 'auth_context',
 REQUEST_KEYS = CONFIG_KEYS | {'task', 'name'}
 
 
+class MissingLaunchRequest(KeyError):
+    """No durable launch receipt exists for this request key."""
+
+
 def digest(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
@@ -213,7 +217,7 @@ class LaunchCatalog:
         with self.store.connect() as db:
             row = db.execute('SELECT * FROM work_launch_requests WHERE request_key=?', (key,)).fetchone()
         if not row:
-            raise KeyError('Launch request not found')
+            raise MissingLaunchRequest('Launch request not found')
         data = dict(row)
         # A process may die after creating the session but before acknowledging it.
         # Recover only from its durable configuration receipt, never a name alone.

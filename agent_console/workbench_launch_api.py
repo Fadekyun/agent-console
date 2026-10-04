@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .workbench_launch import LaunchCatalog
+from .workbench_launch import LaunchCatalog, MissingLaunchRequest
 
 
 class Preview(BaseModel):
@@ -67,7 +67,7 @@ def launch_routes(manager, require_identity):
     def status(request_key: str):
         try:
             return catalog.launch_status(request_key)
-        except KeyError as error:
+        except MissingLaunchRequest as error:
             raise HTTPException(status_code=404, detail='Launch request not found') from error
 
     return router
