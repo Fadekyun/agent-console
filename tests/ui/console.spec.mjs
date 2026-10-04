@@ -1314,7 +1314,7 @@ test('project dialog context rejects late details and mutations while project ch
     {id:'project-b',name:'Project B',status:'active',repository:'/workspace/b',sessions:[]},
   ];
   const pending = [], detailRequests = [];
-  let hold = null, failHeld = false, holdLists = false;
+  let hold = null, failHeld = false, holdLists = false, failNextList = false;
   const pendingLists = [];
   await page.route('**/api/projects**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
@@ -1322,10 +1322,11 @@ test('project dialog context rejects late details and mutations while project ch
     if (path === '/api/projects') {
       if (method === 'GET' && holdLists) {
         const body = JSON.stringify(projects);
+        const failure = failNextList; failNextList = false;
         await new Promise(resolve=>pendingLists.push(resolve));
-        await route.fulfill({contentType:'application/json',body}); return;
+        await route.fulfill(failure ? {status:500,json:{detail:'Late project list failure'}} : {contentType:'application/json',body}); return;
       }
-      if (method === 'POST') projects.push({id:'project-c',status:'active',sessions:[],...request.postDataJSON()});
+      if (method === 'POST') projects.push({id:projects.some(p=>p.id==='project-c') ? 'project-e' : 'project-c',status:'active',sessions:[],...request.postDataJSON()});
       await route.fulfill({json:method === 'GET' ? projects : projects.at(-1)}); return;
     }
     const project = projects.find(p=>p.id===id);
@@ -1344,7 +1345,7 @@ test('project dialog context rejects late details and mutations while project ch
   });
   await page.goto('/desktop#projects');
   const dialog = page.locator('#project-detail-dialog');
-  const card = name => page.locator('#projects-list .profile-card').filter({has:page.getByRole('heading',{name,exact:true})});
+  const card = name => page.locator('#projects-list .profile-card').filter({has:page.getByRole('heading',{name,exact:true,includeHidden:true})});
   const open = async name => {
     await card(name).getByRole('button',{name:'View sessions'}).click();
     await expect(page.locator('#project-detail-title')).toHaveText(name);
@@ -1473,6 +1474,56 @@ test('project dialog context rejects late details and mutations while project ch
   await expect(choice.locator('option[value="project-d"]')).toHaveText('Newest project D');
   await expect(choice).toHaveValue('project-b');
   await expect(card('Newest project D')).toHaveCount(1);
+  holdLists = false;
+  // A superseded list rejection is silent, just like a superseded success.
+  await page.evaluate(()=>{location.hash='new';});
+  await expect(page.locator('[data-view-panel="new"]')).toBeVisible();
+  holdLists = true; failNextList = true;
+  await page.evaluate(()=>{location.hash='projects';});
+  await expect.poll(()=>pendingLists.length).toBe(1);
+  await page.evaluate(()=>{location.hash='new';});
+  await expect(page.locator('[data-view-panel="new"]')).toBeVisible();
+  await page.evaluate(()=>{location.hash='projects';});
+  await expect.poll(()=>pendingLists.length).toBe(2);
+  const freshList = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects' && r.status()===200);
+  pendingLists.pop()(); await freshList;
+  await expect(choice.locator('option[value="project-d"]')).toHaveText('Newest project D');
+  const previousNotice = await page.locator('#notice').textContent();
+  await page.evaluate(()=>{
+    window.__projectNotices = 0;
+    window.__projectNoticeObserver = new MutationObserver(()=>window.__projectNotices++);
+    window.__projectNoticeObserver.observe(document.querySelector('#notice'),{childList:true,subtree:true,characterData:true,attributes:true});
+  });
+  const staleFailure = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects' && r.status()===500);
+  pendingLists.shift()(); await staleFailure;
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  expect(await page.locator('#notice').textContent()).toBe(previousNotice);
+  expect(await page.evaluate(()=>window.__projectNotices)).toBe(0);
+  await page.evaluate(()=>window.__projectNoticeObserver.disconnect());
+  await expect(choice).toHaveValue('project-b');
+  await expect(choice.locator('option[value="project-d"]')).toHaveText('Newest project D');
+  holdLists = false;
+
+  // Successful creation followed by a failed refresh must not corrupt a reopened form.
+  const optionsBeforeFailure = await choice.locator('option').evaluateAll(options=>options.map(option=>({value:option.value,text:option.textContent})));
+  await page.locator('#new-project-btn').click();
+  await page.locator('#new-project-form [name="name"]').fill('Project E');
+  holdLists = true; failNextList = true;
+  await page.locator('#new-project-form button[type="submit"]').click();
+  await expect.poll(()=>pendingLists.length).toBe(1);
+  expect(projects.some(project=>project.id==='project-e' && project.name==='Project E')).toBe(true);
+  await expect(page.locator('#new-project-dialog')).not.toBeVisible();
+  await page.locator('#new-project-btn').click();
+  await page.locator('#new-project-form [name="name"]').fill('Next creation draft');
+  const failedRefresh = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects' && r.status()===500);
+  pendingLists.shift()(); await failedRefresh;
+  await expect(page.locator('#notice')).toContainText('Could not refresh projects: Late project list failure');
+  await expect(page.locator('#new-project-dialog')).toBeVisible();
+  await expect(page.locator('#new-project-status')).toHaveText('');
+  await expect(page.locator('#new-project-form [name="name"]')).toHaveValue('Next creation draft');
+  await expect(page.locator('#new-project-form button[type="submit"]')).toBeEnabled();
+  await expect(choice).toHaveValue('project-b');
+  expect(await choice.locator('option').evaluateAll(options=>options.map(option=>({value:option.value,text:option.textContent})))).toEqual(optionsBeforeFailure);
   holdLists = false;
 
 });
