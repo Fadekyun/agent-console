@@ -1,3 +1,9 @@
+## Session lifecycle consistency — 2026-10-04 (#146)
+
+- Recreated stopped names retain durable identity while rotating reporting capability and updating or clearing project ownership consistently.
+- Stopped/repeated archives retain saved transcripts, and rejected unmanaged archive-and-kill operations have no archive side effects.
+- Verified with isolated private tmux/SQLite fixtures; existing authorization policies and user sessions remain unchanged. Disabled-auth-context restart semantics remain a separate follow-up.
+
 ## Pi 1.0.2 selected-skill admission — 2026-10-04 (#145)
 
 - Verified native selected-snapshot delivery before adding exact 1.0.2 compatibility; clearer installed/verified-version diagnostics.
