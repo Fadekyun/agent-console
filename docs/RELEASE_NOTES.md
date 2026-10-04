@@ -1,3 +1,10 @@
+## 0.28.12 — unreleased, 2026-10-04 (#146)
+
+- Impact: recreating a stopped session name now rotates its reporting capability and persists the chosen project while retaining its durable ID. Old capabilities are rejected. Archiving after stop or repeated archiving preserves saved output; denied unmanaged archive-and-kill requests fail before capture or archive metadata changes.
+- Configuration/migration: none. Authorization rules remain unchanged; existing sessions are not modified. The corrected fields apply on explicit recreation, and saved-output preservation applies on archive.
+- Verification: isolated inert-shell reproductions failed before the fix; 12 focused lifecycle tests and 2 subtests passed afterward, including new/old capability authentication, project changes/clearing, preserved private output and denied/allowed unmanaged operations. Independent source review passed; CI gates promotion.
+- Rollback: select the prior release through its schema guard and restart web only, preserving state and live sessions. Earlier code retains the lifecycle defects described above.
+
 ## 0.28.11 — unreleased, 2026-10-04 (#145)
 
 - Impact: admits the verified Pi 1.0.2 selected-skill delivery mechanism and names installed/verified versions when a runtime fails admission. Existing 0.99.2 support remains; unknown versions and prereleases fail closed.

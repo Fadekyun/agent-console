@@ -1846,6 +1846,8 @@ class SessionManager:
                         provider=excluded.provider,
                         model=excluded.model,
                         permission_mode=excluded.permission_mode,
+                        project_id=excluded.project_id,
+                        evidence_capability_hash=excluded.evidence_capability_hash,
                         exit_reason=NULL,
                         archived_transcript=NULL
                     """,
@@ -2261,22 +2263,26 @@ class SessionManager:
         session = self.inspect(name)
         if session.get("execution_kind") == "integration-plan":
             raise PermissionError("integration planning sessions cannot be archived")
-        transcript = self.settings.state_dir / "transcripts" / f"{name}-{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        if kill and not session["managed"] and not allow_unmanaged:
+            raise PermissionError("unmanaged session requires explicit --allow-unmanaged")
+        # Stopped sessions may already have output saved by kill. Without a
+        # live capture, preserve that reference rather than recording an
+        # unwritten archive path (or inventing output where none exists).
+        transcript = session.get("archived_transcript")
         tmux = self.tmux_for_name(name)
         if tmux.exists(name):
             captured, _ = tmux.capture(name)
-            transcript.write_text(captured, encoding="utf-8")
-            transcript.chmod(0o600)
+            transcript_path = self.settings.state_dir / "transcripts" / f"{name}-{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            transcript_path.write_text(captured, encoding="utf-8")
+            transcript_path.chmod(0o600)
+            transcript = str(transcript_path)
         with self.database.connect() as conn:
             conn.execute(
                 "UPDATE sessions SET status='archived', archived_transcript=? WHERE tmux_name=?",
-                (str(transcript), name),
+                (transcript, name),
             )
-        if kill:
-            if not session["managed"] and not allow_unmanaged:
-                raise PermissionError("unmanaged session requires explicit --allow-unmanaged")
-            if tmux.exists(name):
-                tmux.kill(name)
+        if kill and tmux.exists(name):
+            tmux.kill(name)
         self.database.audit("session.archived", name, "success", details={"kill": kill})
         return self.inspect(name)
 
