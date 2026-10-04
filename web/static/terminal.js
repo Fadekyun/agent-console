@@ -12,7 +12,7 @@ let name = new URLSearchParams(location.search).get('session');
 const initialName = name;
 let sessionId = new URLSearchParams(location.search).get('session_id');
 let identityRequest = null, connectionGeneration = 0, draftInitialized = false;
-let draftKey = null;
+let draftKey = null, draftPersistenceBlocked = false, draftEditedBeforeIdentity = false;
 if (!name) location.href = '/';
 $('#session-name').textContent = name;
 document.title = `Agent Terminal - ${name}`;
@@ -65,7 +65,7 @@ const MAX_RECONNECT_ATTEMPTS = 30;
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 30000;
 let autoReconnectEnabled = true;
-function saveDraft() { draftRevision++; $('#toggle-composer').textContent = composer.value ? 'Input · draft' : 'Input'; try { if (draftKey) sessionStorage.setItem(draftKey, composer.value); } catch { /* continue without persistence */ } }
+function saveDraft(edited = true) { if (edited && !draftInitialized) draftEditedBeforeIdentity = true; draftRevision++; $('#toggle-composer').textContent = composer.value ? 'Input · draft' : 'Input'; try { if (draftKey && !draftPersistenceBlocked) sessionStorage.setItem(draftKey, composer.value); } catch { /* continue without persistence */ } }
 function showComposer(open, focus = false) {
   if (!open) clipboardContext++;
   $('#input-drawer').hidden = !open;
@@ -111,7 +111,7 @@ document.addEventListener('pointerdown', event => {
 });
 window.addEventListener('blur', () => closeMore());
 new ResizeObserver(() => { fitMoreMenu(); autoSizeComposer(); }).observe($('.terminal-controls'));
-window.addEventListener('pagehide', saveDraft);
+window.addEventListener('pagehide', () => saveDraft(false));
 window.addEventListener('focus', () => {
   if (draftInitialized && viewVisible) refreshIdentity().catch(error => setStatus(error.message));
 });
@@ -145,7 +145,36 @@ function initializeDraft() {
   draftKey = `agent-console:composer:id:${sessionId}`;
   try {
     const draft = sessionStorage.getItem(draftKey);
-    if (draft !== null && !composer.value) { composer.value = draft; briefLoaded = true; }
+    const recoveryKey = `${draftKey}:recovery`;
+    let recovery = sessionStorage.getItem(recoveryKey) || '';
+    if (draft !== null) {
+      // Early typing belongs to this page; do not replace it after identity lookup.
+      // Keep the previously saved text separately until the user explicitly restores it.
+      briefLoaded = true;
+      if (!draftEditedBeforeIdentity && !composer.value) composer.value = draft;
+      else if (draft && draft !== composer.value) {
+        if (recovery !== draft) recovery = recovery ? `${recovery}\n${draft}` : draft;
+        try { sessionStorage.setItem(recoveryKey, recovery); }
+        catch { draftPersistenceBlocked = true; /* keep the original stored draft until explicit recovery */ }
+      }
+    }
+    const restoreSaved = $('#restore-saved-draft');
+    restoreSaved.hidden = !recovery;
+    if (draftPersistenceBlocked) {
+      restoreSaved.textContent = 'Restore saved draft (saving paused)';
+      restoreSaved.title = 'New typing is kept on this page only until the saved draft is restored';
+    }
+    restoreSaved.onclick = () => {
+      const end = composer.value.length;
+      composer.setRangeText(`${end ? '\n' : ''}${recovery}`, end, end, 'end');
+      draftPersistenceBlocked = false;
+      saveDraft(); showComposer(true, true); briefLoaded = true;
+      restoreSaved.hidden = true;
+      try {
+        if (sessionStorage.getItem(draftKey) === composer.value) sessionStorage.removeItem(recoveryKey);
+      } catch { /* retain the saved recovery if persistence is unavailable */ }
+      setStatus('Saved draft appended; review before sending');
+    };
     const originalKey = sessionStorage.getItem(`${draftKey}:legacy-source`) || `agent-console:composer:${initialName}`;
     const legacyKey = sessionStorage.getItem(originalKey) ? originalKey : `agent-console:composer:${name}`;
     const legacy = sessionStorage.getItem(legacyKey);
@@ -185,7 +214,7 @@ window.addEventListener('message', (event) => {
     if (viewVisible) { autoReconnectEnabled = true; cancelReconnect(); connect(); }
     else {
       connectionGeneration++; clipboardContext++;
-      saveDraft(); if (historyMode || nativeScrolled) leaveHistory(); autoReconnectEnabled = false; cancelReconnect();
+      saveDraft(false); if (historyMode || nativeScrolled) leaveHistory(); autoReconnectEnabled = false; cancelReconnect();
       if (socket) { socket.onclose = null; socket.onerror = null; socket.onmessage = null; socket.close(); socket = null; }
       setStatus('Terminal closed · session still running');
     }
@@ -752,7 +781,6 @@ composer.addEventListener('keydown', (event) => {
 });
 
 initTheme($('#terminal-theme'), () => { terminal.options.theme = xtermTheme(); });
-saveDraft();
 setMode(mode, false); syncVisualViewport(); autoSizeComposer(); autoReconnectEnabled = true; cancelReconnect(); connect();
 refreshIdentity().then(() => fetch(sessionPath('review?lines=1'), { cache: 'no-store' }))
   .then((response) => response.ok ? response.json() : null)
