@@ -26,7 +26,7 @@ def _setup_plan(manager: SessionManager, artifact_name: str) -> dict:
         ["git", "-C", str(repository), "config", "user.name", "Gate Test"],
         check=True,
     )
-    (repository / "README.md").write_text("gate fixture\n", encoding="utf-8")
+    (repository / "README.md").write_text(f"gate fixture: {artifact_name}\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(repository), "add", "README.md"], check=True)
     subprocess.run(["git", "-C", str(repository), "commit", "-qm", "gate fixture"], check=True)
     revision = subprocess.run(
@@ -103,10 +103,12 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
         return _read_capability(self.manager, session_name)
 
     def _record_evidence(self, plan_id: str, cap: str, etype: str,
-                         result: str, detail: str | None = None) -> dict:
+                         result: str, detail: str | None = None, *,
+                         candidate_sha: str | None = None) -> dict:
         return self.manager.record_evidence(
             plan_id, evidence_type=etype, result=result,
-            candidate_sha=self.sha, detail=detail, capability=cap,
+            candidate_sha=self.sha if candidate_sha is None else candidate_sha,
+            detail=detail, capability=cap,
         )
 
     def _record_full_evidence(self) -> None:
@@ -220,6 +222,7 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
     def test_capability_cross_plan_rejected_leaves_gate_unchanged(self) -> None:
         plan2 = _setup_plan(self.manager, "prov-plan2")
         plan2_id = plan2["plan_id"]
+        self.assertNotEqual(self.sha, plan2["revision"])
         rev2 = self.manager.create(
             tool="shell", profile="reviewer", name="rev-cross-plan",
             repository=str(self.workspace),
@@ -239,11 +242,13 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
             linked_plan_id=plan2_id,
         )
         self.manager.set_attention(ver2["tmux_name"], state="ready_for_review", actor="test")
-        self._record_evidence(plan2_id, cap2, "review", "pass")
-        self._record_evidence(plan2_id, self._capability(sc2["tmux_name"]), "scout", "pass")
-        self._record_evidence(plan2_id, self._capability(ver2["tmux_name"]), "verification", "pass")
+        self._record_evidence(plan2_id, cap2, "review", "pass", candidate_sha=plan2["revision"])
+        self._record_evidence(plan2_id, self._capability(sc2["tmux_name"]), "scout", "pass",
+                              candidate_sha=plan2["revision"])
+        self._record_evidence(plan2_id, self._capability(ver2["tmux_name"]), "verification", "pass",
+                              candidate_sha=plan2["revision"])
         gate2_before = self.manager.check_release_gate(plan2_id)
-        self.assertTrue(gate2_before["allowed"])
+        self.assertTrue(gate2_before["allowed"], gate2_before)
         gate1_before = self.manager.check_release_gate(self.plan_id)
         self.assertFalse(gate1_before["allowed"])
 
@@ -259,7 +264,7 @@ class ReleaseGateProvenanceTests(unittest.TestCase):
         self.assertEqual(gate1_after["blocked_by"], gate1_before["blocked_by"])
         self.assertEqual(len(self.manager.list_evidence(self.plan_id)), 0)
         gate2_after = self.manager.check_release_gate(plan2_id)
-        self.assertTrue(gate2_after["allowed"])
+        self.assertTrue(gate2_after["allowed"], gate2_after)
 
     def test_capability_wrong_linked_plan_id_raises(self) -> None:
         sess = self.manager.create(
