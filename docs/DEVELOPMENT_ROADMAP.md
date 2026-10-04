@@ -1,3 +1,8 @@
+## Match restart authentication admission to creation — 2026-10-04 (#163)
+
+- Reject disabled, setup-required and error contexts before restart mutates launch state; retain ready-context restart.
+- Private temporary auth, skill and tmux fixtures verify failure is side-effect free. No live credentials or auth policies changed.
+
 ## Preserve input-before-keydown IME rollover — 2026-10-04 (#157)
 
 - Handle the narrow non-composing gap where native xterm rejects composed insertText after a settled 229 fallback while the previous key remains held.
