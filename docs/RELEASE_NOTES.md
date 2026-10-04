@@ -1,3 +1,10 @@
+## 0.28.23 — unreleased, 2026-10-04 (#174)
+
+- Impact: release-gate provenance tests now submit the target plan's revision. Fixture repository contents include their plan identity, preventing same-second commit coincidence from hiding the wrong-SHA bug. Production evidence and permission checks are unchanged.
+- Configuration/migration: none. Test-only behavior correction; existing runtime gates remain strict.
+- Verification: deterministic fixture reproduced the cross-plan precondition failure before correction. The focused release-gate module and independent exact-source review verify correct plan evidence plus unchanged cross-plan rejection. Exact-head CI is required before release.
+- Rollback: revert this test/docs patch; no runtime state migration or rollback is required.
+
 ## 0.28.22 — unreleased, 2026-10-04 (#170)
 
 - Impact: mobile attention Save no longer closes over newer note or state edits made while an earlier save was pending. Newer fields remain editable with an unsaved notice; unchanged success still closes normally and rejected saves retain values for retry.

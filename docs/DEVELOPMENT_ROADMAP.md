@@ -1,3 +1,8 @@
+## Deterministic release-gate provenance fixtures — 2026-10-04 (#174)
+
+- Give each fixture repository distinct content and submit plan2 revision for plan2 evidence, preserving capability provenance rejection and production gate behavior.
+- Assert distinct revisions and include gate diagnostics on failed preconditions; verify with private fixtures and exact-head CI.
+
 ## Preserve newer mobile attention edits — 2026-10-04 (#170)
 
 - Compare edit revision and submitted fields before closing a successful pending save; preserve newer values and retain durable-ID/dialog-generation guards.
