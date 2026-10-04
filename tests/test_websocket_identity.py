@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from starlette.websockets import WebSocketDisconnect
 from test_web import WebTests as _WebFixture
@@ -86,6 +86,39 @@ class WebSocketIdentityTests(unittest.TestCase):
             self.assertEqual(len(attaches), 1)
             self.assertEqual(attaches[0][:2], ("attach-session", "-t"))
             self.assertRegex(attaches[0][2], r"^\$[0-9]+$")
+
+    def test_binary_frames_are_forwarded_once_without_collapsing_legitimate_repeats(self):
+        self.manager.create(tool="shell", profile="general", name="ordered-input")
+        received, done = [], threading.Event()
+        async def record(data):
+            received.append(data)
+            if len(received) == 2: done.set()
+        with patch("agent_console.web.PtyTransport.write", new=AsyncMock(side_effect=record)):
+            with self.client.websocket_connect('/ws/sessions/ordered-input', headers=self.headers) as ws:
+                ws.send_bytes(b'a'); ws.send_bytes(b'a')
+                self.assertTrue(done.wait(5), "binary frames were not forwarded")
+                ws.send_text(json.dumps({"type":"detach"}))
+                self.assertEqual(self.drain_closed(ws), 4000)
+        self.assertEqual(received, [b'a', b'a'])
+        self.assertTrue(self.manager.tmux.exists('ordered-input'))
+
+    def test_repeated_same_size_resize_signals_attach_client_only_once(self):
+        import os
+        self.manager.create(tool="shell", profile="general", name="stable-resize")
+        with patch('agent_console.pty_transport.os.killpg', wraps=os.killpg) as signal_client:
+            with self.client.websocket_connect('/ws/sessions/stable-resize', headers=self.headers) as ws:
+                for _ in range(3): ws.send_text(json.dumps({"type":"resize", "rows":30, "cols":100}))
+                ws.send_text(json.dumps({"type":"detach"}))
+                self.assertEqual(self.drain_closed(ws), 4000)
+            self.assertEqual(signal_client.call_count, 1)
+        self.assertTrue(self.manager.tmux.exists('stable-resize'))
+
+    def test_reader_failure_closes_attachment_without_killing_session(self):
+        self.manager.create(tool="shell", profile="general", name="reader-failure")
+        with patch('agent_console.web.PtyTransport.read', new=AsyncMock(side_effect=OSError('reader failed'))):
+            with self.client.websocket_connect('/ws/sessions/reader-failure', headers=self.headers) as ws:
+                self.assertEqual(self.drain_closed(ws), 4001)
+        self.assertTrue(self.manager.tmux.exists('reader-failure'))
 
     def test_brief_and_review_reject_stale_identity_before_reading(self):
         original = self.manager.create(tool="shell", profile="general", name="read-original")
