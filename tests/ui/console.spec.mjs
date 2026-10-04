@@ -1314,11 +1314,17 @@ test('project dialog context rejects late details and mutations while project ch
     {id:'project-b',name:'Project B',status:'active',repository:'/workspace/b',sessions:[]},
   ];
   const pending = [], detailRequests = [];
-  let hold = null;
+  let hold = null, failHeld = false, holdLists = false;
+  const pendingLists = [];
   await page.route('**/api/projects**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
     const id = path.split('/')[3], action = path.split('/')[4];
     if (path === '/api/projects') {
+      if (method === 'GET' && holdLists) {
+        const body = JSON.stringify(projects);
+        await new Promise(resolve=>pendingLists.push(resolve));
+        await route.fulfill({contentType:'application/json',body}); return;
+      }
       if (method === 'POST') projects.push({id:'project-c',status:'active',sessions:[],...request.postDataJSON()});
       await route.fulfill({json:method === 'GET' ? projects : projects.at(-1)}); return;
     }
@@ -1326,7 +1332,9 @@ test('project dialog context rejects late details and mutations while project ch
     if (method === 'GET') detailRequests.push(id);
     if (hold === `${method}:${id}:${action || ''}`) {
       hold = null;
+      const failure = failHeld; failHeld = false;
       await new Promise(resolve=>pending.push(resolve));
+      if (failure) { await route.fulfill({status:403,json:{detail:'Late project failure'}}); return; }
     }
     if (action === 'assign') project.sessions.push({tmux_name:request.postDataJSON().session_name,status:'detached'});
     else if (action === 'unassign') project.sessions = project.sessions.filter(s=>s.tmux_name!==request.postDataJSON().session_name);
@@ -1359,6 +1367,37 @@ test('project dialog context rejects late details and mutations while project ch
   await expect(page.locator('#project-detail-title')).toHaveText('Project B');
   await expect(page.locator('#project-assign-select')).toHaveAttribute('data-project-id','project-b');
   await close();
+  // Errors from superseded detail/assignment contexts must not alter B or notify it.
+  for (const action of ['detail', 'assignment']) {
+    hold = action === 'detail' ? 'GET:project-a:' : null;
+    failHeld = action === 'detail';
+    if (action === 'detail') await card('Project A').getByRole('button',{name:'View sessions'}).click();
+    else {
+      await open('Project A');
+      await page.locator('#project-assign-select').selectOption('codex-root');
+      hold = 'POST:project-a:assign'; failHeld = true;
+      await page.locator('#project-assign-btn').click();
+    }
+    await expect.poll(()=>pending.length).toBe(1);
+    await close(); await open('Project B');
+    await page.locator('#project-assign-select').selectOption('dock-two');
+    const notice = await page.locator('#notice').textContent();
+    await page.evaluate(()=>{
+      window.__projectNotices = 0;
+      window.__projectNoticeObserver = new MutationObserver(()=>window.__projectNotices++);
+      window.__projectNoticeObserver.observe(document.querySelector('#notice'),{childList:true,subtree:true,characterData:true,attributes:true});
+    });
+    await release(action === 'detail' ? '/api/projects/project-a' : '/api/projects/project-a/assign');
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    await expect(page.locator('#project-detail-title')).toHaveText('Project B');
+    await expect(page.locator('#project-detail-status')).toHaveText('Status: active · 0 session(s)');
+    await expect(page.locator('#project-assign-select')).toHaveValue('dock-two');
+    await expect(page.locator('#project-assign-btn')).toBeEnabled();
+    expect(await page.locator('#notice').textContent()).toBe(notice);
+    expect(await page.evaluate(()=>window.__projectNotices)).toBe(0);
+    await page.evaluate(()=>window.__projectNoticeObserver.disconnect());
+    await close();
+  }
   // Closing a pending assignment must not reopen the dialog on completion.
   await open('Project A');
   await page.locator('#project-assign-select').selectOption('codex-root');
@@ -1409,4 +1448,31 @@ test('project dialog context rejects late details and mutations while project ch
   await page.locator('.project-editor').getByRole('button',{name:'Delete permanently'}).click();
   await expect(choice.locator('option[value="project-a"]')).toHaveCount(0);
   await expect(choice).toHaveValue('');
+  // Reverse two list responses: keep the newer options and the user's latest valid choice.
+  await page.evaluate(()=>{location.hash='new';});
+  await expect(page.locator('[data-view-panel="new"]')).toBeVisible();
+  await choice.selectOption('project-c');
+  holdLists = true;
+  await page.evaluate(()=>{location.hash='projects';});
+  await expect.poll(()=>pendingLists.length).toBe(1);
+  projects.push({id:'project-d',name:'Newest project D',status:'active',sessions:[]});
+  await page.evaluate(()=>{location.hash='new';});
+  await expect(page.locator('[data-view-panel="new"]')).toBeVisible();
+  await page.evaluate(()=>{location.hash='projects';});
+  await expect.poll(()=>pendingLists.length).toBe(2);
+  await page.evaluate(()=>{location.hash='new';});
+  await expect(page.locator('[data-view-panel="new"]')).toBeVisible();
+  await choice.selectOption('project-b');
+  const newerResponse = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects');
+  pendingLists.pop()(); await newerResponse;
+  await expect(choice.locator('option[value="project-d"]')).toHaveText('Newest project D');
+  await expect(choice).toHaveValue('project-b');
+  const olderResponse = page.waitForResponse(r=>new URL(r.url()).pathname==='/api/projects');
+  pendingLists.shift()(); await olderResponse;
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  await expect(choice.locator('option[value="project-d"]')).toHaveText('Newest project D');
+  await expect(choice).toHaveValue('project-b');
+  await expect(card('Newest project D')).toHaveCount(1);
+  holdLists = false;
+
 });
