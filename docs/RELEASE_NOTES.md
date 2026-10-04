@@ -1,3 +1,10 @@
+## 0.29.0 — unreleased, 2026-10-05 (#181)
+
+- Impact: add durable compute jobs and attempt receipts, atomic physical-host reservations, conservative capacity admission and a bounded resource-report adapter. Authenticated `/compute` status/API and guarded local owner CLI expose blocked/offline/unknown work without launching laptop jobs or changing existing sessions.
+- Configuration/migration: additive version-gated `compute_*` tables in `connected-work.sqlite3`; interactive session schema unchanged. `AGENT_CONSOLE_COMPUTE_ENABLED` defaults off; the durable operator hold defaults on. Only fixed `maintenance.report` executes in process. Laptop descriptors/profiles remain disabled; no install, service rebudgeting, heavy subprocess adapter or timer migration.
+- Verification: focused temporary-fixture tests cover concurrent reservation, durable restart, stale completion, retained unknown capacity, OOM/backoff, actual CPU/RAM admission, pressure/storage limits, Wednesday–Sunday schedule, sanitized probes and operator authentication. A bounded read-only live telemetry probe checks the verified n100/CT115 topology. No heavy build/browser or production execution; normal exact-source integration checks remain a release gate.
+- Rollback: hold admission, disable the feature flag and select the previous release through the normal release guard. Preserve the companion store and unresolved reservations; prior code ignores additive compute tables. Do not replay uncertain work. See `docs/COMPUTE_SCHEDULING.md`.
+
 ## 0.28.24 — unreleased, 2026-10-04 (#176)
 
 - Impact: writable Codex Pro defaults use native `--approve-for-me` automatic review with `workspace-write` for newly created/recreated UI/CLI/delegated sessions and writable workflow tasks. Restarts preserve the approval arguments pinned in each existing launcher. Ordinary Codex behavior is unchanged. Desktop/mobile mode help reflects this distinction.

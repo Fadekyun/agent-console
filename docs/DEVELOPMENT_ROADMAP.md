@@ -1,3 +1,9 @@
+## Durable compute queue and physical-host admission — 2026-10-05 (#181)
+
+- Implement the first source slice: companion-store compute receipts, immutable job keys, atomic physical-host reservations, lease/generation fencing, conservative n100/CT115 telemetry admission, and a bounded in-process report adapter.
+- Add authenticated operator API/local CLI and read-only status. Dispatch defaults disabled with a separate persistent hold; preserve unknown reservations and reject unchanged-budget OOM retry.
+- Keep the verified AGC laptop descriptor disabled, with provisional reclaimable 16 GB ceiling and Wednesday–Sunday availability. Worker enrollment, cgroup subprocess adapters, staff-priority throttling, timer migration and interruption-safe production publication follow after root review; no laptop/runtime deployment is part of this source change. See `COMPUTE_SCHEDULING.md` for acceptance and rollback.
+
 ## Native Codex Pro automatic review — 2026-10-04 (#176)
 
 - Integrate the owner-authorized approval-default source with native flag support probes and explicit Plan/read-only workflow narrowing; preserve ordinary Codex and role/skill boundaries.
