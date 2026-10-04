@@ -42,7 +42,10 @@ let resizeFrame, sentSize = '';
 function recoverTyping(value, error) {
   const text = value.replace(/^\x1b\[200~/, '').replace(/\x1b\[201~$/, '');
   if (!/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text) && /[^\r\n\t]/.test(text)) {
-    insertComposer(text.replace(/\r\n?/g, '\n'));
+    // Automatic recovery must preserve the draft, including a hidden selection.
+    const end = composer.value.length;
+    composer.setRangeText(text.replace(/\r\n?/g, '\n'), end, end, 'end');
+    saveDraft(); showComposer(true, true);
     setStatus('Disconnected · unsent typing saved in Input');
   } else { setStatus(error.message); showComposer(true); }
 }
