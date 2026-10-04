@@ -1683,6 +1683,9 @@ class SessionManager:
         context_created = False
         launcher_created = False
         tmux_creation_started = False
+        session_upsert_started = False
+        evidence_cap_hash = None
+        rollback_checkpoint = None
         admission = admission_lock(self.settings.state_dir)
         admission.__enter__()
         try:
@@ -1732,7 +1735,7 @@ class SessionManager:
                 raise FileExistsError(f"tmux session already exists: {name}")
             with self.database.connect() as conn:
                 locked_existing = conn.execute(
-                    "SELECT id, execution_kind FROM sessions WHERE tmux_name=?", (name,)
+                    "SELECT * FROM sessions WHERE tmux_name=?", (name,)
                 ).fetchone()
             if locked_existing is not None:
                 if _workflow_attempt or _launch_request:raise FileExistsError("workflow launch identity appeared during admission; reconcile its receipt")
@@ -1752,6 +1755,22 @@ class SessionManager:
                 source_id=_continue_from)
             if _reviewed_launch and launch_view["hash"] != _reviewed_launch["hash"]:
                 raise ValueError("Launch configuration changed; review the current preview")
+            # Separate stores commit independently. Remember only this session's
+            # receipts so a late bookkeeping failure can undo the failed launch
+            # without deleting its earlier history or holding a SQLite writer
+            # transaction across helpers that open their own connections.
+            with launch_catalog.store.connect() as conn:
+                configuration_sequences = {row[0] for row in conn.execute(
+                    "SELECT sequence FROM launch_configurations WHERE session_id=?", (session_id,))}
+            with self.database.connect() as conn:
+                audit_before = conn.execute("SELECT COALESCE(MAX(id),0) FROM audit_events").fetchone()[0]
+            delivery_dir = self.settings.state_dir / "skill-deliveries" / session_id
+            rollback_checkpoint = {
+                "previous": dict(locked_existing) if locked_existing is not None else None,
+                "configuration_sequences": configuration_sequences,
+                "delivery_paths": set(delivery_dir.glob("*.json")),
+                "audit_before": audit_before,
+            }
             # The lock stays held through tmux creation and persistence, so another
             # create/request process cannot observe free capacity in this interval.
             if _continue_from:
@@ -1834,6 +1853,7 @@ class SessionManager:
             tmux_creation_started = True
             self.tmux.create(name, cwd, launcher)
 
+            session_upsert_started = True
             with self.database.connect() as conn:
                 conn.execute(
                     """
@@ -1904,62 +1924,133 @@ class SessionManager:
             )
             log.info("session=%s id=%s tool=%s profile=%s mode=%s provider=%s worktree=%s surface=%s",
                      name, session_id, tool, profile, agent_mode, provider, worktree, creator_surface)
-        except Exception:
+        except Exception as create_error:
             # Admission rejection has not touched launch assets. In particular,
             # do not remove a stopped session's preserved overlays on name reuse.
             if not context_created and not worktree_created:
                 raise
-            if environment_backup is not None:
-                write_private(environment_path, environment_backup)
-            else:
-                environment_path.unlink(missing_ok=True)
             if tmux_creation_started:
+                # Do not put old metadata/files underneath a still-running new
+                # process. A kill error can still mean the process exited, so
+                # confirm against tmux's strict observation before compensating.
+                kill_error = None
                 try:
                     self.tmux.kill(name)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    kill_error = exc
+                for observation_attempt in range(10):
+                    try:
+                        if name not in self.tmux.list_sessions():
+                            break
+                        observation_error = RuntimeError("new session remains running")
+                    except Exception as exc:
+                        observation_error = exc
+                    if observation_attempt < 9:
+                        # The last pane can make tmux exit between connect and
+                        # list. Retry that bounded shutdown interval; an error
+                        # by itself never counts as proof that the pane exited.
+                        time.sleep(0.05)
+                        continue
+                    error = RuntimeError("session creation rollback incomplete: process stop unconfirmed; "
+                                         "launch state retained, inspect the session before retrying")
+                    error.add_note(f"Process observation: {observation_error}")
+                    if kill_error is not None:
+                        error.add_note(f"Process cleanup: {kill_error}")
+                    raise error from create_error
+            rollback_failures = []
+
+            def compensate(label, action):
+                try:
+                    action()
+                except Exception as exc:
+                    rollback_failures.append((label, exc))
+
+            if environment_backup is not None:
+                compensate("environment", lambda: write_private(environment_path, environment_backup))
+            else:
+                compensate("environment", lambda: environment_path.unlink(missing_ok=True))
             if context_backup is not None:
-                try:
-                    context_path.write_bytes(context_backup)
-                except OSError:
-                    pass
+                compensate("context", lambda: context_path.write_bytes(context_backup))
             elif context_created:
-                try:
-                    if context_path.exists():
-                        context_path.unlink()
-                except OSError:
-                    pass
+                compensate("context", lambda: context_path.unlink(missing_ok=True))
             if launcher_backup is not None:
-                try:
-                    launcher_path.write_bytes(launcher_backup)
-                except OSError:
-                    pass
+                compensate("launcher", lambda: launcher_path.write_bytes(launcher_backup))
             elif launcher_created:
-                try:
-                    if launcher_path.exists():
-                        launcher_path.unlink()
-                except OSError:
-                    pass
+                compensate("launcher", lambda: launcher_path.unlink(missing_ok=True))
             if worktree_created and worktree_path:
+                compensate("worktree", lambda: subprocess.run(
+                    ["git", "-C", str(repo_dir), "worktree", "remove", "--force", str(worktree_path)],
+                    capture_output=True, timeout=30, check=True,
+                ))
+            compensate("tool overlay", lambda: self._cleanup_session_tool_overlay(name))
+            compensate("skill snapshot", lambda: cleanup_isolated_skills(
+                self.settings.state_dir / "skills-isolated" / name))
+            if rollback_checkpoint is not None:
                 try:
-                    subprocess.run(
-                        ["git", "-C", str(repo_dir), "worktree", "remove", "--force", str(worktree_path)],
-                        capture_output=True, timeout=30, check=True,
-                    )
-                except (subprocess.CalledProcessError, OSError):
-                    pass
-            try:
-                self._cleanup_session_tool_overlay(name)
-            except Exception:
-                pass
-            try:
-                cleanup_isolated_skills(self.settings.state_dir / "skills-isolated" / name)
-            except Exception:
-                pass
+                    rollback_failures.extend(self._rollback_failed_launch(
+                        name, session_id, evidence_cap_hash, rollback_checkpoint,
+                        launch_catalog, session_upsert_started=session_upsert_started,
+                    ))
+                except Exception as exc:
+                    rollback_failures.append(("metadata/receipt compensation", exc))
+            if rollback_failures:
+                error = RuntimeError("session creation rollback incomplete: " +
+                                     ", ".join(label for label, _ in rollback_failures))
+                for label, failure in rollback_failures:
+                    error.add_note(f"{label}: {type(failure).__name__}: {failure}")
+                raise error from create_error
             raise
         finally:
             admission.__exit__(None, None, None)
         return self.inspect(name)
+
+    def _rollback_failed_launch(
+        self, name, session_id, capability_hash, checkpoint, launch_catalog, *, session_upsert_started,
+    ) -> list[tuple[str, Exception]]:
+        """Compensate independently; return failures for the caller to aggregate."""
+        failures = []
+        try:
+            with self.database.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if session_upsert_started:
+                    current = conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+                    previous = checkpoint["previous"]
+                    if current is not None and current["evidence_capability_hash"] == capability_hash:
+                        if previous is None:
+                            conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+                        else:
+                            columns = list(previous)
+                            assignments = ",".join(f'"{column}"=?' for column in columns)
+                            conn.execute(f"UPDATE sessions SET {assignments} WHERE id=?",
+                                         (*[previous[column] for column in columns], session_id))
+                    elif previous is not None and (current is None or dict(current) != previous):
+                        raise RuntimeError("session identity changed during create rollback")
+                    elif previous is None and current is not None:
+                        raise RuntimeError("session identity changed during create rollback")
+                # A logger can fail after committing its event. Preserve the
+                # history but do not report the rolled-back launch as success.
+                conn.execute("UPDATE audit_events SET outcome='rolled_back' "
+                             "WHERE id>? AND action='session.created' AND target=? AND outcome='success'",
+                             (checkpoint["audit_before"], name))
+        except Exception as exc:
+            failures.append(("session metadata", exc))
+        try:
+            with launch_catalog.store.connect(write=True) as conn:
+                sequences = [row[0] for row in conn.execute(
+                    "SELECT sequence FROM launch_configurations WHERE session_id=?", (session_id,))]
+                for sequence in sequences:
+                    if sequence not in checkpoint["configuration_sequences"]:
+                        conn.execute("DELETE FROM launch_configurations WHERE session_id=? AND sequence=?",
+                                     (session_id, sequence))
+        except Exception as exc:
+            failures.append(("configuration receipts", exc))
+        try:
+            directory = self.settings.state_dir / "skill-deliveries" / session_id
+            for path in set(directory.glob("*.json")) - checkpoint["delivery_paths"]:
+                path.unlink()
+        except Exception as exc:
+            failures.append(("delivery receipts", exc))
+        return failures
 
     def _require_mutation_identity(self, name: str, expected_id: str | None) -> None:
         if expected_id is None:
