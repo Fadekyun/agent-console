@@ -4,13 +4,15 @@
 // https://github.com/xtermjs/xterm.js/issues/6078
 export function guardTerminalInput(terminal) {
   const textarea = terminal.textarea, surface = textarea.parentElement;
-  const helper = terminal._core?._compositionHelper;
+  const core = terminal._core, helper = core?._compositionHelper;
   // This is intentionally one version-bound internal hook. The browser tests
   // exercise the shipped module, so an xterm upgrade must revalidate this seam.
-  if (typeof helper?._handleAnyTextareaChanges !== 'function') {
+  if (typeof helper?._handleAnyTextareaChanges !== 'function'
+      || typeof helper._isComposing !== 'boolean' || typeof helper._isSendingComposition !== 'boolean'
+      || typeof core._keyDownSeen !== 'boolean' || typeof core._keyPressHandled !== 'boolean') {
     throw new Error('Unsupported xterm input adapter; revalidate the pinned terminal version');
   }
-  let pending = null, timer = null;
+  let pending = null, timer = null, lastKeyDown229 = false;
   function flush() {
     clearTimeout(timer); timer = null;
     if (pending === null) return;
@@ -31,19 +33,38 @@ export function guardTerminalInput(terminal) {
   };
   surface.addEventListener('keydown', event => {
     // Flush before xterm clears the textarea for Enter or handles the next key.
-    if (event.target === textarea) flush();
+    if (event.target === textarea) { flush(); lastKeyDown229 = event.keyCode === 229; }
+  }, true);
+  surface.addEventListener('keyup', event => {
+    if (event.target === textarea) lastKeyDown229 = false;
   }, true);
   surface.addEventListener('keypress', event => {
     if (event.target === textarea && pending !== null) event.stopImmediatePropagation();
   }, true);
   surface.addEventListener('input', event => {
-    if (event.target === textarea && pending !== null) {
-      event.stopImmediatePropagation(); flush();
+    if (event.target !== textarea) return;
+    if (pending !== null) {
+      event.stopImmediatePropagation(); flush(); return;
+    }
+    // Input can precede the next 229 keydown after the fallback has settled.
+    // Native xterm drops composed input while the previous key is still down.
+    // Handle only that gap; native keypress, screen reader and composition own
+    // their input. Never deduplicate text or infer ownership from elapsed time.
+    // https://github.com/xtermjs/xterm.js/issues/6045
+    if (lastKeyDown229 && core._keyDownSeen && !core._keyPressHandled
+        && event.composed && event.inputType === 'insertText' && event.data
+        && !event.isComposing && !helper._isComposing && !helper._isSendingComposition
+        && !terminal.options.screenReaderMode) {
+      event.stopImmediatePropagation();
+      core._unprocessedDeadKey = false;
+      terminal.input(event.data, true);
     }
   }, true);
   surface.addEventListener('compositionstart', event => {
     if (event.target === textarea) flush();
   }, true);
   // Capture before xterm clears its hidden textarea on blur.
-  surface.addEventListener('blur', event => { if (event.target === textarea) flush(); }, true);
+  surface.addEventListener('blur', event => {
+    if (event.target === textarea) { flush(); lastKeyDown229 = false; }
+  }, true);
 }
