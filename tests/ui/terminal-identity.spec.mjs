@@ -95,3 +95,100 @@ test('terminal failure offers manual reconnect without an automatic retry loop',
   await page.locator('#reconnect').click();await expect(page.locator('#connection')).toHaveText('Connected');
   expect(await page.evaluate(()=>window.__identitySockets.length)).toBe(2);
 });
+
+for (const entry of ['typing', 'cleared', 'direct recovery']) {
+  test(`saved draft remains recoverable when ${entry} precedes identity hydration`, async ({page}) => {
+    await fixture(page);
+    await page.addInitScript(() => {
+      if (!sessionStorage.getItem('hydration-seeded')) {
+        sessionStorage.setItem('agent-console:composer:id:original-id', 'Previously saved draft');
+        sessionStorage.setItem('hydration-seeded', 'true');
+      }
+    });
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    await page.route('**/api/sessions?state=all', async route => { await gate; await route.fallback(); });
+    await page.goto('/terminal?session=original&session_id=original-id');
+    if (entry === 'direct recovery') {
+      await page.locator('.xterm-helper-textarea').focus();
+      await page.keyboard.type('New typing');
+    } else {
+      await page.locator('#toggle-composer').click();
+      await page.locator('#composer').fill('New typing');
+      if (entry === 'cleared') await page.locator('#composer').fill('');
+    }
+    const current = entry === 'cleared' ? '' : 'New typing';
+    expect(await page.evaluate(() => sessionStorage.getItem('agent-console:composer:id:original-id'))).toBe('Previously saved draft');
+    release();
+    await expect(page.locator('#connection')).toHaveText('Connected');
+    await expect(page.locator('#composer')).toHaveValue(current);
+    await expect(page.locator('#restore-saved-draft')).toBeVisible();
+    await page.reload();
+    await expect(page.locator('#connection')).toHaveText('Connected');
+    await expect(page.locator('#composer')).toHaveValue(current);
+    await expect(page.locator('#restore-saved-draft')).toBeVisible();
+    // A selected current draft must survive explicit recovery too.
+    await page.locator('#composer').evaluate(el => el.setSelectionRange(0, el.value.length));
+    await page.locator('#restore-saved-draft').click();
+    await expect(page.locator('#composer')).toHaveValue(current ? `${current}\nPreviously saved draft` : 'Previously saved draft');
+    await expect(page.locator('#restore-saved-draft')).toBeHidden();
+    expect(await page.evaluate(() => window.__identityBytes)).toEqual([]);
+    await page.reload();
+    await expect(page.locator('#connection')).toHaveText('Connected');
+    await expect(page.locator('#restore-saved-draft')).toBeHidden();
+    await expect(page.locator('#composer')).toHaveValue(current ? `${current}\nPreviously saved draft` : 'Previously saved draft');
+  });
+}
+
+test('identity failure retains saved draft until validated retry and leaves early typing intact', async ({page}) => {
+  await fixture(page);
+  await page.addInitScript(() => sessionStorage.setItem('agent-console:composer:id:original-id', 'Saved before outage'));
+  let unavailable = true;
+  await page.route('**/api/sessions?state=all', route => unavailable ? route.fulfill({status:503,json:{detail:'Unavailable'}}) : route.fallback());
+  await page.goto('/terminal?session=original&session_id=original-id');
+  await expect(page.locator('#connection')).toContainText('Session identity unavailable');
+  await page.locator('#toggle-composer').click(); await page.locator('#composer').fill('During outage');
+  await expect(page.locator('#restore-saved-draft')).toBeHidden();
+  unavailable = false; await page.locator('#reconnect').click();
+  await expect(page.locator('#connection')).toHaveText('Connected');
+  await expect(page.locator('#composer')).toHaveValue('During outage');
+  await page.locator('#restore-saved-draft').click();
+  await expect(page.locator('#composer')).toHaveValue('During outage\nSaved before outage');
+  expect(await page.evaluate(() => window.__identityBytes)).toEqual([]);
+});
+
+test('failed recovery backup preserves the original stored draft and offers in-page restore', async ({page}) => {
+  await fixture(page);
+  await page.addInitScript(() => {
+    sessionStorage.setItem('agent-console:composer:id:original-id', 'Saved under storage pressure');
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(key, value) {
+      if (key.endsWith(':recovery')) throw new DOMException('Fixture storage full', 'QuotaExceededError');
+      return original.call(this, key, value);
+    };
+  });
+  let release; const gate = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/sessions?state=all', async route => { await gate; await route.fallback(); });
+  await page.goto('/terminal?session=original&session_id=original-id');
+  await page.locator('#toggle-composer').click(); await page.locator('#composer').fill('Early text');
+  release(); await expect(page.locator('#connection')).toHaveText('Connected');
+  await expect(page.locator('#restore-saved-draft')).toBeVisible();
+  await expect(page.locator('#restore-saved-draft')).toContainText('saving paused');
+  await page.locator('#composer').fill('Newer text');
+  expect(await page.evaluate(() => sessionStorage.getItem('agent-console:composer:id:original-id'))).toBe('Saved under storage pressure');
+  await page.locator('#restore-saved-draft').click();
+  await expect(page.locator('#composer')).toHaveValue('Newer text\nSaved under storage pressure');
+  expect(await page.evaluate(() => sessionStorage.getItem('agent-console:composer:id:original-id'))).toBe('Newer text\nSaved under storage pressure');
+  expect(await page.evaluate(() => window.__identityBytes)).toEqual([]);
+});
+
+test('untouched saved draft hydrates automatically without recovery on ordinary reload', async ({page}) => {
+  await fixture(page);
+  await page.addInitScript(() => sessionStorage.setItem('agent-console:composer:id:original-id', 'Normal saved draft'));
+  await connected(page, '/terminal?session=original&session_id=original-id');
+  await expect(page.locator('#composer')).toHaveValue('Normal saved draft');
+  await expect(page.locator('#restore-saved-draft')).toBeHidden();
+  await page.reload(); await expect(page.locator('#connection')).toHaveText('Connected');
+  await expect(page.locator('#composer')).toHaveValue('Normal saved draft');
+  await expect(page.locator('#restore-saved-draft')).toBeHidden();
+});
