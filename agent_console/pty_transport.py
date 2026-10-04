@@ -11,11 +11,12 @@ import termios
 
 
 class PtyTransport:
-    def __init__(self, fd: int, *, size: tuple[int, int] = (24, 80)):
+    def __init__(self, fd: int, *, size: tuple[int, int] = (24, 80), write_timeout: float = 10):
         self.fd = fd
         self.loop = asyncio.get_running_loop()
         self.closed = False
         self.size = size
+        self.write_timeout = write_timeout
         self._waiters = {}
         self._write_lock = asyncio.Lock()
         os.set_blocking(fd, False)
@@ -53,21 +54,28 @@ class PtyTransport:
         raise OSError(errno.EBADF, 'PTY transport is closed')
 
     async def write(self, data: bytes) -> None:
-        async with self._write_lock:
-            remaining = memoryview(data)
-            while remaining:
-                if self.closed:
-                    raise OSError(errno.EBADF, 'PTY transport is closed')
-                try:
-                    count = os.write(self.fd, remaining)
-                except InterruptedError:
-                    continue
-                except BlockingIOError:
-                    await self._ready('write')
-                    continue
-                if count <= 0:
-                    raise OSError(errno.EIO, 'PTY write made no progress')
-                remaining = remaining[count:]
+        try:
+            # The websocket receive loop cannot observe a queued disconnect
+            # while writing. Bound the entire frame (including lock wait) so a
+            # peer that stops draining cannot hold this attachment forever.
+            async with asyncio.timeout(self.write_timeout):
+                async with self._write_lock:
+                    remaining = memoryview(data)
+                    while remaining:
+                        if self.closed:
+                            raise OSError(errno.EBADF, 'PTY transport is closed')
+                        try:
+                            count = os.write(self.fd, remaining)
+                        except InterruptedError:
+                            continue
+                        except BlockingIOError:
+                            await self._ready('write')
+                            continue
+                        if count <= 0:
+                            raise OSError(errno.EIO, 'PTY write made no progress')
+                        remaining = remaining[count:]
+        except TimeoutError:
+            raise RuntimeError('PTY input stalled; attachment closed without replaying input') from None
 
     def resize(self, rows: int, cols: int, process_id: int) -> bool:
         if self.closed:

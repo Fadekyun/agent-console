@@ -113,6 +113,34 @@ class WebSocketIdentityTests(unittest.TestCase):
             self.assertEqual(signal_client.call_count, 1)
         self.assertTrue(self.manager.tmux.exists('stable-resize'))
 
+    def test_disconnect_queued_behind_backpressure_releases_attachment_and_keeps_session(self):
+        import os
+        from agent_console.pty_transport import PtyTransport
+        class StalledInput(PtyTransport):
+            def __init__(self, fd):
+                super().__init__(fd)
+                self.input_read, input_write = os.pipe()
+                self.blocked_input = PtyTransport(input_write, write_timeout=.05)
+                while True:
+                    try: os.write(input_write, b'x'*4096)
+                    except BlockingIOError: break
+            async def write(self, data):
+                await self.blocked_input.write(data)
+            def close(self):
+                if self.closed: return
+                self.blocked_input.close(); os.close(self.input_read); super().close()
+        self.manager.create(tool="shell", profile="general", name="stalled-disconnect")
+        with patch('agent_console.web.PtyTransport', StalledInput):
+            with self.client.websocket_connect('/ws/sessions/stalled-disconnect', headers=self.headers) as ws:
+                ws.send_bytes(b'pending-input')
+                ws.close()  # Queued behind the stalled write in the server receive loop.
+                self.assertEqual(self.drain_closed(ws), 4001)
+        self.assertTrue(self.manager.tmux.exists('stalled-disconnect'))
+        # The timed-out attachment released its per-session client reservation.
+        with self.client.websocket_connect('/ws/sessions/stalled-disconnect', headers=self.headers) as ws:
+            ws.send_text(json.dumps({"type":"detach"}))
+            self.assertEqual(self.drain_closed(ws), 4000)
+
     def test_reader_failure_closes_attachment_without_killing_session(self):
         self.manager.create(tool="shell", profile="general", name="reader-failure")
         with patch('agent_console.web.PtyTransport.read', new=AsyncMock(side_effect=OSError('reader failed'))):

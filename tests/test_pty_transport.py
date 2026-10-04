@@ -16,7 +16,7 @@ class PtyTransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.transport.close()
-        os.close(self.slave)
+        if self.slave is not None: os.close(self.slave)
 
     async def test_short_writes_interruption_and_backpressure_preserve_every_byte(self):
         accepted = bytearray()
@@ -81,6 +81,38 @@ class PtyTransportTests(unittest.IsolatedAsyncioTestCase):
             os.write(self.slave, b'output-once')
             self.assertEqual(await asyncio.wait_for(task, 2), b'output-once')
         self.assertFalse(self.transport._waiters)
+
+    async def test_real_pty_multichunk_binary_input_is_exact_and_ordered(self):
+        import tty
+        tty.setraw(self.slave)
+        peer = PtyTransport(self.slave)
+        chunks = [bytes(range(256))*128, 'é中'.encode()*4096, b'final\x00\r\n'*2048]
+        expected = b''.join(chunks)
+        async def consume():
+            result = bytearray()
+            while len(result) < len(expected):
+                result.extend(await peer.read(97))
+            return bytes(result)
+        async def produce():
+            for chunk in chunks: await self.transport.write(chunk)
+        try:
+            received, _ = await asyncio.wait_for(asyncio.gather(consume(), produce()), 10)
+            self.assertEqual(received, expected)
+        finally:
+            peer.close(); self.slave = None
+
+    async def test_real_pty_backpressure_has_bounded_timeout_and_cleans_waiter(self):
+        import tty
+        tty.setraw(self.slave)
+        self.transport.write_timeout = .05
+        # No reader drains the slave. This must fill the PTY queue and stop
+        # without replay, rather than holding the websocket receive loop forever.
+        with self.assertRaisesRegex(RuntimeError, 'stalled.*without replaying'):
+            await asyncio.wait_for(self.transport.write(b'x' * 1048576), 2)
+        self.assertFalse(self.transport._waiters)
+        self.assertFalse(self.transport._write_lock.locked())
+        self.transport.close()
+        self.assertTrue(self.transport.closed)
 
     async def test_close_unregisters_before_fd_reuse_and_old_waiter_cannot_remove_new_callback(self):
         callbacks = {}
