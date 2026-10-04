@@ -1,3 +1,10 @@
+## 0.28.18 — unreleased, 2026-10-04 (#157)
+
+- Impact: the pinned xterm adapter preserves non-composing IME text that arrives before keydown while an earlier Process key remains held. The settled fallback previously lost later characters in this sequence. Ordinary typing, real repeats, composition, screen-reader ownership and the prior repetition protection remain intact.
+- Configuration/migration: none. Refresh terminal assets. The compatibility hook is explicitly bound to the shipped xterm 6.0 internal fields; upgrades require revalidation.
+- Verification: shipped-browser baseline reproduced `jk` becoming `j` and `jjj` becoming `j`; 66 focused browser checks passed across desktop and two phone layouts, including ordering variants, repeats, composition and screen-reader boundaries. Independent review and exact-head CI gate promotion. These are synthetic Chromium traces, not physical WKWebView/IME certification.
+- Rollback: select the prior release through its schema guard and restart web only, preserving sessions and state. Prior code retains this specific missed-input sequence.
+
 ## 0.28.17 — unreleased, 2026-10-04 (#155)
 
 - Impact: stale Stop, Interrupt, Restart and attention actions from all three interfaces cannot target a replacement session after a rename and name reuse. Requests pin the selected durable identity; mismatches return HTTP 409. Capability-authorized session control also pins its already-authorized target.
