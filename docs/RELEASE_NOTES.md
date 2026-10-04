@@ -1,3 +1,11 @@
+## 0.28.20 — unreleased, 2026-10-04 (#158)
+
+- Impact: failed session creation now removes a fresh phantom row or restores a reused stopped session's original metadata, capability and transcript reference, plus prior delivery/configuration receipt history. A committed success audit is marked rolled back. This covers errors after launch bookkeeping writes.
+- Failure handling: confirm the new process has stopped before restoring old state. If stop is uncertain, preserve the new launch state and report incomplete rollback for inspection. File, metadata and receipt compensation failures are aggregated explicitly while independent cleanup continues.
+- Configuration/migration: none. No live session data is rewritten on upgrade. This is compensating rollback, not power-loss atomicity; prior overlay/snapshot trees are not restored by the existing cleanup and remain a separate artifact-ownership follow-up.
+- Verification: private late-delivery/catalog/audit failures reproduced phantom rows and mismatched reused metadata. All 20 distinct focused regressions are covered green across bounded batches, including process-stop uncertainty, file denial, combined compensation failures, prior lifecycle and identity checks. Independent final source review passed; exact-head CI gates promotion.
+- Rollback: select the prior release through its schema guard and restart web only, preserving sessions and state. Earlier code may leave failed-launch metadata and hide compensation failures.
+
 ## 0.28.19 — unreleased, 2026-10-04 (#163)
 
 - Impact: restarting a session now applies the same authentication readiness policy as creation. Disabled contexts, missing credentials and unsafe credential-file permissions reject restart before changing launcher, environment, skills or the running process. Ready contexts keep working.

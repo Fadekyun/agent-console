@@ -1,3 +1,9 @@
+## Restore metadata after failed creation — 2026-10-04 (#158)
+
+- Capture the previous row and receipt history under admission serialization, then compensate only the failed attempt after process termination is confirmed.
+- Preserve recoverable new state when termination is uncertain; aggregate file/metadata/receipt failures and retain the original cause. Private fault-injection checks cover all bookkeeping stages and partial compensation.
+- Complete filesystem snapshot rollback and mutable-name artifact ownership remain separate follow-ups; no crash-atomicity claim.
+
 ## Match restart authentication admission to creation — 2026-10-04 (#163)
 
 - Reject disabled, setup-required and error contexts before restart mutates launch state; retain ready-context restart.
