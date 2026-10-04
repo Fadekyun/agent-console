@@ -1,3 +1,8 @@
+## Exact historical secret-scan fixture exceptions — 2026-10-05 (#182)
+
+- Scope six synthetic logging-redaction findings to their original commit, file, rule and line. Preserve all scan rules and future findings; no workflow or product behavior change.
+- Verify the pinned scanner consumes exact fingerprints, rejects a new-commit control, and passes full-history CI on the final merged SHA before promotion.
+
 ## Native Codex Pro automatic review — 2026-10-04 (#176)
 
 - Integrate the owner-authorized approval-default source with native flag support probes and explicit Plan/read-only workflow narrowing; preserve ordinary Codex and role/skill boundaries.
