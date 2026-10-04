@@ -1,3 +1,10 @@
+## 0.28.25 — unreleased, 2026-10-05 (#182)
+
+- Impact: full-history secret scanning recognizes six proven synthetic logging-redaction fixture findings from two July commits. Exceptions identify exact commit/file/rule/line fingerprints; no token, path or rule is globally excluded. Product behavior remains the reviewed 0.28.24 batch.
+- Configuration/migration: none. Existing Gitleaks action reads the repository-root `.gitleaksignore`; workflow and scanner configuration are unchanged.
+- Verification: inspect all six historical fixture contexts; verify Gitleaks 8.24.3 fingerprint semantics and a new-commit positive control. Independent exact-candidate review and successful final-main full-history CI remain required before release.
+- Rollback: revert this CI-only correction to restore the six historical findings; no runtime or state migration is required.
+
 ## 0.28.24 — unreleased, 2026-10-04 (#176)
 
 - Impact: writable Codex Pro defaults use native `--approve-for-me` automatic review with `workspace-write` for newly created/recreated UI/CLI/delegated sessions and writable workflow tasks. Restarts preserve the approval arguments pinned in each existing launcher. Ordinary Codex behavior is unchanged. Desktop/mobile mode help reflects this distinction.
