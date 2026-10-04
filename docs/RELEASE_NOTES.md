@@ -1,3 +1,11 @@
+## 0.28.17 — unreleased, 2026-10-04 (#155)
+
+- Impact: stale Stop, Interrupt, Restart and attention actions from all three interfaces cannot target a replacement session after a rename and name reuse. Requests pin the selected durable identity; mismatches return HTTP 409. Capability-authorized session control also pins its already-authorized target.
+- Configuration/migration: none. Refresh browser assets. Legacy callers without an expected ID retain name-based compatibility. Existing confirmation, unmanaged acknowledgement and role/tree permissions remain enforced.
+- Verification: 29 focused Python tests and 18 subtests passed, including private rename/reuse, serialization, integration lifecycle and legacy callers; all 9 new UI cases plus 3 existing attention cases passed across three layouts. Independent source review passed. Exact-head CI gates promotion.
+- Limits: external direct tmux/database changes do not participate in Console serialization; stopped-name recreation retains its existing durable ID. Restart preparation now holds admission serialization, so concurrent launches may wait. Mutable-name artifact ownership remains a separate issue.
+- Rollback: select the prior release through its schema guard and restart web only, preserving state and sessions. Older code can apply stale name-based actions to a replacement.
+
 ## 0.28.16 — unreleased, 2026-10-04 (#153)
 
 - Impact: delayed Load brief responses cannot replace newer selected text, refill an intentionally cleared draft or reopen a hidden Input view. Only the latest request for the unchanged draft, selection and view can insert text or report an error.

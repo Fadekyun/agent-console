@@ -413,7 +413,7 @@ async function sessionAction(action, payload, method='POST') {
   const key=`${s.id}:${action}`;if(pendingSessionActions.has(key))return;
   pendingSessionActions.add(key);renderPendingActions();
   try {
-    await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${action}`,payload,method);
+    await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${action}`,{...payload,session_id:s.id},method);
     if(action==='kill') {
       state.frames.get(s.tmux_name)?.remove();state.frames.delete(s.tmux_name);
       if(state.selected?.id===s.id)$('#terminal-panel').hidden=true;

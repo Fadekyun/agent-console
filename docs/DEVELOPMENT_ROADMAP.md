@@ -1,3 +1,9 @@
+## Pin lifecycle mutations to session identity — 2026-10-04 (#155)
+
+- Send selected durable IDs for lifecycle and attention controls across Workbench, desktop and mobile; pass authorized target IDs through capability control.
+- Validate identity under serialization shared with rename/create, reject stale bindings before effects, and retain legacy callers plus confirmation/permission gates.
+- Private API/race and three-layout UI checks cover stale replacements and normal matched operations. External tmux mutations and provider artifact ownership remain separate boundaries.
+
 ## Ignore stale terminal brief responses — 2026-10-04 (#153)
 
 - Pin brief requests to draft revision, selection, view context and request generation before identity lookup; ignore stale content, errors and focus changes.

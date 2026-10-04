@@ -40,7 +40,7 @@ function sessionBusy(s,busy){
 async function life(s,op){
  const key=s.id||s.tmux_name;if(sessionMutations.has(key))return;
  sessionBusy(s,true);sessionStatus(`${op==='restart'?'Restarting':'Interrupting'} ${s.tmux_name}…`);
- try{await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${op}`,{method:'POST',body:'{}'});await renderSessions();}
+ try{await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/${op}`,{method:'POST',body:JSON.stringify({session_id:s.id})});await renderSessions();}
  catch(e){sessionStatus(`${s.tmux_name}: ${e.message}`);}
  finally{sessionBusy(s,false);}
 }
@@ -193,7 +193,7 @@ $('#mobile-kill-confirm').onclick=async()=>{
  const current=()=>request===killRequest&&dialog.open;
  const allow=$('#mobile-kill-allow').checked;button.disabled=true;sessionBusy(s,true);$('#mobile-kill-status').textContent='Stopping…';
  try{
-  await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/kill`,{method:'POST',body:JSON.stringify({confirmed:true,allow_unmanaged:allow,understand_unmanaged:allow})});
+  await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/kill`,{method:'POST',body:JSON.stringify({confirmed:true,allow_unmanaged:allow,understand_unmanaged:allow,session_id:s.id})});
   if(current()){dialog.close();pendingKill=null;}await renderSessions();
  }catch(e){if(current())$('#mobile-kill-status').textContent=e.message;else sessionStatus(`${s.tmux_name}: ${e.message}`);}
  finally{sessionBusy(s,false);if(current())button.disabled=false;}
@@ -204,7 +204,7 @@ $('#mobile-attention-save').onclick=async()=>{
  const state=$('#mobile-attention-state').value,note=$('#mobile-attention-note').value||null;
  button.disabled=true;$('#mobile-attention-status').textContent='Saving…';
  try{
-  await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/attention`,{method:'PATCH',body:JSON.stringify({state,note})});
+  await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/attention`,{method:'PATCH',body:JSON.stringify({state,note,session_id:s.id})});
   if(current()){dialog.close();pendingAttention=null;}await renderSessions();
  }catch(e){if(current())$('#mobile-attention-status').textContent=e.message;else sessionStatus(`${s.tmux_name}: ${e.message}`);}
  finally{if(current())button.disabled=false;}

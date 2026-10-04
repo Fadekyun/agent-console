@@ -346,7 +346,7 @@ async function lifecycle(session, operation, button) {
   }
   button.disabled = true; button.setAttribute('aria-busy', 'true');
   try {
-    const result = await api(`/api/sessions/${encodeURIComponent(session.tmux_name)}/${operation}`, { method: 'POST', body: JSON.stringify(body) });
+    const result = await api(`/api/sessions/${encodeURIComponent(session.tmux_name)}/${operation}`, { method: 'POST', body: JSON.stringify({...body, session_id: session.id}) });
     if (operation === 'kill' && result.running !== false) throw new Error('Backend did not confirm session exit');
     if (operation === 'kill') closeTerminal(session.tmux_name);
     await refresh(); showNotice(`${session.tmux_name}: ${operation} completed`);
@@ -1336,7 +1336,7 @@ attentionForm.onsubmit = async (event) => {
   attentionPending.add(id);
   submit.disabled = true; $('#attention-status').textContent = 'Updating…';
   try {
-    const session = await api(`/api/sessions/${encodeURIComponent(name)}/attention`, { method: 'PATCH', body: JSON.stringify({ state: submitted.state, note: submitted.note || null }) });
+    const session = await api(`/api/sessions/${encodeURIComponent(name)}/attention`, { method: 'PATCH', body: JSON.stringify({ state: submitted.state, note: submitted.note || null, session_id: id }) });
     const draft = attentionDrafts.get(id);
     if (!draft || (draft.state === submitted.state && draft.note === submitted.note)) attentionDrafts.delete(id);
     const index = state.sessions.findIndex((item) => item.id === id); if (index >= 0) state.sessions[index] = session;

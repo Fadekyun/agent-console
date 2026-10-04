@@ -30,7 +30,7 @@ from .request_identity import (AuthContext, IdentityDenied, allowed_origins, aut
 from .config import Settings
 from .database import Database
 from .logging_config import configure_logging, configure_uvicorn_logging
-from .manager import SessionManager
+from .manager import SessionIdentityConflict, SessionManager
 from .pty_transport import PtyTransport
 from .integration_requests import IntegrationService
 from .profiles import profile_summaries
@@ -141,7 +141,11 @@ class ModelEstimateRequest(BaseModel):
     reasoning_tokens: int = Field(default=0, ge=0)
 
 
-class ConfirmRequest(BaseModel):
+class SessionMutationRequest(BaseModel):
+    session_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class ConfirmRequest(SessionMutationRequest):
     confirmed: bool = False
     allow_unmanaged: bool = False
     understand_unmanaged: bool = False
@@ -153,7 +157,7 @@ class WaitForChildrenRequest(BaseModel):
     poll_interval: int | None = Field(default=None, ge=1, le=120)
 
 
-class AttentionRequest(BaseModel):
+class AttentionRequest(SessionMutationRequest):
     state: str = Field(pattern="^(normal|needs_input|blocked|ready_for_review)$")
     note: str | None = Field(default=None, max_length=1000)
 
@@ -589,6 +593,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             validate_session_name(name),
             state=payload.state,
             note=payload.note,
+            session_id=payload.session_id,
             actor=auth.actor,
             surface="web",
         )
@@ -750,12 +755,22 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.post("/api/sessions/{name}/interrupt")
-    async def interrupt(name: str, _: AuthContext = Depends(require_identity)) -> dict[str, Any]:
-        return session_manager.interrupt(validate_session_name(name))
+    async def interrupt(
+        name: str, payload: SessionMutationRequest | None = None,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.interrupt(
+            validate_session_name(name), session_id=payload.session_id if payload else None,
+        )
 
     @app.post("/api/sessions/{name}/restart")
-    async def restart(name: str, _: AuthContext = Depends(require_identity)) -> dict[str, Any]:
-        return session_manager.restart(validate_session_name(name))
+    async def restart(
+        name: str, payload: SessionMutationRequest | None = None,
+        _: AuthContext = Depends(require_identity),
+    ) -> dict[str, Any]:
+        return session_manager.restart(
+            validate_session_name(name), session_id=payload.session_id if payload else None,
+        )
 
     from .workflow_dispatch_api import dispatch_routes
     app.include_router(dispatch_routes(session_manager, require_identity))
@@ -895,13 +910,17 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="unmanaged-session acknowledgement is required")
         if not session["managed"] and not payload.allow_unmanaged:
             raise HTTPException(status_code=400, detail="allow_unmanaged is required")
-        return session_manager.kill(name, allow_unmanaged=payload.allow_unmanaged)
+        return session_manager.kill(
+            name, allow_unmanaged=payload.allow_unmanaged,
+            session_id=payload.session_id if payload.session_id is not None else session["id"],
+        )
 
     async def operation_error(request: Request, exc: Exception):
         from fastapi.responses import JSONResponse
 
         log.warning("request=%s %s error=%s", request.method, request.url.path, exc)
-        return JSONResponse(status_code=400, content={"detail": str(exc)})
+        return JSONResponse(status_code=409 if isinstance(exc, SessionIdentityConflict) else 400,
+                            content={"detail": str(exc)})
 
     for exception_type in (
         ValueError,

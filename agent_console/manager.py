@@ -14,6 +14,7 @@ import time
 import traceback
 import uuid
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +110,20 @@ def _launcher_exports(text: str) -> dict[str, str]:
         key, _, value = tokens[1].partition("=")
         exports[key] = value
     return exports
+
+
+class SessionIdentityConflict(ValueError):
+    """A stale client must never mutate the replacement using an old name."""
+
+
+def serialized_session_mutation(method):
+    @wraps(method)
+    def mutate(self, *args, **kwargs):
+        # Share create's cross-process lock, including name reuse. Rename also
+        # holds it from lookup through its tmux/database identity update.
+        with admission_lock(self.settings.state_dir):
+            return method(self, *args, **kwargs)
+    return mutate
 
 
 class SessionManager:
@@ -1097,6 +1112,7 @@ class SessionManager:
             "stored_only": True,
         }
 
+    @serialized_session_mutation
     def set_attention(
         self,
         name: str | None,
@@ -1105,8 +1121,10 @@ class SessionManager:
         note: str | None = None,
         actor: str = "system",
         surface: str = "CLI",
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         name = self.resolve_session_ref(name)
+        self._require_mutation_identity(name, session_id)
         if state not in ATTENTION_STATES:
             raise ValueError(f"attention state must be one of: {', '.join(sorted(ATTENTION_STATES))}")
         note = (note or "").strip()
@@ -1943,7 +1961,17 @@ class SessionManager:
             admission.__exit__(None, None, None)
         return self.inspect(name)
 
-    def interrupt(self, name: str) -> dict[str, Any]:
+    def _require_mutation_identity(self, name: str, expected_id: str | None) -> None:
+        if expected_id is None:
+            return
+        with self.database.connect() as conn:
+            row = conn.execute("SELECT id FROM sessions WHERE tmux_name=?", (name,)).fetchone()
+        if row is None or row["id"] != expected_id:
+            raise SessionIdentityConflict("session identity changed; refresh and retry")
+
+    @serialized_session_mutation
+    def interrupt(self, name: str, *, session_id: str | None = None) -> dict[str, Any]:
+        self._require_mutation_identity(name, session_id)
         session = self.inspect(name)
         if session.get("execution_kind") == "integration-plan":
             return self._terminate_integration_session(session, reason="interrupted_by_owner")
@@ -1954,7 +1982,9 @@ class SessionManager:
         log.info("session=%s action=interrupt tool=%s profile=%s", name, session.get("tool"), session.get("profile"))
         return self.inspect(name)
 
-    def restart(self, name: str) -> dict[str, Any]:
+    @serialized_session_mutation
+    def restart(self, name: str, *, session_id: str | None = None) -> dict[str, Any]:
+        self._require_mutation_identity(name, session_id)
         session = self.inspect(name)
         if session.get("execution_kind") == "integration-plan":
             raise PermissionError("integration planning sessions cannot be restarted")
@@ -2085,22 +2115,21 @@ class SessionManager:
             isolated_skills_root=isolated_root,
         )
         provider_adapter(tool, self.auth).restart(session)
-        with admission_lock(self.settings.state_dir):
-            if not session.get("running"):
-                with self.database.connect() as conn:
-                    ordinary_count = conn.execute(
-                        "SELECT COUNT(*) FROM sessions WHERE managed=1 "
-                        "AND execution_kind!='integration-plan' "
-                        "AND status IN ('reserved','attached','detached')"
-                    ).fetchone()[0]
-                    integration_count = conn.execute(
-                        "SELECT COUNT(*) FROM integration_requests WHERE admission_held=1"
-                    ).fetchone()[0]
-                if ordinary_count + integration_count >= self.settings.max_managed_sessions:
-                    raise RuntimeError(
-                        f"managed-session limit reached ({self.settings.max_managed_sessions})"
-                    )
-            self.tmux_for_name(name).restart(name, launcher_path)
+        if not session.get("running"):
+            with self.database.connect() as conn:
+                ordinary_count = conn.execute(
+                    "SELECT COUNT(*) FROM sessions WHERE managed=1 "
+                    "AND execution_kind!='integration-plan' "
+                    "AND status IN ('reserved','attached','detached')"
+                ).fetchone()[0]
+                integration_count = conn.execute(
+                    "SELECT COUNT(*) FROM integration_requests WHERE admission_held=1"
+                ).fetchone()[0]
+            if ordinary_count + integration_count >= self.settings.max_managed_sessions:
+                raise RuntimeError(
+                    f"managed-session limit reached ({self.settings.max_managed_sessions})"
+                )
+        self.tmux_for_name(name).restart(name, launcher_path)
         record_delivery(self.settings.state_dir, session["id"], isolated_root, tool=tool, profile=profile,
                         isolated=provider_adapter(tool, self.auth).can_isolate_skills)
         from .workbench_launch import LaunchCatalog
@@ -2115,6 +2144,7 @@ class SessionManager:
         log.info("session=%s action=restart tool=%s profile=%s", name, tool, profile)
         return self.inspect(name)
 
+    @serialized_session_mutation
     def rename(self, name: str, new_name: str) -> dict[str, Any]:
         validate_session_name(new_name)
         session = self.inspect(name)
@@ -2208,7 +2238,9 @@ class SessionManager:
         self.database.audit("session.renamed", name, "success", details={"new_name": new_name})
         return self.inspect(new_name)
 
-    def kill(self, name: str, *, allow_unmanaged: bool = False) -> dict[str, Any]:
+    @serialized_session_mutation
+    def kill(self, name: str, *, allow_unmanaged: bool = False, session_id: str | None = None) -> dict[str, Any]:
+        self._require_mutation_identity(name, session_id)
         session = self.inspect(name)
         if session.get("execution_kind") == "integration-plan":
             return self._terminate_integration_session(session, reason="killed_by_owner")
