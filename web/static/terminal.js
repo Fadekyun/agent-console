@@ -458,19 +458,29 @@ async function copySelection() {
   await copyAndReport(selected, 'Selection copied');
 }
 
+let briefRequest = 0;
 async function loadBrief(silent = false) {
   if (briefLoaded && silent) return;
+  const request = ++briefRequest, revision = draftRevision;
+  const start = composer.selectionStart, end = composer.selectionEnd;
+  const sameContext = clipboardIsCurrent();
+  const current = () => request === briefRequest && sameContext() && revision === draftRevision
+    && start === composer.selectionStart && end === composer.selectionEnd;
+  let identity = sessionId;
   try {
     await refreshIdentity();
+    if (!current()) return;
+    identity = sessionId;
     const response = await fetch(sessionPath('brief'), { cache: 'no-store' });
     const body = await response.json();
+    if (!current() || identity !== sessionId) return;
     if (!response.ok) throw new Error(body.detail || response.statusText);
     if (body.brief && (!composer.value || !silent)) {
       if (!composer.value || !silent) insertComposer(body.brief, !silent);
       briefLoaded = true;
       if (!silent) setStatus('Brief loaded into composer; review and send when ready');
     } else if (!silent) setStatus('This session has no stored brief');
-  } catch (error) { if (!silent) setStatus(error.message); }
+  } catch (error) { if (!silent && current() && identity === sessionId) setStatus(error.message); }
 }
 
 let textViewRequest = 0;
