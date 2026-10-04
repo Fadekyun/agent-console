@@ -1,3 +1,10 @@
+## 0.28.14 — unreleased, 2026-10-04 (#149)
+
+- Impact: profile editors preserve newer instructions typed while an earlier save is pending or during its delayed close. Saving again invalidates the earlier close callback. The latest unchanged successful save retains the existing close behavior on both desktop and mobile.
+- Configuration/migration: none. Refresh the page. This change preserves edits within the open editor; it does not add persistence across page reloads.
+- Verification: six baseline browser cases reproduced premature closure across both interfaces. All 42 focused profile checks passed across desktop and two phone layouts, including edits during requests, edits during the close delay, repeated saves and dialog navigation. Independent review and publication CI gate promotion.
+- Rollback: select the prior release through its schema guard and restart web only, preserving sessions and state. Earlier code may discard newer unsaved profile text after an older save completes.
+
 ## 0.28.13 — unreleased, 2026-10-04 (#147)
 
 - Impact: disconnected terminal typing appends to the saved Input draft, preserving text even when a hidden selection remains. Explicit manual paste still replaces the selected range. Recovered input is never replayed automatically.

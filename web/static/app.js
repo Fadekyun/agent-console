@@ -32,7 +32,7 @@ const groupForm = $('#group-form');
 const groupDetailDialog = $('#group-detail-dialog');
 const terminalTabs = new Map();
 let activeTerminal = null;
-let profileEditorRequest = 0;
+let profileEditorRequest = 0, profileEditorRevision = 0, profileSaveRequest = 0;
 let planRequest = 0;
 let delegateRequest = 0;
 let reviewRequest = 0;
@@ -792,22 +792,31 @@ async function openProfileEditor(name) {
   } catch (e) { if (current()) $('#profile-editor-status').textContent = e.message; }
 }
 
+$('#profile-editor-form').elements.content.oninput = () => {
+  profileEditorRevision++;
+  $('#profile-editor-status').textContent = 'Unsaved changes.';
+};
+
 $('#profile-editor-form').onsubmit = async (event) => {
   event.preventDefault();
   const form = event.target, dialog = $('#profile-editor-dialog');
   const submit = $('button[type="submit"]', form);
   if (submit.disabled) return;
   const request = profileEditorRequest, name = form.elements.profile_name.value;
-  const current = () => request === profileEditorRequest && dialog.open;
+  const save = ++profileSaveRequest, revision = profileEditorRevision;
+  const content = form.elements.content.value;
+  const current = () => request === profileEditorRequest && save === profileSaveRequest && dialog.open;
   submit.disabled = true;
   const status = $('#profile-editor-status'); status.textContent = 'Saving…';
   try {
     await api(`/api/profiles/${encodeURIComponent(name)}`, {
-      method: 'PUT', body: JSON.stringify({ content: form.elements.content.value }),
+      method: 'PUT', body: JSON.stringify({ content }),
     });
     if (current()) {
-      status.textContent = 'Saved.';
-      setTimeout(() => { if (current()) dialog.close(); }, 800);
+      if (revision === profileEditorRevision) {
+        status.textContent = 'Saved.';
+        setTimeout(() => { if (current() && revision === profileEditorRevision) dialog.close(); }, 800);
+      } else status.textContent = 'Submitted instructions saved; newer edits are unsaved.';
     }
     renderProfiles().catch(error => showNotice(error.message, 'error'));
   } catch (e) { if (current()) status.textContent = e.message; }

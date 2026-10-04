@@ -267,3 +267,52 @@ test('narrow desktop group Open navigates only to its first available terminal',
   await expect(page).toHaveURL(/\/terminal\?session=first$/);
   expect(terminals).toEqual(['first']);
 });
+
+for (const mobile of [false, true]) {
+  for (const timing of ['pending save', 'saved close delay', 'second save', 'unchanged second save']) {
+    test(`${mobile ? 'mobile' : 'desktop'} profile save preserves newer edits during ${timing}`, async ({page}) => {
+      const {errors} = await fixture(page);
+      const saves = [];
+      await page.route('**/api/profiles/general', route => {
+        if (route.request().method() === 'PUT') saves.push(route);
+        else return route.fallback();
+      });
+      await page.goto(mobile ? '/mobile' : '/desktop');
+      await openProfile(page, mobile, 'general');
+      const node = profileNodes(page, mobile);
+      const status = page.locator(`#${mobile ? 'mobile-' : ''}profile-editor-status`);
+      await expect(node.content).toHaveValue('Instructions general');
+      await node.content.fill('Submitted A');
+      await node.save.click();
+      await expect.poll(() => saves.length).toBe(1);
+      expect(saves[0].request().postDataJSON()).toEqual({content:'Submitted A'});
+      const draft = timing === 'unchanged second save' ? 'Submitted A' : 'New draft B';
+      const secondSave = timing.endsWith('second save');
+      if (timing === 'pending save') await node.content.fill(draft);
+      await saves[0].fulfill({json:{saved:true}});
+      await expect(node.save).toBeEnabled();
+      if (timing !== 'pending save') {
+        await expect(status).toHaveText('Saved.');
+        if (timing !== 'unchanged second save') await node.content.fill(draft);
+      }
+      if (secondSave) {
+        await node.save.click();
+        await expect.poll(() => saves.length).toBe(2);
+        await expect(node.save).toBeDisabled();
+      }
+      await page.waitForTimeout(1000);
+      await expect(node.dialog).toBeVisible();
+      await expect(node.content).toHaveValue(draft);
+      if (!secondSave) {
+        await expect(status).toContainText('unsaved', {ignoreCase:true});
+        await node.save.click();
+        await expect.poll(() => saves.length).toBe(2);
+      }
+      expect(saves[1].request().postDataJSON()).toEqual({content:draft});
+      await saves[1].fulfill({json:{saved:true}});
+      await expect(status).toHaveText('Saved.');
+      await expect(node.dialog).toBeHidden();
+      expect(errors).toEqual([]);
+    });
+  }
+}

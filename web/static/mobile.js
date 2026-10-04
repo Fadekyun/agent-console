@@ -3,7 +3,7 @@ import { copyText as copyWithFallback } from '/static/clipboard.js?v=1';
 import { initTheme } from '/static/theme.js?v=10';
 import { skillActionMessage, skillToolDiagnostic } from '/static/skill-diagnostics.js?v=1';
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
-const form=$('#mobile-new'); let identity; let currentModels=[]; let loadModelsReq=0; let pendingKill; let pendingAttention; let killRequest=0; let attentionRequest=0; let delegateRequest=0; let creatingChild=false; let sessionRead=0; const sessionMutations=new Set(); let currentPlanId; let profileEditorRequest=0; let planRequest=0; let creatingSession=false; const startingPlans=new Set();
+const form=$('#mobile-new'); let identity; let currentModels=[]; let loadModelsReq=0; let pendingKill; let pendingAttention; let killRequest=0; let attentionRequest=0; let delegateRequest=0; let creatingChild=false; let sessionRead=0; const sessionMutations=new Set(); let currentPlanId; let profileEditorRequest=0; let profileEditorRevision=0; let profileSaveRequest=0; let planRequest=0; let creatingSession=false; const startingPlans=new Set();
 async function api(path, options={}) { const response=await fetch(path,{cache:'no-store',headers:{'Content-Type':'application/json',...(options.headers||{})},...options}); const body=await response.json(); if(!response.ok) throw new Error(body.detail||response.statusText); return body; }
 function contexts() { const tool=form.elements.tool.value, provider=form.elements.provider.value; if(tool==='opencode'&&!provider){form.elements.auth_context.replaceChildren();return;} const values=identity.auth_contexts.filter((x)=>x.tool===tool && (tool!=='opencode'||x.provider===provider) && (tool!=='opencode'||x.enabled!==false)); form.elements.auth_context.replaceChildren(...values.map((x)=>new Option(`${x.name} · ${x.status}`,x.name,false,x.default))); }
 function renderModels(values){$('#mobile-models').replaceChildren(...values.map((m)=>{const label=m.estimated_usd==null?(m.cost.output==null?'unknown':`$${m.cost.output}/M out`):`est. $${m.estimated_usd.toFixed(6)}${m.cheapest?' · CHEAPEST':''}`;const o=new Option(`${m.name} · ${label}`,m.model);o.disabled=!m.selectable;return o;}));}
@@ -153,16 +153,26 @@ async function openMobileProfileEditor(name) {
     form.elements.content.disabled=false; submit.disabled=false;
   } catch(error) { if(current())$('#mobile-profile-editor-status').textContent=error.message; }
 }
+$('#mobile-profile-editor-form').elements.content.oninput=()=>{
+  profileEditorRevision++;
+  $('#mobile-profile-editor-status').textContent='Unsaved changes.';
+};
 $('#mobile-profile-editor-form').onsubmit=async(event)=>{
   event.preventDefault();
   const form=event.target,dialog=$('#mobile-profile-editor-dialog'),submit=$('button[type="submit"]',form);
   if(submit.disabled)return;
   const request=profileEditorRequest,name=form.elements.profile_name.value;
-  const current=()=>request===profileEditorRequest&&dialog.open;
+  const save=++profileSaveRequest,revision=profileEditorRevision,content=form.elements.content.value;
+  const current=()=>request===profileEditorRequest&&save===profileSaveRequest&&dialog.open;
   const status=$('#mobile-profile-editor-status'); status.textContent='Saving…'; submit.disabled=true;
   try {
-    await api(`/api/profiles/${encodeURIComponent(name)}`,{method:'PUT',body:JSON.stringify({content:form.elements.content.value})});
-    if(current()){status.textContent='Saved.';setTimeout(()=>{if(current())dialog.close();},800);}
+    await api(`/api/profiles/${encodeURIComponent(name)}`,{method:'PUT',body:JSON.stringify({content})});
+    if(current()){
+      if(revision===profileEditorRevision){
+        status.textContent='Saved.';
+        setTimeout(()=>{if(current()&&revision===profileEditorRevision)dialog.close();},800);
+      }else status.textContent='Submitted instructions saved; newer edits are unsaved.';
+    }
     renderMobileProfiles();
   } catch(error){if(current())status.textContent=error.message;}
   finally{if(current())submit.disabled=false;}
