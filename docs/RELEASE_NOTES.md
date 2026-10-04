@@ -1,3 +1,10 @@
+## 0.28.22 — unreleased, 2026-10-04 (#170)
+
+- Impact: mobile attention Save no longer closes over newer note or state edits made while an earlier save was pending. Newer fields remain editable with an unsaved notice; unchanged success still closes normally and rejected saves retain values for retry.
+- Configuration/migration: none. Refresh mobile assets. This protects edits in the same open dialog; explicit close/navigation does not create persistent draft storage.
+- Verification: one private baseline case reproduced the premature close; 15 focused browser cases passed across desktop and two phone layouts, including edit-away-and-back, rejection/retry and late responses to another dialog. Independent exact-source review passed. Exact-head CI gates promotion; synthetic Chromium does not certify physical devices.
+- Rollback: select the prior release through its schema guard and restart web only, preserving sessions and state. Prior mobile UI can discard newer attention edits after a delayed save.
+
 ## 0.28.21 — unreleased, 2026-10-04 (#166)
 
 - Impact: background session rename preserves the existing Workbench terminal iframe, Scroll/Select mode, output selection, scroll position, composer caret and focus. A replacement that reuses the old name has its own terminal and draft.

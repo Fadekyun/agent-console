@@ -1,3 +1,8 @@
+## Preserve newer mobile attention edits — 2026-10-04 (#170)
+
+- Compare edit revision and submitted fields before closing a successful pending save; preserve newer values and retain durable-ID/dialog-generation guards.
+- Verify note/state edits, edited-back values, rejected saves, retry and previously protected different-dialog responses.
+
 ## Preserve terminal interaction across rename — 2026-10-04 (#166)
 
 - Cache, route and remove Workbench frames by durable session ID; refresh the retained terminal identity without reopening or focusing it.
