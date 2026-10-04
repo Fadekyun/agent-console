@@ -207,7 +207,7 @@ test('refresh preserves an attention draft and successful save releases it',asyn
   await expect(page.locator('#attention-form [name=state]')).toHaveValue('ready_for_review');
   await page.locator('#attention-form button[type=submit]').click();
   await expect(page.locator('#attention-status')).toHaveText('State updated');
-  expect(requests.find(r=>r.path.endsWith('/attention')).body).toEqual({state:'ready_for_review',note:'Unfinished note'});
+  expect(requests.find(r=>r.path.endsWith('/attention')).body).toEqual({state:'ready_for_review',note:'Unfinished note',session_id:'first'});
   await page.clock.fastForward(10000);
   await expect(page.locator('#attention-form [name=note]')).toHaveValue('');
 });
@@ -316,3 +316,30 @@ for (const mobile of [false, true]) {
     });
   }
 }
+
+for(const mobile of [false,true])test(`session mutations pin the selected durable ID on ${mobile?'mobile':'desktop'}`,async({page})=>{
+  const {requests}=await fixture(page);
+  const selected={...session('old-name'),id:'original-id',actions:['interrupt','restart','kill']};
+  await page.route('**/api/sessions?**',route=>route.fulfill({json:[selected]}));
+  await page.route('**/api/sessions',route=>route.fulfill({json:[selected]}));
+  // Server has renamed the original and reused its name; keep the view stale.
+  await page.route('**/api/sessions/old-name/*',async route=>{
+    const req=route.request();requests.push({path:new URL(req.url()).pathname,body:req.postDataJSON()});
+    await route.fulfill({status:409,json:{detail:'session identity changed; refresh and retry'}});
+  });
+  await page.goto(mobile?'/mobile':'/desktop');
+  const card=page.locator(mobile?'#mobile-sessions article':'#active-sessions tr').filter({hasText:'old-name'});
+  await expect(card).toBeVisible();
+  for(const operation of ['interrupt','restart','kill']){
+    if(mobile)await card.getByRole('button',{name:operation==='kill'?'Kill':operation==='restart'?'Restart':'Interrupt',exact:true}).click();
+    else {await card.locator('summary').click();await page.locator(`[data-action="${operation}"]:visible`).click();}
+    if(operation==='kill')await page.locator(mobile?'#mobile-kill-confirm':'#confirm-submit').click();
+    await expect.poll(()=>requests.filter(r=>r.path.endsWith('/'+operation)).length).toBe(1);
+    expect(requests.find(r=>r.path.endsWith('/'+operation)).body.session_id).toBe('original-id');
+    if(mobile&&operation==='kill')await page.locator('#mobile-kill-dialog').evaluate(d=>d.close());
+  }
+  if(mobile){await card.getByRole('button',{name:'Details',exact:true}).click();await page.locator('#mobile-attention-save').click();}
+  else{await card.locator('.session-name').click();await page.locator('#attention-form button[type=submit]').click();}
+  await expect.poll(()=>requests.filter(r=>r.path.endsWith('/attention')).length).toBe(1);
+  expect(requests.find(r=>r.path.endsWith('/attention')).body.session_id).toBe('original-id');
+});

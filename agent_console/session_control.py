@@ -139,7 +139,7 @@ class SessionControl:
         if command == 'attention':
             self.authorize_control(target, own=True)
             return self.manager.set_attention(target['tmux_name'], state=payload['state'],
-                 note=payload.get('note'), actor=actor, surface='session-api')
+                 note=payload.get('note'), actor=actor, surface='session-api', session_id=target['id'])
         if command == 'delegate':
             if target['id'] != self.current['id']:
                 raise PermissionError('delegation must originate from the caller')
@@ -170,9 +170,9 @@ class SessionControl:
         self.authorize_control(target)
         name = target['tmux_name']
         if command == 'interrupt':
-            return self.manager.interrupt(name)
+            return self.manager.interrupt(name, session_id=target['id'])
         if command == 'restart-agent':
-            return self.manager.restart(name)
+            return self.manager.restart(name, session_id=target['id'])
         if command == 'kill':
-            return self.manager.kill(name, allow_unmanaged=False)
+            return self.manager.kill(name, allow_unmanaged=False, session_id=target['id'])
         raise ValueError('unsupported session control operation')

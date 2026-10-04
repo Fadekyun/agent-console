@@ -1245,3 +1245,26 @@ test('remaining audit later rejection cannot erase a previously uncertain launch
   await page.goto('/work');await page.locator('#new-session').click();await page.locator('[name=task]').fill('Original in flight');await page.locator('#preview-launch').click();await page.locator('#confirm-launch').click();await expect(page.locator('#launch-preview')).toContainText('Response lost');await page.locator('#create-form button[type=submit]').click();await expect(page.locator('#launch-preview')).toContainText('Configuration changed');
   expect(statusReads).toBe(0);expect(requests).toHaveLength(2);expect(requests[1]).toEqual(requests[0]);await expect(page.locator('#create-form button[type=submit]')).toHaveText('Check launch');
 });
+
+test('workbench mutations pin the selected identity while its old name is reused',async({page})=>{
+  await fixture(page);
+  const sent=[];
+  await page.route('**/api/sessions/session-one/*',async route=>{
+    const req=route.request();if(req.method()==='GET')return route.fallback();
+    sent.push({path:new URL(req.url()).pathname,body:req.postDataJSON()});
+    await route.fulfill({status:409,json:{detail:'session identity changed; refresh and retry'}});
+  });
+  page.on('dialog',dialog=>dialog.accept());
+  await page.goto('/work#session/session-one');
+  await page.locator('#session-detail > summary').click();
+  for(const operation of ['interrupt','kill']){
+    await page.locator(operation==='kill'?'#stop-session:visible, #stop-terminal-session:visible':'#interrupt-session').first().click();
+    await expect(page.locator('#notice')).toContainText('identity changed');
+    expect(sent.find(r=>r.path.endsWith('/'+operation)).body.session_id).toBe('root');
+  }
+  await page.locator('#attention-controls > summary').click();
+  await page.locator('#attention-form button[type=submit]').click();
+  await expect.poll(()=>sent.filter(r=>r.path.endsWith('/attention')).length).toBe(1);
+  expect(sent.find(r=>r.path.endsWith('/attention')).body.session_id).toBe('root');
+  await expect(page.locator('#session-title')).toHaveText('session-one');
+});

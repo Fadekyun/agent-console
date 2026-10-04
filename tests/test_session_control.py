@@ -118,7 +118,9 @@ class SessionControlTests(unittest.TestCase):
     def test_attention_own_identity_and_descendant_control(self):
         self.assertEqual(self.request('attention',{'state':'ready_for_review'},identity='peer').status_code,200)
         self.manager.set_attention.assert_called_once()
+        self.assertEqual(self.manager.set_attention.call_args.kwargs["session_id"], "peer")
         self.assertEqual(self.request('interrupt',{'name':'child'}).status_code,200)
+        self.manager.interrupt.assert_called_once_with('child', session_id='child')
         self.assertEqual(self.request('interrupt',{'name':'peer'}).status_code,403)
         self.assertEqual(self.request('interrupt',{'name':'parent'},identity='child').status_code,403)
         self.assertEqual(self.request('attention',{'name':'parent','state':'ready_for_review'},identity='peer').status_code,403)
