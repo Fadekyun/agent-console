@@ -303,7 +303,12 @@ class EnvironmentLifecycleTests(unittest.TestCase):
         self.manager.environment.put(keys[3], value='', project_id=project['id'])
         self.manager.environment.put(keys[4], value=literal, project_id=project['id'])
         executable = self.root/'inspect-provider-environment'
-        executable.write_text('#!' + sys.executable + '\nimport os,json\nprint(json.dumps({k:os.getenv(k) for k in ' + repr(keys) + '}))\n')
+        executable.write_text(
+            '#!' + sys.executable + '\nimport os,json,sys\n'
+            'if "--help" in sys.argv:\n'
+            ' print("--approve-for-me"); sys.exit(0)\n'
+            'print(json.dumps({k:os.getenv(k) for k in ' + repr(keys) + '}))\n'
+        )
         executable.chmod(0o700)
         expected = dict(zip(keys, ['global-value', 'project-override', None, '', literal]))
         with patch.dict(TOOL_BINARIES, {tool:executable for tool in TOOL_BINARIES}):
