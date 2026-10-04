@@ -46,7 +46,7 @@ async function fixture(page) {
     await route.fulfill({json:body});
   });
   await page.routeWebSocket('**/ws/sessions/**', ws => { ws.send('Connected to staging\r\n'); });
-  return {requests,sessions};
+  return {requests,sessions,steps};
 }
 
 test('recipes save without launching and start with one explicit action',async({page})=>{
@@ -1084,4 +1084,162 @@ for(const children of [0,4])test(`Settings explains configured child capacity ${
   await expect(page.locator('#session-capacity')).toContainText('24 running or reserved sessions in total');
   await expect(page.locator('#session-capacity')).toContainText(children?'4 active children per parent':'No per-parent child limit');
   await expect(page.locator('#session-capacity')).toContainText('Stopped and archived sessions do not use a slot');
+});
+
+// Remaining-audit regressions: drafts and asynchronous session inspection.
+test('remaining audit keeps root and child drafts separate across close and Escape',async({page})=>{
+  const {sessions}=await fixture(page);sessions[0].running=false;
+  sessions.push({...sessions[0],id:'second-root',tmux_name:'second-root'});
+  await page.goto('/work');await page.locator('#new-session').click();
+  await page.locator('[name=task]').fill('Root draft');await page.getByText('Model & session options',{exact:true}).click();await page.locator('[name=model]').fill('saved-model');
+  await page.locator('[name=worktree]').uncheck();await page.keyboard.press('Escape');
+  await expect(page.locator('#create-dialog')).toBeHidden();await page.locator('#new-session').click();
+  await expect(page.locator('[name=task]')).toHaveValue('Root draft');await expect(page.locator('[name=model]')).toHaveValue('saved-model');await expect(page.locator('[name=worktree]')).not.toBeChecked();
+  await page.locator('#cancel-create').click();
+  for(const [name,id,task] of [['session-one','root','First child draft'],['second-root','second-root','Second child draft']]){
+    await page.evaluate(name=>location.hash='#session/'+name,name);await expect(page.locator('#session-title')).toHaveText(name);
+    await page.locator(`#session-tree [data-node="${id}"] .add-session`).click();await expect(page.locator('[name=task]')).toHaveValue('');
+    await page.locator('[name=task]').fill(task);await page.locator('#cancel-create').click();
+  }
+  await page.evaluate(()=>location.hash='#session/session-one');await expect(page.locator('#session-title')).toHaveText('session-one');
+  await page.locator('#session-tree [data-node=root] .add-session').click();await expect(page.locator('[name=task]')).toHaveValue('First child draft');
+  await page.locator('#schedule-step').check();await page.getByText('Purpose & output',{exact:true}).click();await page.locator('[name=reason]').fill('Wait for this result');await page.locator('[name=readiness]').selectOption('after-ready');await page.keyboard.press('Escape');
+  await expect(page.locator('#create-dialog')).toBeHidden();await page.locator('#session-tree [data-node=root] .add-session').click();
+  await expect(page.locator('#schedule-step')).toBeChecked();await expect(page.locator('[name=reason]')).toHaveValue('Wait for this result');await expect(page.locator('[name=readiness]')).toHaveValue('after-ready');
+  await page.locator('#cancel-create').click();await page.evaluate(()=>location.hash='#work');await page.locator('#new-session').click();await expect(page.locator('[name=task]')).toHaveValue('Root draft');
+  page.once('dialog',dialog=>dialog.accept());await page.locator('#discard-create').click();await expect(page.locator('[name=task]')).toHaveValue('');await expect(page.locator('[name=model]')).toHaveValue('');
+});
+
+test('remaining audit recipe drafts do not overwrite root drafts',async({page})=>{
+  await fixture(page);const recipe={id:'saved',revision:1,title:'Saved recipe',request:{tool:'shell',profile:'coder',task:'Recipe task',repository:'/tmp/recipe',worktree:false,auth_context:'default'}};
+  await page.route('**/api/workbench/recipes',route=>route.fulfill({json:[recipe]}));
+  await page.goto('/work');await page.locator('#new-session').click();await page.locator('[name=task]').fill('Root task');await page.locator('#cancel-create').click();
+  await page.locator('#run-recipe').click();await page.getByRole('button',{name:'Use recipe',exact:true}).click();await expect(page.locator('[name=task]')).toHaveValue('Recipe task');await page.locator('[name=task]').fill('Edited recipe draft');await page.locator('#cancel-create').click();
+  await page.locator('#new-session').click();await expect(page.locator('[name=task]')).toHaveValue('Root task');await page.locator('#cancel-create').click();
+  recipe.revision++;recipe.request.task='Externally revised recipe';await page.locator('#run-recipe').click();await page.getByRole('button',{name:'Use recipe',exact:true}).click();await expect(page.locator('[name=task]')).toHaveValue('Edited recipe draft');await expect(page.getByRole('button',{name:'Start session',exact:true})).toBeVisible();
+});
+
+test('remaining audit completed creation clears only its submitted draft',async({page})=>{
+  const {sessions}=await fixture(page);let pending;
+  await page.route('**/api/sessions',route=>{if(route.request().method()==='POST'){pending=route;return;}return route.fallback();});
+  await page.goto('/work');await page.locator('#new-session').click();await page.locator('[name=task]').fill('Submitted draft');await page.getByRole('button',{name:'Create session',exact:true}).click();await expect.poll(()=>!!pending).toBe(true);
+  await page.locator('#cancel-create').click();await page.locator('#new-session').click();await page.locator('[name=task]').fill('Newer unsent draft');
+  const created={...sessions[0],id:'created',tmux_name:'created',initial_task:'Submitted draft'};sessions.push(created);await pending.fulfill({json:created});
+  await expect(page.locator('#notice')).toContainText('Created created');await expect(page.locator('[name=task]')).toHaveValue('Newer unsent draft');await page.locator('#cancel-create').click();await page.locator('#new-session').click();await expect(page.locator('[name=task]')).toHaveValue('Newer unsent draft');
+  await page.getByRole('button',{name:'Create session',exact:true}).click();await expect.poll(()=>pending.request().postDataJSON().task).toBe('Newer unsent draft');
+  const next={...created,id:'created-next',tmux_name:'created-next'};sessions.push(next);await pending.fulfill({json:next});await expect(page.locator('#session-title')).toHaveText('created-next');
+  if(await page.locator('#terminal-panel').isVisible())await page.locator('#close-terminal').click();await page.evaluate(()=>location.hash='#work');await page.locator('#new-session').click();await expect(page.locator('[name=task]')).toHaveValue('');
+});
+
+test('remaining audit reopened uncertain recipe launch reuses its request key',async({page})=>{
+  const {sessions}=await fixture(page);const requests=[];
+  await page.route('**/api/workbench/recipes',route=>route.fulfill({json:[{id:'retry',revision:1,title:'Retry recipe',request:{tool:'shell',profile:'coder',task:'Keep one launch'}}]}));
+  await page.route('**/api/workbench/launches/preview',route=>route.fulfill({json:{hash:'f'.repeat(64),config:route.request().postDataJSON().request,skills:[]}}));
+  await page.route('**/api/workbench/launches',route=>{
+    requests.push(route.request().postDataJSON());
+    if(requests.length===1)return route.fulfill({status:503,json:{detail:'Response interrupted'}});
+    sessions.push({...sessions[0],id:'one-launch',tmux_name:'one-launch'});return route.fulfill({json:{state:'created',session_id:'one-launch',name:'one-launch'}});
+  });
+  await page.goto('/work');await page.locator('#run-recipe').click();await page.getByRole('button',{name:'Use recipe',exact:true}).click();await page.getByRole('button',{name:'Start session',exact:true}).click();await expect(page.locator('#launch-preview')).toContainText('Response interrupted');
+  await page.locator('#cancel-create').click();await page.locator('#run-recipe').click();await page.getByRole('button',{name:'Use recipe',exact:true}).click();await page.getByRole('button',{name:'Check launch',exact:true}).click();await expect(page.locator('#session-title')).toHaveText('one-launch');
+  expect(requests).toHaveLength(2);expect(requests[1].request_key).toBe(requests[0].request_key);
+});
+
+for(const kind of ['output','skills']){
+  test(`remaining audit ${kind} sends stable identity and ignores stale errors after navigation`,async({page})=>{
+    const {sessions}=await fixture(page);sessions[0].running=false;sessions.push({...sessions[0],id:'other',tmux_name:'other'});let pending;
+    const endpoint=kind==='output'?'review':'skills';
+    await page.route(`**/api/sessions/session-one/${endpoint}**`,route=>{pending=route;});
+    await page.goto('/work#session/session-one');await page.locator('#session-detail > summary').click();await page.locator('#show-'+kind).click();await expect.poll(()=>!!pending).toBe(true);
+    expect(new URL(pending.request().url()).searchParams.get('session_id')).toBe('root');
+    await page.evaluate(()=>location.hash='#session/other');await expect(page.locator('#session-title')).toHaveText('other');await pending.fulfill({status:409,json:{detail:'Old session identity changed'}});
+    await expect(page.locator('#notice')).not.toContainText('Old session identity changed');await expect(page.locator('#session-'+kind)).toBeHidden();
+  });
+  test(`remaining audit ${kind} rejects name reuse instead of showing replacement content`,async({page})=>{
+    await fixture(page);const endpoint=kind==='output'?'review':'skills';
+    await page.route(`**/api/sessions/session-one/${endpoint}**`,route=>new URL(route.request().url()).searchParams.get('session_id')==='root'?route.fulfill({status:409,json:{detail:'session identity changed'}}):route.fulfill({json:{content:'Replacement session content',notice:'Replacement session content',latest:null}}));
+    await page.goto('/work#session/session-one');await page.locator('#session-detail > summary').click();await page.locator('#show-'+kind).click();await expect(page.locator('#notice')).toHaveText('session identity changed');await expect(page.locator('#session-'+kind)).toBeHidden();await expect(page.locator('#main')).not.toContainText('Replacement session content');
+  });
+}
+
+
+test('remaining audit pending creation preserves edits made without closing',async({page})=>{
+  const {sessions}=await fixture(page);let pending;
+  await page.route('**/api/sessions',route=>{if(route.request().method()==='POST'){pending=route;return;}return route.fallback();});
+  await page.goto('/work');await page.locator('#new-session').click();await page.locator('[name=task]').fill('Submitted');await page.getByRole('button',{name:'Create session',exact:true}).click();await expect.poll(()=>!!pending).toBe(true);
+  await page.locator('[name=task]').fill('Unsent changes while waiting');const created={...sessions[0],id:'created',tmux_name:'created'};sessions.push(created);await pending.fulfill({json:created});
+  await expect(page.locator('#notice')).toContainText('Created created');await expect(page.locator('#create-dialog')).toBeVisible();await expect(page.locator('[name=task]')).toHaveValue('Unsent changes while waiting');
+});
+
+for(const kind of ['output','skills'])test(`remaining audit ${kind} ignores reversed responses and a round trip`,async({page})=>{
+  const {sessions}=await fixture(page);sessions[0].running=false;sessions.push({...sessions[0],id:'other',tmux_name:'other'});const pending=[];
+  const endpoint=kind==='output'?'review':'skills',panel=page.locator('#session-'+kind);
+  await page.route(`**/api/sessions/session-one/${endpoint}**`,route=>{pending.push(route);});
+  await page.goto('/work#session/session-one');await page.locator('#session-detail > summary').click();
+  await page.locator('#show-'+kind).click();await expect.poll(()=>pending.length).toBe(1);await page.locator('#show-'+kind).click();await expect.poll(()=>pending.length).toBe(2);
+  const data=text=>kind==='output'?{content:text}:{notice:text,latest:null};
+  await pending[1].fulfill({json:data('Newest response')});await expect(panel).toContainText('Newest response');
+  await pending[0].fulfill({json:data('Outdated response')});
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));await expect(panel).toContainText('Newest response');
+  await page.locator('#show-'+kind).click();await expect.poll(()=>pending.length).toBe(3);
+  await page.evaluate(()=>location.hash='#session/other');await expect(page.locator('#session-title')).toHaveText('other');await page.evaluate(()=>location.hash='#session/session-one');await expect(page.locator('#session-title')).toHaveText('session-one');
+  await pending[2].fulfill({json:data('Before navigation')});await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));await expect(panel).toBeHidden();
+});
+
+
+test('remaining audit edits and preview retain an uncertain launch and the newer draft',async({page})=>{
+  const {sessions}=await fixture(page),requests=[];let previews=0;
+  await page.route('**/api/workbench/recipes',route=>route.fulfill({json:[{id:'retry-edit',revision:1,title:'Retry editable',request:{tool:'shell',profile:'coder',task:'Original launch'}}]}));
+  await page.route('**/api/workbench/launches/preview',route=>{previews++;return route.fulfill({json:{hash:'f'.repeat(64),config:route.request().postDataJSON().request,skills:[]}});});
+  await page.route('**/api/workbench/launches',route=>{
+    requests.push(route.request().postDataJSON());if(requests.length===1)return route.fulfill({status:503,json:{detail:'Uncertain response'}});
+    sessions.push({...sessions[0],id:'original-launch',tmux_name:'original-launch'});return route.fulfill({json:{state:'created',session_id:'original-launch',name:'original-launch'}});
+  });
+  await page.goto('/work');await page.locator('#run-recipe').click();await page.getByRole('button',{name:'Use recipe',exact:true}).click();await page.getByRole('button',{name:'Start session',exact:true}).click();await expect(page.locator('#launch-preview')).toContainText('Uncertain response');
+  await page.locator('[name=task]').fill('Newer unsent edits');await page.locator('#cancel-create').click();await page.locator('#run-recipe').click();await page.getByRole('button',{name:'Use recipe',exact:true}).click();
+  await expect(page.locator('[name=task]')).toHaveValue('Newer unsent edits');await page.locator('#preview-launch').click();await expect(page.locator('#notice')).toContainText('Created original-launch');
+  expect(previews).toBe(1);expect(requests).toHaveLength(2);expect(requests[1]).toEqual(requests[0]);await expect(page.locator('#create-dialog')).toBeVisible();await expect(page.locator('[name=task]')).toHaveValue('Newer unsent edits');await expect(page.getByRole('button',{name:'Start session',exact:true})).toBeEnabled();
+  await page.locator('#cancel-create').click();await page.locator('#run-recipe').click();await page.getByRole('button',{name:'Use recipe',exact:true}).click();await expect(page.getByRole('button',{name:'Start session',exact:true})).toBeVisible();
+});
+
+
+test('remaining audit step revision conflicts preserve the original draft and version',async({page})=>{
+  const {sessions,steps}=await fixture(page);sessions[0].running=false;
+  const step={id:'step-fixture',version:1,root_id:'root',owner_id:'root',task:'Original step',reason:'Original purpose',expected_output:'Report',config:{tool:'shell',profile:'coder',worktree:false},dependencies:[{source_id:'root',readiness:'after-final'}],decision:'proposed',attempts:[]};steps.push(step);const edits=[];
+  await page.route('**/api/workflow/steps/step-fixture/edit',route=>{edits.push(route.request().postDataJSON());return route.fulfill({status:409,json:{detail:'Step changed; reload before editing'}});});
+  await page.goto('/work#step/step-fixture');await page.getByRole('button',{name:'Edit next step',exact:true}).click();await page.locator('[name=task]').fill('Unsent step edits');await page.locator('#cancel-create').click();
+  step.version=2;step.task='Externally changed step';
+  await page.evaluate(()=>location.hash='#work');await expect(page.locator('#work-view')).toBeVisible();await page.evaluate(()=>location.hash='#step/step-fixture');await page.getByRole('button',{name:'Edit next step',exact:true}).click();
+  await expect(page.locator('[name=task]')).toHaveValue('Unsent step edits');await page.getByRole('button',{name:'Review scheduled step',exact:true}).click();await expect(page.locator('#create-error')).toHaveText('Step changed; reload before editing');expect(edits[0].expected_version).toBe(1);
+  await expect(page.locator('[name=task]')).toHaveValue('Unsent step edits');
+  page.once('dialog',dialog=>dialog.accept());await page.locator('#discard-create').click();await expect(page.locator('[name=task]')).toHaveValue('Externally changed step');
+});
+
+test('remaining audit discard keeps the uncertain launch receipt',async({page})=>{
+  const {sessions}=await fixture(page),requests=[];
+  await page.route('**/api/workbench/recipes',route=>route.fulfill({json:[{id:'discard-retry',revision:1,title:'Discard retry',request:{tool:'shell',profile:'coder',task:'Original launch'}}]}));
+  await page.route('**/api/workbench/launches/preview',route=>route.fulfill({json:{hash:'f'.repeat(64),config:route.request().postDataJSON().request,skills:[]}}));
+  await page.route('**/api/workbench/launches',route=>{requests.push(route.request().postDataJSON());if(requests.length===1)return route.fulfill({status:503,json:{detail:'Uncertain launch'}});sessions.push({...sessions[0],id:'discard-launch',tmux_name:'discard-launch'});return route.fulfill({json:{state:'created',name:'discard-launch'}});});
+  await page.goto('/work');await page.locator('#run-recipe').click();await page.getByRole('button',{name:'Use recipe',exact:true}).click();await page.getByRole('button',{name:'Start session',exact:true}).click();await expect(page.locator('#launch-preview')).toContainText('Uncertain launch');await page.locator('[name=task]').fill('Temporary edits');
+  page.once('dialog',dialog=>dialog.accept());await page.locator('#discard-create').click();await expect(page.locator('[name=task]')).toHaveValue('Original launch');await page.getByRole('button',{name:'Check launch',exact:true}).click();await expect(page.locator('#session-title')).toHaveText('discard-launch');expect(requests).toHaveLength(2);expect(requests[1]).toEqual(requests[0]);
+});
+
+for(const rejected of [false,true])test(`remaining audit root receipt recovers after ${rejected?'definitive rejection':'discard with invalid fields'}`,async({page})=>{
+  const {sessions}=await fixture(page),requests=[];let previews=0;
+  await page.route('**/api/workbench/launches/preview',route=>{previews++;return route.fulfill({json:{hash:'f'.repeat(64),config:route.request().postDataJSON().request,skills:[]}});});
+  await page.route('**/api/workbench/launches/*',route=>new URL(route.request().url()).pathname.endsWith('/preview')?route.fallback():route.fulfill({status:404,json:{detail:'Launch request not found'}}));
+  await page.route('**/api/workbench/launches',route=>{requests.push(route.request().postDataJSON());if(requests.length===1)return route.fulfill({status:rejected?400:503,json:{detail:rejected?'Configuration changed':'Uncertain launch'}});sessions.push({...sessions[0],id:'root-retry',tmux_name:'root-retry'});return route.fulfill({json:{state:'created',name:'root-retry'}});});
+  await page.goto('/work');await page.locator('#new-session').click();await page.locator('[name=task]').fill('Root launch');await page.locator('#preview-launch').click();await page.locator('#confirm-launch').click();await expect(page.locator('#launch-preview')).toContainText(rejected?'Review the configuration':'Uncertain launch');
+  if(rejected){await page.locator('#preview-launch').click();await page.locator('#confirm-launch').click();await expect(page.locator('#session-title')).toHaveText('root-retry');expect(previews).toBe(2);expect(requests[1].request_key).not.toBe(requests[0].request_key);}
+  else{page.once('dialog',dialog=>dialog.accept());await page.locator('#discard-create').click();await expect(page.locator('[name=task]')).toHaveValue('');await page.getByRole('button',{name:'Check launch',exact:true}).click();await expect(page.locator('#notice')).toContainText('Created root-retry');await expect(page.locator('#create-dialog')).toBeVisible();expect(previews).toBe(1);expect(requests[1]).toEqual(requests[0]);}
+});
+
+
+test('remaining audit later rejection cannot erase a previously uncertain launch',async({page})=>{
+  await fixture(page);const requests=[];let statusReads=0;
+  await page.route('**/api/workbench/launches/preview',route=>route.fulfill({json:{hash:'f'.repeat(64),config:route.request().postDataJSON().request,skills:[]}}));
+  await page.route('**/api/workbench/launches/*',route=>{if(new URL(route.request().url()).pathname.endsWith('/preview'))return route.fallback();statusReads++;return route.fulfill({status:404,json:{detail:'Launch request not found'}});});
+  await page.route('**/api/workbench/launches',route=>{requests.push(route.request().postDataJSON());return route.fulfill({status:requests.length===1?503:400,json:{detail:requests.length===1?'Response lost':'Configuration changed'}});});
+  await page.goto('/work');await page.locator('#new-session').click();await page.locator('[name=task]').fill('Original in flight');await page.locator('#preview-launch').click();await page.locator('#confirm-launch').click();await expect(page.locator('#launch-preview')).toContainText('Response lost');await page.locator('#create-form button[type=submit]').click();await expect(page.locator('#launch-preview')).toContainText('Configuration changed');
+  expect(statusReads).toBe(0);expect(requests).toHaveLength(2);expect(requests[1]).toEqual(requests[0]);await expect(page.locator('#create-form button[type=submit]')).toHaveText('Check launch');
 });

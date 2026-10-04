@@ -1,3 +1,12 @@
+## 0.28.9 — unreleased, 2026-10-04 (#141, PR #142)
+
+- Impact: closing New session or pressing Escape retains separate in-page drafts for roots, child owners, scheduled steps, recipes and continuations. Explicit discard resets a draft; confirmed creation clears only its submitted draft. Uncertain launches retain their exact request across edits, previews, close/reopen and discard. Checking a retained launch bypasses empty draft fields; a first definitive rejection permits a fresh preview only after the status endpoint confirms that no receipt exists (HTTP 404). Earlier uncertainty remains guarded.
+- Session inspection: Output and Skills reads include stable session IDs and ignore stale successes/errors after navigation or newer requests, preventing reused names from exposing a replacement session.
+- Projects: delayed detail and assignment responses cannot overwrite or reopen another dialog. Project creation, edits and deletion refresh New session choices while preserving a valid selection.
+- Configuration/migration: none. Refresh browser assets. Creation drafts last while the page remains open; reloading the page clears them. No database or harness changes.
+- Verification: desktop and phone browser regressions for retained drafts, delayed creation, uncertain retries, session identity and project mutation races; full CI and live acceptance gate deployment.
+- Rollback: select retained v0.28.8 through its schema guard and restart web only. Preserve databases and running harnesses.
+
 ## 0.28.8 — unreleased, 2026-10-04 (#141)
 
 - Impact: native keyboard/context-menu paste in typing mode reaches the terminal through xterm, retaining bracketed paste. Toolbar Paste still stages a draft for review. Explicit Select mode supports pointer dragging even when a TUI owns mouse reporting, with desktop copy shortcuts and touch gesture capture; normal TUI mouse input and unselected Ctrl-C remain intact.

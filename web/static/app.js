@@ -1022,7 +1022,12 @@ projectDetailDialog.addEventListener('close', () => {
 
 async function renderProjects() {
   const generation = ++projectListGeneration;
-  const projects = await api('/api/projects');
+  let projects;
+  try { projects = await api('/api/projects'); }
+  catch (error) {
+    if (generation === projectListGeneration) showNotice(`Could not refresh projects: ${error.message}`, 'error');
+    return;
+  }
   if (generation !== projectListGeneration) return;
   const select = newForm.elements.project_id;
   const choice = select.value;

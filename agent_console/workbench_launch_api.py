@@ -1,5 +1,5 @@
 """Operator-only recipe, launch preview and continuation controls."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .workbench_launch import LaunchCatalog
@@ -65,6 +65,9 @@ def launch_routes(manager, require_identity):
 
     @router.get('/api/workbench/launches/{request_key}')
     def status(request_key: str):
-        return catalog.launch_status(request_key)
+        try:
+            return catalog.launch_status(request_key)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail='Launch request not found') from error
 
     return router

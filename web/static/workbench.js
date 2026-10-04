@@ -1,4 +1,4 @@
-import { setupLaunches } from '/static/launch-workbench.js?v=0.28.5';
+import { setupLaunches } from '/static/launch-workbench.js?v=0.28.9';
 import { setupOverview } from '/static/work-overview.js?v=0.28.5';
 import { setupResults } from '/static/results-workbench.js?v=0.28.6';
 import { setupSkills } from '/static/skill-workbench.js';
@@ -19,18 +19,19 @@ function message(text, kind = 'general') { $('#notice').textContent = text; $('#
 async function api(path, payload, method = 'POST') {
   const response = await fetch(path, payload === undefined ? { cache: 'no-store' } : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data));
+  if (!response.ok) { const error = new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data)); error.status = response.status; throw error; }
   return data;
 }
 const skillsView = setupSkills({ api, el, message, profiles: () => state.me?.profiles || [] });
 let skillsLoaded = false;
 const resultsView = setupResults({api,el,message,sessions:()=>state.sessions,editStep:step=>openCreate(state.sessions.find(s=>s.id===step.root_id)||state.selected,step),openSession:async name=>{await refresh();location.hash=`#session/${encodeURIComponent(name)}`;}});
 let resultsSession = null, resultsReady = Promise.resolve();
+let detailGeneration = 0, detailContext = '', outputRequest = 0, skillsRequest = 0;
 $('#show-results').onclick = () => { location.hash = `#results/${encodeURIComponent(state.selected.tmux_name)}`; };
 function status(s) { return s.attention_state !== 'normal' && s.attention_state ? names[s.attention_state] || s.attention_state : s.running ? 'Working' : 'Stopped'; }
 function sessionLink(s) { return `#session/${encodeURIComponent(s.tmux_name)}`; }
 const overview=setupOverview({state,el,openCreate,api,message,refresh});
-const launches=setupLaunches({api,el,state,openCreate,getRequest:createRequest,refresh,message,createVersion:()=>createGeneration,openSession:name=>{location.hash=`#session/${encodeURIComponent(name)}`;route();openTerminal();}});
+const launches=setupLaunches({api,el,state,openCreate,getRequest:createRequest,refresh,message,createVersion:()=>createGeneration,getDraftToken:createDraftToken,draftChanged:saveCreateDraft,created:completeCreateDraft,settled:settleCreateLaunch,openSession:name=>{location.hash=`#session/${encodeURIComponent(name)}`;route();openTerminal();}});
 function renderWork(){overview.renderWork();}
 function renderSession() {
   const s = state.selected;
@@ -86,6 +87,8 @@ function route() {
   const switchingFromDrawer = $('#sessions-dialog').open && previous !== sessionName;
   if(switchingFromDrawer)$('#sessions-dialog').close();
   state.selected = selected || null;
+  const nextDetailContext = JSON.stringify([location.hash, state.selected?.id]);
+  if (detailContext !== nextDetailContext) { detailContext = nextDetailContext; detailGeneration++; }
   $('#work-view').hidden = Boolean(sessionName) || ['#settings', '#skills'].includes(hash);
   $('#skills-view').hidden = hash !== '#skills';
   if (hash === '#skills' && !skillsLoaded && state.me) { skillsLoaded = true; skillsView.load().catch(error => { skillsLoaded = false; message(error.message); }); }
@@ -263,6 +266,64 @@ function configureSessionFlow() {
 }
 $('#schedule-step').onchange=configureSessionFlow;
 let createOrigin=null,createGeneration=0;
+const createDrafts = new Map();
+let createDraftKey = null, createSeed = null;
+function createDraftValue() {
+  const fields = {};
+  for (const control of form.elements) {
+    if (!control.name || control.name === 'parent') continue;
+    fields[control.name] = control.type === 'checkbox' ? control.checked : control.value;
+  }
+  fields.schedule = $('#schedule-step').checked;
+  const metadata = Object.fromEntries(['launchConfig','recipe','continuation','review','step'].map(key => [key, form.dataset[key] || '']));
+  return {fields, metadata};
+}
+function createDraftToken() { return {key: createDraftKey, signature: JSON.stringify(createDraftValue())}; }
+function saveCreateDraft() {
+  if (!createDraftKey) return;
+  createDrafts.set(createDraftKey, {...createDraftValue(), launch: launches.snapshot()});
+}
+function settleCreateLaunch(key) {
+  for (const draft of createDrafts.values()) if (draft.launch?.submission.request_key === key) draft.launch = null;
+}
+function completeCreateDraft(token) {
+  if (!token?.key) return;
+  const saved = createDrafts.get(token.key);
+  if (saved && JSON.stringify({fields:saved.fields, metadata:saved.metadata}) === token.signature) createDrafts.delete(token.key);
+  if (createDraftKey === token.key && JSON.stringify(createDraftValue()) === token.signature) {
+    createDraftKey = null;
+    $('#create-dialog').close();
+  }
+}
+function restoreCreateDraft(draft) {
+  function restore(control, value) {
+    if (!control || value === undefined) return;
+    if (control.type === 'checkbox') control.checked = value;
+    else {
+      if (control.tagName === 'SELECT' && ![...control.options].some(option => option.value === value)) control.add(new Option(`${value} · check availability`, value));
+      control.value = value;
+    }
+  }
+  for (const key of ['tool','profile']) restore(form.elements[key], draft.fields[key]);
+  configureTool(); configureRole();
+  for (const [key,value] of Object.entries(draft.fields)) if (key !== 'schedule') restore(form.elements[key], value);
+  $('#schedule-step').checked = draft.fields.schedule;
+  for (const [key,value] of Object.entries(draft.metadata)) form.dataset[key] = value;
+  configureSessionFlow();
+  if (form.dataset.review) $('button[type=submit]',form).textContent = form.dataset.continuation ? 'Continue work' : 'Start session';
+  if (form.dataset.recipe) $('#save-recipe').textContent = 'Update recipe';
+  launches.restore(draft.launch);
+}
+form.addEventListener('input', saveCreateDraft);
+form.addEventListener('change', saveCreateDraft);
+$('#create-dialog').addEventListener('close', saveCreateDraft);
+$('#discard-create').onclick = () => {
+  const pending = launches.snapshot();
+  if (!confirm(pending ? 'Discard these edits? The previous launch check will be kept until its outcome is confirmed.' : 'Discard this draft and reset its fields?')) return;
+  createDrafts.delete(createDraftKey); createDraftKey = null;
+  openCreate(createSeed.parent, createSeed.step, createSeed.settings);
+  if (pending) { launches.restore(pending); saveCreateDraft(); }
+};
 function restoreCreateOrigin(){
   const origin=createOrigin;createOrigin=null;
   if(!origin||origin.hash!==location.hash)return;
@@ -270,9 +331,10 @@ function restoreCreateOrigin(){
   origin.control?.focus({preventScroll:true});
   for(const [node,top,left] of origin.scroll){node.scrollTop=top;node.scrollLeft=left;}
 }
-function openCreate(parent = null, step = null) {
+function openCreate(parent = null, step = null, settings = {}) {
+  saveCreateDraft();
   createGeneration++;for(const control of form.elements)control.disabled=false;
-  createOrigin={hash:location.hash,control:document.activeElement,drawer:$('#sessions-dialog').open,scroll:[$('#sessions-dialog'),$('#session-tree'),$('#tree-panel')].map(node=>[node,node.scrollTop,node.scrollLeft])};
+  if (!$('#create-dialog').open) createOrigin={hash:location.hash,control:document.activeElement,drawer:$('#sessions-dialog').open,scroll:[$('#sessions-dialog'),$('#session-tree'),$('#tree-panel')].map(node=>[node,node.scrollTop,node.scrollLeft])};
   if ($('#sessions-dialog').open) $('#sessions-dialog').close();
   if (!state.me) { message('Tool information is unavailable. Use Refresh to retry loading settings.', 'settings'); return; }
   form.reset(); launches.reset(parent); form.elements.parent.value = parent?.id || '';
@@ -291,6 +353,13 @@ function openCreate(parent = null, step = null) {
   $('#create-error').textContent = available.length ? '' : 'No tool is ready. Check Tools & accounts in Settings.';
   configureTool(); configureRole();
   if(step){for(const [key,value] of Object.entries(step.config))if(form.elements[key]&&key!=='worktree')form.elements[key].value=value;configureTool();configureRole();if(step.config.auth_context)form.elements.auth_context.value=step.config.auth_context;form.elements.task.value=step.task;form.elements.worktree.checked=step.config.worktree;form.elements.readiness.value=step.dependencies.find(d=>d.source_id===step.owner_id)?.readiness||'alongside';}
+  createDraftKey = settings.key || (step ? `step:${step.id}` : parent ? `child:${parent.id}` : 'root');
+  createSeed = {parent, step, settings};
+  settings.initialize?.();
+  const draft = createDrafts.get(createDraftKey);
+  if (draft) restoreCreateDraft(draft);
+  $('#create-draft-status').hidden = !draft;
+  $('#create-draft-status').textContent = 'Draft restored. Drafts stay available while this page is open.';
   $('#create-dialog').showModal(); previewSkills();
 }
 function createRequest(){
@@ -307,17 +376,18 @@ function createRequest(){
 form.onsubmit = async event => {
   event.preventDefault(); const submit = $('button[type=submit]', form); if (submit.disabled) return; submit.disabled = true; $('#create-error').textContent = '';
   const fields=form.elements,parent=fields.parent.value,data=createRequest();
+  const draftToken = createDraftToken();
   const generation=createGeneration,originHash=location.hash,originSessionId=state.selected?.id;
   const stillOnOrigin=()=>generation===createGeneration&&(originSessionId?state.selected?.id===originSessionId&&location.hash.split('/')[0]===originHash.split('/')[0]:location.hash===originHash);
   const ownsDraft=()=>stillOnOrigin()&&$('#create-dialog').open;
   async function finishSession(session){
-    const navigate=ownsDraft();if(navigate)$('#create-dialog').close();
+    const navigate=ownsDraft()&&createDraftToken().signature===draftToken.signature;completeCreateDraft(draftToken);if(navigate)$('#create-dialog').close();
     if(state.loading)await state.loading;await refresh();
     if(navigate&&stillOnOrigin()){location.hash=sessionLink(session);route();openTerminal();}
     else message(`Created ${session.tmux_name}. Open it from Work.`);
   }
   try {
-    if(!parent&&form.dataset.review){await launches.reviewLaunch(data,{start:true});return;}
+    if(!parent&&(form.dataset.review||launches.snapshot())){await launches.reviewLaunch(data,{start:true});return;}
     if(parent&&!$('#schedule-step').checked){
       const owner=state.sessions.find(s=>s.id===parent);if(!owner)throw new Error('Parent session is unavailable. Refresh and try again.');
       const session=await api(`/api/sessions/${encodeURIComponent(owner.tmux_name)}/children`,data);
@@ -330,7 +400,7 @@ form.onsubmit = async event => {
       const dependencies=(existing?.dependencies||[]).filter(d=>d.source_id!==owner);dependencies.push({source_id:owner,readiness:fields.readiness.value});
       const proposal={task:data.task,reason:fields.reason.value,expected_output:fields.expected_output.value,config,dependencies};
       const proposed=existing?await api(`/api/workflow/steps/${existing.id}/edit`,{...proposal,expected_version:existing.version}):await api(`/api/sessions/${encodeURIComponent(parent)}/workflow/proposals`,{...proposal,request_key:Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('')});
-      const navigate=ownsDraft();if(navigate)$('#create-dialog').close();resultsSession=null;await refresh();if(navigate&&stillOnOrigin()){location.hash=`#step/${encodeURIComponent(proposed.id)}`;route();await resultsReady;if($('#workflow-next-steps'))$('#workflow-next-steps').open=true;}
+      const navigate=ownsDraft()&&createDraftToken().signature===draftToken.signature;completeCreateDraft(draftToken);if(navigate)$('#create-dialog').close();resultsSession=null;await refresh();if(navigate&&stillOnOrigin()){location.hash=`#step/${encodeURIComponent(proposed.id)}`;route();await resultsReady;if($('#workflow-next-steps'))$('#workflow-next-steps').open=true;}
       message('Next step proposed. Preview its launch and accept it when the scope is right.');
     }else{
       const session=await api('/api/sessions',data);await finishSession(session);
@@ -379,12 +449,23 @@ $('#session-visibility').onclick=async()=>{
   }catch(error){message(`${session.tmux_name}: ${error.message}`);}
   finally{pendingSessionActions.delete(key);renderPendingActions();}
 };
-$('#show-output').onclick = async () => { const s = state.selected; try { const output = await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/review?lines=500`); if (s.id !== state.selected?.id) return; $('#output-text').textContent = output.content || 'No captured output.'; $('#session-output').hidden = false; } catch (e) { message(e.message); } };
-$('#show-skills').onclick = async () => {
-  const s = state.selected;
+$('#show-output').onclick = async () => {
+  const s = state.selected, generation = detailGeneration, request = ++outputRequest;
+  if (!s) return;
+  const current = () => generation === detailGeneration && request === outputRequest && s.id === state.selected?.id;
   try {
-    const data = await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/skills`);
-    if (s.id !== state.selected?.id) return;
+    const output = await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/review?lines=500&session_id=${encodeURIComponent(s.id)}`);
+    if (!current()) return;
+    $('#output-text').textContent = output.content || 'No captured output.'; $('#session-output').hidden = false;
+  } catch (error) { if (current()) message(error.message); }
+};
+$('#show-skills').onclick = async () => {
+  const s = state.selected, generation = detailGeneration, request = ++skillsRequest;
+  if (!s) return;
+  const current = () => generation === detailGeneration && request === skillsRequest && s.id === state.selected?.id;
+  try {
+    const data = await api(`/api/sessions/${encodeURIComponent(s.tmux_name)}/skills?session_id=${encodeURIComponent(s.id)}`);
+    if (!current()) return;
     const panel = $('#session-skills');
     panel.replaceChildren(el('h3', 'Delivered skills'), el('p', data.notice, 'small muted'));
     if (data.latest) {
@@ -393,7 +474,7 @@ $('#show-skills').onclick = async () => {
       panel.append(el('p', data.latest.coverage, 'small muted'));
     }
     panel.hidden = false;
-  } catch (error) { message(error.message); }
+  } catch (error) { if (current()) message(error.message); }
 };
 $('#show-history').onclick=async()=>{
   const session=state.selected,button=$('#show-history');button.disabled=true;

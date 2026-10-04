@@ -1,3 +1,9 @@
+## Remaining interaction fixes — 2026-10-04 (#141)
+
+- Fixed: cancelled New session drafts now retain their own root, child, step, recipe and continuation context while the page is open; confirmed creation and explicit discard clear the appropriate draft.
+- Fixed: Output/Skills stable identity checks and stale response suppression; project detail/mutation dialog races and fresh New session project choices.
+- Verification includes asynchronous response ordering, uncertain launch retries and desktop/phone form interactions. Persistent drafts across page reload remain outside this change.
+
 ## Terminal control clarity — 2026-10-03 (#141)
 
 - Replaced terminal More text/native marker with a stable 44px chevron and explicit accessible expanded state.
@@ -17,13 +23,13 @@
 - Fixed: renamed selection/dock continuity, private draft ownership, browser history after name reuse, late creation/recipe/continuation responses and cross-session history contamination. Mobile lifecycle errors and overlapping refreshes now preserve usable state.
 - Fixed: long-name mobile card overflow, deep-tree title height, cramped search, link/form spacing, overlapping mobile navigation, tablet header overlap, multiline composer sizing and delayed dock focus theft.
 - Verification includes concurrency and failure injection, strict identity guards and geometry/hit testing across five viewport widths. Filesystem/process crashes during cross-resource operations and physical phone keyboard behavior are not claimed as exhaustively tested.
-- Remaining design work: context-specific cancelled New session drafts, a primary Workbench project picker and selected-child wait controls.
+- Remaining design work: a primary Workbench project picker and selected-child wait controls.
 
 ## Deep interaction audit — 2026-10-03 (#141)
 
 - Addressed: session More menus clipped by table scrolling, keyboard propagation and refresh replacement; terminal menu viewport limits, touch targets and delayed connection focus; Open work pointer continuity, long Workbench title overflow and direct Settings readiness; confirmation for write-only environment deletion.
 - Verification emphasizes reachable controls and unchanged intended targets over basic visibility assertions. The dedicated insecure-HTTP clipboard suite runs in CI.
-- Deferred design work: context-specific new-session drafts, Workbench project picker, and consolidated secondary navigation.
+- Deferred design work: Workbench project picker, and consolidated secondary navigation.
 
 ## Publication acceptance fixes — 2026-10-03 (#141)
 

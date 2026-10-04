@@ -1,7 +1,9 @@
-export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSession,message,createVersion}) {
+export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSession,message,createVersion,getDraftToken,draftChanged,created,settled}) {
   const $=selector=>document.querySelector(selector),form=$('#create-form');
   let sequence=0,review=null;
   const pendingLaunches=new Set();
+  const attemptedLaunches=new Map();
+  const uncertainLaunches=new Set();
   function context(){return {version:createVersion(),sessionId:state.selected?.id,hash:location.hash};}
   function ownsContext(origin){return origin.version===createVersion()&&(origin.sessionId?origin.sessionId===state.selected?.id&&origin.hash.split('/')[0]===location.hash.split('/')[0]:origin.hash===location.hash);}
   function ownsDraft(origin){return ownsContext(origin)&&$('#create-dialog').open;}
@@ -24,9 +26,17 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
     if(!value.skills?.length)details.append(el('p','No Console-selected skills.','small'));
     target.append(details);
   }
-  function invalidate(){sequence++;review=null;$('#launch-preview').hidden=true;}
+  function invalidate(){
+    sequence++;
+    if(review&&attemptedLaunches.has(review.request_key)){
+      const panel=$('#launch-preview');panel.hidden=false;
+      panel.replaceChildren(el('p','Check the previous launch before starting with these edits. Your edited draft will be kept.'));
+      form.querySelector('button[type=submit]').textContent='Check launch';form.querySelector('button[type=submit]').formNoValidate=true;return;
+    }
+    review=null;$('#launch-preview').hidden=true;form.querySelector('button[type=submit]').formNoValidate=false;
+  }
   function reset(parent){
-    invalidate();form.dataset.launchConfig='';form.dataset.recipe='';form.dataset.continuation='';form.dataset.review='';
+    review=null;invalidate();form.dataset.launchConfig='';form.dataset.recipe='';form.dataset.continuation='';form.dataset.review='';
     $('#recipe-save-panel').hidden=!!parent;$('#preview-launch').hidden=!!parent;
     $('#save-recipe').textContent='Save recipe';
   }
@@ -36,8 +46,8 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
     }
     control.value=value;
   }
-  function populate(request,{recipe=null,source=null}={}){
-    message('');openCreate();
+  function populate(request,{recipe=null,source=null,key=null}={}){
+    message('');openCreate(null,null,{key:key||(source?`continue:${source.id}`:recipe?`recipe-edit:${recipe.id}`:'known-settings'),initialize:()=>{
     for(const key of ['tool','profile'])if(request[key]){selectValue(form.elements[key],request[key]);form.elements[key].dispatchEvent(new Event('change'));}
     for(const [key,value] of Object.entries(request)){
       const control=form.elements[key];if(!control||value==null||key==='name')continue;
@@ -48,9 +58,10 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
     if(source){form.dataset.continuation=source.id;$('#create-title').textContent='Continue work';$('#create-help').textContent='Start a new conversation using recorded settings and the preserved workspace. The latest explicit result will be delivered as an input.';$('#recipe-save-panel').hidden=true;}
     form.querySelector('button[type=submit]').textContent=source?'Continue work':'Start session';
     $('#create-start-help').textContent='Start with these settings. The task stays in the terminal composer until you send it.';
+    }});
   }
   async function reviewLaunch(request=getRequest(),{start=false}={}){
-    if(start&&review){await runLaunch();return;}
+    if(review&&(start||attemptedLaunches.has(review.request_key))){await runLaunch();return;}
     const token=++sequence,origin=context();review=null;const panel=$('#launch-preview'),button=$('#preview-launch');button.disabled=true;
     panel.hidden=false;panel.replaceChildren(el('p','Checking launch configuration…'));
     try{
@@ -70,20 +81,42 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
   }
   async function runLaunch(){
     if(!review||pendingLaunches.has(review.request_key))return;
-    const submission=review,origin=context();pendingLaunches.add(submission.request_key);
+    const submission=review,origin=context(),draftToken=attemptedLaunches.get(review.request_key)||getDraftToken();pendingLaunches.add(submission.request_key);
+    attemptedLaunches.set(submission.request_key,draftToken);draftChanged();
     const controls=[...form.elements].map(control=>[control,control.disabled]);
     for(const [control] of controls)control.disabled=true;
     const panel=$('#launch-preview');let result=panel.querySelector('[role=status]');
     if(!result){result=el('p');result.setAttribute('role','status');panel.append(result);}
     try{
       const launched=await api('/api/workbench/launches',submission);
-      if(!ownsDraft(origin)){message(launched.state==='created'?`Created ${launched.name}. Open it from Work.`:(launched.error||'Previous launch is pending. Check its status before starting it again.'));await refresh();return;}
+      if(launched.state!=='created')uncertainLaunches.add(submission.request_key);
+      const owned=ownsDraft(origin)&&getDraftToken().signature===draftToken.signature;
+      if(launched.state==='created'){
+        attemptedLaunches.delete(submission.request_key);uncertainLaunches.delete(submission.request_key);settled(submission.request_key);
+        if(review?.request_key===submission.request_key){review=null;invalidate();form.querySelector('button[type=submit]').textContent=form.dataset.continuation?'Continue work':form.dataset.review?'Start session':'Create session';}
+        created(draftToken);
+      }
+      if(!owned){message(launched.state==='created'?`Created ${launched.name}. Open it from Work.`:(launched.error||'Previous launch is pending. Check its status before starting it again.'));await refresh();return;}
       if(launched.state!=='created'){
         result.textContent=launched.error||'Launch is pending. Check its status before starting another session.';
-        form.querySelector('button[type=submit]').textContent='Check launch';return;
+        form.querySelector('button[type=submit]').textContent='Check launch';form.querySelector('button[type=submit]').formNoValidate=true;return;
       }
       message('');$('#create-dialog').close();await refresh();if(ownsContext(origin))openSession(launched.name);else message(`Created ${launched.name}. Open it from Work.`);
-    }catch(error){if(ownsDraft(origin)){result.textContent=error.message+' Check this launch before starting another.';form.querySelector('button[type=submit]').textContent='Check launch';}else message(`Previous launch: ${error.message}. Check its status before starting it again.`);}
+    }catch(error){
+      let rejected=false;
+      if([400,409,422].includes(error.status)&&!uncertainLaunches.has(submission.request_key)){
+        try{await api('/api/workbench/launches/'+encodeURIComponent(submission.request_key));}
+        catch(statusError){if(statusError.status===404){
+          rejected=true;attemptedLaunches.delete(submission.request_key);uncertainLaunches.delete(submission.request_key);settled(submission.request_key);
+          if(review?.request_key===submission.request_key){review=null;invalidate();form.querySelector('button[type=submit]').textContent=form.dataset.continuation?'Continue work':form.dataset.review?'Start session':'Create session';}
+        }}
+      }
+      if(!rejected)uncertainLaunches.add(submission.request_key);
+      if(ownsDraft(origin)){
+        panel.hidden=false;result.textContent=error.message+(rejected?' Review the configuration before trying again.':' Check this launch before starting another.');
+        if(!rejected){form.querySelector('button[type=submit]').textContent='Check launch';form.querySelector('button[type=submit]').formNoValidate=true;}
+      }else message(`Previous launch: ${error.message}. ${rejected?'Review the configuration before trying again.':'Check its status before starting it again.'}`);
+    }
     finally{pendingLaunches.delete(submission.request_key);if(origin.version===createVersion()){for(const [control,disabled] of controls)control.disabled=disabled;const run=$('#confirm-launch');if(run)run.textContent='Check launch';}}
   }
   async function recipes(){
@@ -94,14 +127,14 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
       for(const recipe of entries){
         const card=el('article',null,'panel');card.append(el('h3',recipe.title),el('p',recipe.request.task||'No stored task','brief'),el('p',`${recipe.request.profile} · ${recipe.request.tool} · revision ${recipe.revision}`,'small muted'));
         const actions=el('div',null,'actions'),use=el('button','Use recipe'),edit=el('button','Edit'),remove=el('button','Remove','danger');actions.append(use,edit,remove);card.append(actions);list.append(card);
-        use.onclick=()=>{$('#recipe-dialog').close();populate(recipe.request);};
+        use.onclick=()=>{$('#recipe-dialog').close();populate(recipe.request,{key:`recipe-use:${recipe.id}`});};
         edit.onclick=()=>{$('#recipe-dialog').close();populate(recipe.request,{recipe});$('#recipe-save-panel').open=true;};
         remove.onclick=async()=>{if(!confirm(`Remove recipe “${recipe.title}”? Existing sessions stay unchanged.`))return;remove.disabled=true;try{await api('/api/workbench/recipes/'+recipe.id+'/remove',{expected_revision:recipe.revision});card.remove();}catch(error){message(error.message);}finally{remove.disabled=false;}};
       }
     }catch(error){list.replaceChildren(el('p',error.message,'danger'));}
   }
   $('#run-recipe').onclick=recipes;$('#close-recipes').onclick=()=>$('#recipe-dialog').close();
-  $('#preview-launch').onclick=()=>{if(form.reportValidity())reviewLaunch();};
+  $('#preview-launch').onclick=()=>{if(snapshot()||form.reportValidity())reviewLaunch();};
   $('#save-recipe').onclick=async()=>{
     if(!form.reportValidity())return;
     if(!form.elements.recipe_title.value.trim()){$('#create-error').textContent='Name this recipe before saving.';form.elements.recipe_title.focus();return;}
@@ -130,12 +163,14 @@ export function setupLaunches({api,el,state,openCreate,getRequest,refresh,openSe
       if(!data.latest||data.latest.invalidated){
         const panel=$('#session-configuration');panel.hidden=false;panel.replaceChildren(el('p',data.latest?.invalidated||data.notice));
         const draft=el('button','New session from known settings');panel.append(draft);
-        draft.onclick=()=>{populate({...data.known,task:source.initial_task||''});$('#create-help').textContent='Review these known settings for a new session. This does not restore the previous conversation or reuse its worktree.';};
+        draft.onclick=()=>{populate({...data.known,task:source.initial_task||''},{key:`known-settings:${source.id}`});$('#create-help').textContent='Review these known settings for a new session. This does not restore the previous conversation or reuse its worktree.';};
         return;
       }
       populate({...data.latest.config,task:source.initial_task||'Continue from the latest result and preserved workspace.'},{source});
     }catch(error){message(error.message);}finally{button.disabled=false;}
   };
   form.addEventListener('input',invalidate);form.addEventListener('change',invalidate);
-  return {reset,reviewLaunch};
+  function snapshot(){return review&&attemptedLaunches.has(review.request_key)?{submission:review,draftToken:attemptedLaunches.get(review.request_key)}:null;}
+  function restore(saved){if(saved){review=saved.submission;attemptedLaunches.set(review.request_key,saved.draftToken);invalidate();}}
+  return {reset,reviewLaunch,snapshot,restore};
 }

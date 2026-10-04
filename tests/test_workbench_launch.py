@@ -63,6 +63,23 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual(self.catalog.recipes(), [])
         self.assertEqual(self.manager.list_sessions(), [])
 
+    def test_missing_launch_status_returns_404_after_rejected_configuration(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from agent_console.workbench_launch_api import launch_routes
+
+        preview = self.catalog.preview(self.request)
+        (self.manager.settings.profile_dir/'general.md').write_text('Changed role')
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            self.catalog.launch(self.request, expected_hash=preview['hash'], request_key='rejected-api', actor='operator')
+        app = FastAPI()
+        app.include_router(launch_routes(self.manager, lambda: None))
+        with TestClient(app) as client:
+            response = client.get('/api/workbench/launches/rejected-api')
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json(), {'detail': 'Launch request not found'})
+        self.assertEqual(self.manager.list_sessions(), [])
+
     def test_profile_drift_requires_new_review_before_launch(self):
         preview = self.catalog.preview(self.request)
         (self.manager.settings.profile_dir/'general.md').write_text('Changed role')
