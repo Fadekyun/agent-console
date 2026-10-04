@@ -1,6 +1,6 @@
 import { Terminal } from '/vendor/xterm.mjs';
 import { FitAddon } from '/vendor/addon-fit.mjs';
-import { guardTerminalInput } from '/static/terminal-input.js?v=0.28.10';
+import { guardTerminalInput } from '/static/terminal-input.js?v=0.28.18';
 import { initTheme, xtermTheme } from '/static/theme.js?v=10';
 
 // Clipboard controls keep their accessible text if icon enhancement is unavailable.

@@ -1,3 +1,8 @@
+## Preserve input-before-keydown IME rollover — 2026-10-04 (#157)
+
+- Handle the narrow non-composing gap where native xterm rejects composed insertText after a settled 229 fallback while the previous key remains held.
+- Retain native keypress, composition and screen-reader ownership; no elapsed-time or text deduplication. Browser tests cover five event orderings plus ownership boundaries. Physical-device acceptance remains external.
+
 ## Pin lifecycle mutations to session identity — 2026-10-04 (#155)
 
 - Send selected durable IDs for lifecycle and attention controls across Workbench, desktop and mobile; pass authorized target IDs through capability control.

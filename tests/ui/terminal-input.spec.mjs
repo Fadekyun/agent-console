@@ -182,3 +182,87 @@ for (const [selection, start, end] of [['full', 0, 17], ['partial', 4, 10]]) {
     expect(writes).toEqual([]);
   });
 }
+
+for (const shape of ['timer gap', 'tight rollover', 'keyup before next input', 'slow keys', 'repeated keys']) {
+  test(`input-before-keydown ${shape} transmits each printable edit once`, async ({page}) => {
+    const {writes}=await terminalPage(page);
+    const expected=shape==='repeated keys'?'jjj':'jk';
+    await page.locator('.xterm-helper-textarea').evaluate(async (textarea,shape) => {
+      const turn=()=>new Promise(resolve=>setTimeout(resolve,30));
+      const down=key=>textarea.dispatchEvent(new KeyboardEvent('keydown',{key,keyCode:229,bubbles:true,cancelable:true}));
+      const up=key=>textarea.dispatchEvent(new KeyboardEvent('keyup',{key,keyCode:key.toUpperCase().charCodeAt(0),bubbles:true,cancelable:true}));
+      const insert=character=>{
+        textarea.value+=character;
+        textarea.dispatchEvent(new InputEvent('input',{data:character,inputType:'insertText',bubbles:true,composed:true}));
+      };
+      textarea.value=''; insert('j'); down('j');
+      if(shape==='keyup before next input'||shape==='slow keys')up('j');
+      if(shape==='timer gap'||shape==='slow keys'||shape==='repeated keys')await turn();
+      const next=shape==='repeated keys'?'j':'k'; insert(next); down(next);
+      if(shape==='repeated keys'){await turn();insert('j');down('j');}
+      up('j');up(next);await turn();
+    },shape);
+    await expect.poll(()=>writes.join('')).toBe(expected);
+  });
+}
+
+test('native keypress remains the owner after a settled Process fallback', async ({page}) => {
+  const {writes}=await terminalPage(page);
+  await page.locator('.xterm-helper-textarea').evaluate(async textarea => {
+    textarea.value='';
+    textarea.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',keyCode:229,bubbles:true,cancelable:true}));
+    await new Promise(resolve=>setTimeout(resolve,30));
+    textarea.dispatchEvent(new KeyboardEvent('keypress',{key:'a',keyCode:97,charCode:97,which:97,bubbles:true,cancelable:true}));
+    textarea.value='a';
+    textarea.dispatchEvent(new InputEvent('input',{data:'a',inputType:'insertText',bubbles:true,composed:true}));
+    textarea.dispatchEvent(new KeyboardEvent('keyup',{key:'a',keyCode:65,bubbles:true,cancelable:true}));
+  });
+  await expect.poll(()=>writes.join('')).toBe('a');
+});
+
+test('screen reader input ownership is unchanged for composed Process notifications', async ({page}) => {
+  const {writes}=await terminalPage(page);
+  await page.locator('.xterm-helper-textarea').evaluate(async textarea => {
+    window.__terminal.options.screenReaderMode=true;
+    textarea.value='';
+    textarea.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',keyCode:229,bubbles:true,cancelable:true}));
+    await new Promise(resolve=>setTimeout(resolve,30));
+    textarea.value='s';
+    textarea.dispatchEvent(new InputEvent('input',{data:'s',inputType:'insertText',bubbles:true,composed:true}));
+    textarea.dispatchEvent(new KeyboardEvent('keyup',{key:'s',keyCode:83,bubbles:true,cancelable:true}));
+    await new Promise(resolve=>setTimeout(resolve,30));
+  });
+  expect(writes).toEqual([]);
+});
+
+test('active composition owns composed insertText notifications', async ({page}) => {
+  const {writes}=await terminalPage(page);
+  await page.locator('.xterm-helper-textarea').evaluate(async textarea => {
+    textarea.value='';
+    textarea.dispatchEvent(new CompositionEvent('compositionstart',{data:'',bubbles:true}));
+    textarea.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',keyCode:229,bubbles:true,cancelable:true}));
+    textarea.value='好';
+    textarea.dispatchEvent(new CompositionEvent('compositionupdate',{data:'好',bubbles:true}));
+    textarea.dispatchEvent(new InputEvent('input',{data:'好',inputType:'insertText',bubbles:true,composed:true}));
+    await new Promise(resolve=>setTimeout(resolve,30));
+    textarea.dispatchEvent(new CompositionEvent('compositionend',{data:'好',bubbles:true}));
+  });
+  await expect.poll(()=>writes.join('')).toBe('好');
+});
+
+test('pending composition commit owns input before the next Process keydown', async ({page}) => {
+  const {writes}=await terminalPage(page);
+  await page.locator('.xterm-helper-textarea').evaluate(async textarea => {
+    textarea.value='';
+    textarea.dispatchEvent(new CompositionEvent('compositionstart',{data:'',bubbles:true}));
+    textarea.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',keyCode:229,bubbles:true,cancelable:true}));
+    textarea.value='好';
+    textarea.dispatchEvent(new CompositionEvent('compositionupdate',{data:'好',bubbles:true}));
+    await new Promise(resolve=>setTimeout(resolve,30));
+    textarea.dispatchEvent(new CompositionEvent('compositionend',{data:'好',bubbles:true}));
+    textarea.value='好1';
+    textarea.dispatchEvent(new InputEvent('input',{data:'1',inputType:'insertText',bubbles:true,composed:true}));
+    textarea.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',keyCode:229,bubbles:true,cancelable:true}));
+  });
+  await expect.poll(()=>writes.join('')).toBe('好1');
+});
