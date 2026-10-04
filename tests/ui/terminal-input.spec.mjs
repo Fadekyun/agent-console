@@ -143,3 +143,42 @@ test('Process bursts immediately after composition commits remain bounded',async
     await new Promise(resolve=>setTimeout(resolve,0));textarea.dispatchEvent(new CompositionEvent('compositionend',{data:'好',bubbles:true}));
   });await expect.poll(()=>writes.join('')).toBe('好1');
 });
+for (const [selection, start, end] of [['full', 0, 17], ['partial', 4, 10]]) {
+  test(`disconnected recovery appends without replacing a hidden ${selection} draft selection`, async ({page}) => {
+    const {writes, disconnect} = await terminalPage(page);
+    await page.locator('#toggle-composer').click();
+    await page.locator('#composer').fill('Recoverable draft');
+    await page.locator('#composer').evaluate((composer, range) => composer.setSelectionRange(...range), [start, end]);
+    await page.locator('#toggle-composer').click();
+    await expect(page.locator('#input-drawer')).toBeHidden();
+    await page.route('**/api/sessions?**', route => route.fulfill({status:503,json:{detail:'Temporarily unavailable'}}));
+    disconnect();
+    await expect(page.locator('#connection')).not.toHaveText('Connected');
+    await page.locator('.xterm-helper-textarea').focus();
+    await page.keyboard.type('x');
+    await expect(page.locator('#composer')).toHaveValue('Recoverable draftx');
+    await expect(page.locator('#composer')).toBeFocused();
+    await expect(page.locator('#input-drawer')).toBeVisible();
+    expect(writes).toEqual([]);
+    await page.unroute('**/api/sessions?**');
+    await page.reload();
+    await expect(page.locator('#connection')).toHaveText('Connected');
+    await expect(page.locator('#composer')).toHaveValue('Recoverable draftx');
+    expect(writes).toEqual([]);
+  });
+
+  test(`explicit manual paste replaces the ${selection} draft selection`, async ({page}) => {
+    await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', {value:undefined, configurable:true}));
+    const {writes} = await terminalPage(page);
+    await page.locator('#toggle-composer').click();
+    await page.locator('#composer').fill('Recoverable draft');
+    await page.locator('#composer').evaluate((composer, range) => composer.setSelectionRange(...range), [start, end]);
+    await page.locator('#paste-device').click();
+    await expect(page.locator('#paste-sheet')).toBeVisible();
+    await page.locator('#paste-sheet-text').fill('PASTE');
+    await page.locator('#use-manual-paste').click();
+    const original = 'Recoverable draft';
+    await expect(page.locator('#composer')).toHaveValue(original.slice(0, start) + 'PASTE' + original.slice(end));
+    expect(writes).toEqual([]);
+  });
+}
