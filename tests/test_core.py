@@ -1282,6 +1282,14 @@ class SessionIntegrationTests(unittest.TestCase):
             self.manager.restart(child["tmux_name"])
             self.assertIn("--approve-for-me", Path(child["launcher_path"]).read_text())
             self.assertEqual(self.manager.inspect(child["tmux_name"])["id"], child["id"])
+            # Existing intentional/legacy arguments remain pinned on restart.
+            legacy_launcher = Path(child["launcher_path"])
+            legacy_launcher.write_text(legacy_launcher.read_text().replace(
+                "--approve-for-me", "--ask-for-approval on-request"
+            ))
+            self.manager.restart(child["tmux_name"])
+            self.assertNotIn("--approve-for-me", legacy_launcher.read_text())
+            self.assertIn("--ask-for-approval on-request", legacy_launcher.read_text())
             plan = self.manager.create(
                 tool="codex-pro", profile="coder", name="approval-plan", agent_mode="plan"
             )

@@ -1,10 +1,10 @@
 ## 0.28.24 — unreleased, 2026-10-04 (#176)
 
-- Impact: writable Codex Pro defaults use native `--approve-for-me` automatic review with `workspace-write` for future UI/CLI/delegated launches, intentional restarts and writable workflow tasks. Ordinary Codex behavior is unchanged. Desktop/mobile mode help reflects this distinction.
+- Impact: writable Codex Pro defaults use native `--approve-for-me` automatic review with `workspace-write` for newly created/recreated UI/CLI/delegated sessions and writable workflow tasks. Restarts preserve the approval arguments pinned in each existing launcher. Ordinary Codex behavior is unchanged. Desktop/mobile mode help reflects this distinction.
 - Boundaries: explicit Plan/read-only roles, read-only workflow actions and fixed planning tasks retain their existing narrower policies. Workflow conversion removes automatic review before applying read-only/never and removes the interactive Plan network override. Skill/role permissions are unchanged; unrestricted access is never substituted.
-- Configuration/migration: installed Codex must successfully advertise the native flag in interactive and exec help for the corresponding writable launches; missing, failed or timed-out probes fail closed. Existing sessions remain on pinned launchers until intentionally restarted. No bulk restart or model request is part of this release validation.
+- Configuration/migration: installed Codex must successfully advertise the native flag in interactive and exec help for the corresponding writable launches; missing, failed or timed-out probes fail closed. Existing sessions retain pinned approval arguments even across ordinary restarts; this release does not migrate legacy on-request launchers. No bulk restart or model request is part of this release validation.
 - Verification: focused provider and disposable create/delegate/restart cases cover defaults, explicit Plan, read actions, plain Codex, missing/nonzero/timed-out help and network-enabled Plan conversion. Local Codex0.159.2 help advertises the flag. Independent review and exact-head CI gate the proposed release.
-- Rollback: select the prior release through its schema guard and restart web only, preserving state and live sessions. Existing native launchers remain pinned until an intentional session restart; coordinate any required launcher rollback per session.
+- Rollback: select the prior release through its schema guard and restart web only, preserving state and live sessions. Existing native launchers remain pinned across ordinary restarts; any per-session approval-argument migration or rollback requires a separately reviewed change.
 
 ## 0.28.23 — unreleased, 2026-10-04 (#174)
 
