@@ -192,3 +192,19 @@ test('untouched saved draft hydrates automatically without recovery on ordinary 
   await expect(page.locator('#composer')).toHaveValue('Normal saved draft');
   await expect(page.locator('#restore-saved-draft')).toBeHidden();
 });
+
+test('visibility bookkeeping before identity does not turn an untouched saved draft into recovery', async ({page}) => {
+  await fixture(page);
+  await page.addInitScript(() => sessionStorage.setItem('agent-console:composer:id:original-id', 'Untouched dock draft'));
+  let release; const gate = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/sessions?state=all', async route => { await gate; await route.fallback(); });
+  await page.goto('/terminal?session=original&session_id=original-id&embed=1&lifecycle=managed');
+  for (const visible of [true, false, true]) {
+    await page.evaluate(visible => window.postMessage({type:'agent-console:terminal-visibility',visible},location.origin), visible);
+    await page.waitForTimeout(10);
+  }
+  release(); await expect(page.locator('#connection')).toHaveText('Connected');
+  await expect(page.locator('#composer')).toHaveValue('Untouched dock draft');
+  await expect(page.locator('#restore-saved-draft')).toBeHidden();
+  expect(await page.evaluate(() => window.__identityBytes)).toEqual([]);
+});

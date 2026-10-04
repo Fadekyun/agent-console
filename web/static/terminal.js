@@ -12,7 +12,7 @@ let name = new URLSearchParams(location.search).get('session');
 const initialName = name;
 let sessionId = new URLSearchParams(location.search).get('session_id');
 let identityRequest = null, connectionGeneration = 0, draftInitialized = false;
-let draftKey = null, draftPersistenceBlocked = false;
+let draftKey = null, draftPersistenceBlocked = false, draftEditedBeforeIdentity = false;
 if (!name) location.href = '/';
 $('#session-name').textContent = name;
 document.title = `Agent Terminal - ${name}`;
@@ -65,7 +65,7 @@ const MAX_RECONNECT_ATTEMPTS = 30;
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 30000;
 let autoReconnectEnabled = true;
-function saveDraft() { draftRevision++; $('#toggle-composer').textContent = composer.value ? 'Input · draft' : 'Input'; try { if (draftKey && !draftPersistenceBlocked) sessionStorage.setItem(draftKey, composer.value); } catch { /* continue without persistence */ } }
+function saveDraft(edited = true) { if (edited && !draftInitialized) draftEditedBeforeIdentity = true; draftRevision++; $('#toggle-composer').textContent = composer.value ? 'Input · draft' : 'Input'; try { if (draftKey && !draftPersistenceBlocked) sessionStorage.setItem(draftKey, composer.value); } catch { /* continue without persistence */ } }
 function showComposer(open, focus = false) {
   if (!open) clipboardContext++;
   $('#input-drawer').hidden = !open;
@@ -111,7 +111,7 @@ document.addEventListener('pointerdown', event => {
 });
 window.addEventListener('blur', () => closeMore());
 new ResizeObserver(() => { fitMoreMenu(); autoSizeComposer(); }).observe($('.terminal-controls'));
-window.addEventListener('pagehide', saveDraft);
+window.addEventListener('pagehide', () => saveDraft(false));
 window.addEventListener('focus', () => {
   if (draftInitialized && viewVisible) refreshIdentity().catch(error => setStatus(error.message));
 });
@@ -151,7 +151,7 @@ function initializeDraft() {
       // Early typing belongs to this page; do not replace it after identity lookup.
       // Keep the previously saved text separately until the user explicitly restores it.
       briefLoaded = true;
-      if (!draftRevision && !composer.value) composer.value = draft;
+      if (!draftEditedBeforeIdentity && !composer.value) composer.value = draft;
       else if (draft && draft !== composer.value) {
         if (recovery !== draft) recovery = recovery ? `${recovery}\n${draft}` : draft;
         try { sessionStorage.setItem(recoveryKey, recovery); }
@@ -214,7 +214,7 @@ window.addEventListener('message', (event) => {
     if (viewVisible) { autoReconnectEnabled = true; cancelReconnect(); connect(); }
     else {
       connectionGeneration++; clipboardContext++;
-      saveDraft(); if (historyMode || nativeScrolled) leaveHistory(); autoReconnectEnabled = false; cancelReconnect();
+      saveDraft(false); if (historyMode || nativeScrolled) leaveHistory(); autoReconnectEnabled = false; cancelReconnect();
       if (socket) { socket.onclose = null; socket.onerror = null; socket.onmessage = null; socket.close(); socket = null; }
       setStatus('Terminal closed · session still running');
     }
