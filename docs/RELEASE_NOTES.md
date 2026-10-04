@@ -1,3 +1,10 @@
+## 0.28.15 — unreleased, 2026-10-04 (#154)
+
+- Impact: typing before the initial session lookup completes no longer destroys an older saved Input draft. New typing stays in place and Restore saved draft appends the older text for review, including after reload. Untouched saved drafts still restore automatically; missing or reused identities expose no draft.
+- Configuration/migration: none. Recovery text uses sessionStorage alongside the existing ID-keyed draft. If recovery backup storage is full, the original stored text remains protected and the UI marks draft saving paused until explicit recovery. New text remains in-page in that fallback; storage exhaustion cannot guarantee persistence across reload.
+- Verification: baseline fixture reproduced the lost recovery; 36 focused browser checks passed across desktop and two phone layouts, including early typing/clear/direct recovery, reload, identity retry/rejection, ordinary restore and backup-write failure. Integrated brief/identity checks and independent review gate promotion.
+- Rollback: select the prior release through its schema guard and restart web only, preserving sessions and state. Previous releases do not expose the new saved-recovery entry; retain browser storage and restore pending recovery before rollback where possible.
+
 ## 0.28.14 — unreleased, 2026-10-04 (#149)
 
 - Impact: profile editors preserve newer instructions typed while an earlier save is pending or during its delayed close. Saving again invalidates the earlier close callback. The latest unchanged successful save retains the existing close behavior on both desktop and mobile.

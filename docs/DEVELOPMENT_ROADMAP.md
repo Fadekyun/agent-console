@@ -1,3 +1,8 @@
+## Preserve drafts before identity hydration — 2026-10-04 (#154)
+
+- Keep early typing separate from previously saved text until the validated session identity is available. Explicit recovery appends rather than replacing selections; pending recovery survives reload.
+- Untouched saved drafts and existing identity privacy checks remain intact. Storage-pressure fallback preserves the older durable draft and clearly marks paused saving.
+
 ## Profile save and edit ordering — 2026-10-04 (#149)
 
 - Track editor revisions and save generations on desktop and mobile so delayed success and close callbacks cannot discard newer instructions.
