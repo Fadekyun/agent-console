@@ -1,3 +1,8 @@
+## Ignore stale terminal brief responses — 2026-10-04 (#153)
+
+- Pin brief requests to draft revision, selection, view context and request generation before identity lookup; ignore stale content, errors and focus changes.
+- Preserve untouched initial loading, explicit selection insertion and saved-empty drafts. Verify races with isolated deferred-response browser fixtures.
+
 ## Preserve drafts before identity hydration — 2026-10-04 (#154)
 
 - Keep early typing separate from previously saved text until the validated session identity is available. Explicit recovery appends rather than replacing selections; pending recovery survives reload.

@@ -1,3 +1,10 @@
+## 0.28.16 — unreleased, 2026-10-04 (#153)
+
+- Impact: delayed Load brief responses cannot replace newer selected text, refill an intentionally cleared draft or reopen a hidden Input view. Only the latest request for the unchanged draft, selection and view can insert text or report an error.
+- Configuration/migration: none. Refresh the terminal page. Normal initial brief loading, explicit selected-range insertion and saved-empty drafts retain their behavior.
+- Verification: five baseline browser cases reproduced stale updates; 39 focused checks passed across desktop and two phone layouts, including reverse response ordering, stale failures, view changes, identity rejection and edits during identity lookup. Combined brief/hydration checks and independent review gate promotion.
+- Rollback: select the prior release through its schema guard and restart web only, preserving sessions and state. Earlier code may apply delayed brief responses over newer input.
+
 ## 0.28.15 — unreleased, 2026-10-04 (#154)
 
 - Impact: typing before the initial session lookup completes no longer destroys an older saved Input draft. New typing stays in place and Restore saved draft appends the older text for review, including after reload. Untouched saved drafts still restore automatically; missing or reused identities expose no draft.
