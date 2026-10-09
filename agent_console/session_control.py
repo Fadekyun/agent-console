@@ -1,4 +1,4 @@
-"""Capability-authenticated peer inspection and descendant control.
+"""Capability-authenticated Console inspection and ancestor/descendant control.
 
 The service owns database access. A harness has only its existing reporting
 capability; neither caller-supplied role names nor mutable session names grant
@@ -56,15 +56,7 @@ class SessionControl:
                         row[field] = None
             self.all_sessions = {row['id']: row for row in rows}
             self.current = self.all_sessions[identity['id']]
-            project = self.current.get('project_id')
-            ids = {row['id'] for row in rows if project and row.get('project_id') == project}
-            if not project:
-                root = self.root(self.current['id'])
-                ids = {row['id'] for row in rows if self.root(row['id']) == root}
-            sessions = []
-            for row in rows:
-                if row['id'] in ids:
-                    sessions.append(dict(row))
+            ids = set(self.all_sessions)
             selected = ','.join(PROJECTIONS['delegations'])
             delegation_rows = db.execute(f'SELECT {selected} FROM delegations ORDER BY id LIMIT ?', (MAX_ROWS+1,)).fetchall()
             if len(delegation_rows) > MAX_ROWS:
@@ -75,32 +67,39 @@ class SessionControl:
             for row in delegations:
                 if row['parent_session_id'] in private or row['child_session_id'] in private:
                     row['task'] = None
-        snapshot = {'sessions':sessions,'delegations':delegations,'session_groups':[],'group_members':[]}
+        snapshot = {'sessions':rows,'delegations':delegations,'session_groups':[],'group_members':[]}
         if len(delegations) > MAX_ROWS or len(json.dumps(snapshot, ensure_ascii=True)) > MAX_OUTPUT-4096:
             raise InspectionUnavailable('snapshot-too-large')
         self.views = InspectionViews(manager.settings, snapshot=snapshot, current_id=identity['id'])
-        # Observed but unrecorded tmux sessions have no authenticated project.
+        # A reporting capability permits inspection of recorded Console sessions.
+        # Do not expose terminals that Console has never recorded.
         self.views.sessions = [row for row in self.views.sessions if row['id'] in ids]
 
-    def root(self, key):
-        seen = set()
+    def ancestors(self, key):
+        seen, ancestors = {key}, set()
         while key in self.all_sessions:
-            if key in seen or len(seen) > 128:
-                raise ValueError('invalid session ancestry')
-            seen.add(key)
             parent = self.all_sessions[key].get('parent_session_id')
             if parent not in self.all_sessions:
-                return key
+                break
+            if parent in seen or len(seen) > 128:
+                raise ValueError('invalid session ancestry')
+            seen.add(parent)
+            ancestors.add(parent)
             key = parent
-        return key
+        return ancestors
 
     def target(self, name=None):
-        if not name or name in {self.identity['id'], self.identity['tmux_name']}:
-            name = self.current['tmux_name']
+        if not name:
+            name = self.current['id']
+        # Pinned IDs remain authoritative if another session reuses an old name
+        # or has a name equal to that ID.
         for row in self.views.sessions:
-            if name in (row['id'], row['tmux_name']):
+            if name == row['id']:
                 return row
-        raise PermissionError('session is outside the permitted project or tree')
+        for row in self.views.sessions:
+            if name == row['tmux_name']:
+                return row
+        raise KeyError('session not found')
 
     def authorize_control(self, target, *, own=False):
         if not target.get('managed') or target.get('execution_kind') != 'interactive':
@@ -108,16 +107,14 @@ class SessionControl:
         if target['id'] == self.current['id']:
             if own:
                 return
-            raise PermissionError('this operation requires a descendant session')
+            raise PermissionError('this operation requires an ancestor or descendant session')
         if self.current.get('profile') in READ_ONLY_PROFILES or self.current.get('agent_mode') == 'plan':
             raise PermissionError('read-only sessions cannot control other sessions')
-        key, seen = target.get('parent_session_id'), set()
-        while key in self.all_sessions and key not in seen:
-            if key == self.current['id']:
-                return
-            seen.add(key)
-            key = self.all_sessions[key].get('parent_session_id')
-        raise PermissionError('session is not a descendant of the caller')
+        caller_ancestors = self.ancestors(self.current['id'])
+        target_ancestors = self.ancestors(target['id'])
+        if target['id'] in caller_ancestors or self.current['id'] in target_ancestors:
+            return
+        raise PermissionError('session is not an ancestor or descendant of the caller')
 
     def run(self, command, payload):
         if command == 'read':
@@ -149,7 +146,9 @@ class SessionControl:
             config['name'] = payload.get('child_name')
             return self.manager.delegate(parent=self.current['id'], creator_surface='session-api', **config)
         if command == 'children':
-            self.authorize_control(target, own=True)
+            # Waiting only observes metadata; it needs no mutation authority.
+            if not target.get('managed') or target.get('execution_kind') != 'interactive':
+                raise PermissionError('session control requires a managed interactive target')
             if 'child_selectors' in payload or 'child_ids' in payload:
                 from .child_waits import select_children
                 if 'child_selectors' in payload and 'child_ids' in payload:
@@ -166,7 +165,8 @@ class SessionControl:
             from .session_relatives import relatives
             group = relatives(self.views.sessions, target['id'])
             ids = set(group['relations']['descendant'])
-            return {'children':[row for row in self.views.sessions if row['id'] in ids]}
+            return {'parent_id':target['id'],
+                    'children':[row for row in self.views.sessions if row['id'] in ids]}
         self.authorize_control(target)
         name = target['tmux_name']
         if command == 'interrupt':

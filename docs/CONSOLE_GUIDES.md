@@ -57,7 +57,13 @@ content-bound reviews. Four disposable native session profiles verified all
 seven copied package hashes and delivery receipts. Existing snapshots were not
 rewritten. Evidence is retained in `handoffs/console-guides-20261003/` in the
 parent workspace and summarized in [the overhaul audit](OVERHAUL_VERIFICATION_20261003.md).
-The following table records the applied capability-related changes.
+The following table records the historical applied capability-related changes.
+As of 0.28.27 (#186), [session capabilities](SESSION_CAPABILITIES.md) permit bounded
+inspection across all recorded Console sessions and task-authorized ancestor as
+well as descendant controls for writable non-Plan callers. Child waits are
+inspection. The historical project/tree read and descendant-only control wording
+below is superseded; installed custom guide packages are not rewritten by a code
+change.
 
 | Package | Applied content change in .1 |
 | --- | --- |
