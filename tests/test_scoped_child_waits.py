@@ -239,9 +239,60 @@ class ScopedChildWaitTests(unittest.TestCase):
             result=session_client.run(args)
         self.assertEqual(result['outcome'],'failure')
         self.assertEqual({c['id'] for c in result['children']},{'old','active','grandchild'})
-        args.child_selectors=['active']
-        with patch.object(session_client,'request',return_value={'children':[]}),self.assertRaisesRegex(RuntimeError,'updated server'):
-            session_client.run(args)
+        for selectors in (None, ['active']):
+            args.child_selectors=selectors
+            with self.subTest(selectors=selectors), \
+                    patch.object(session_client,'request',return_value={'children':[]}), \
+                    self.assertRaisesRegex(RuntimeError,'updated server'):
+                session_client.run(args)
+
+    def test_managed_unscoped_wait_pins_parent_across_rename_and_name_reuse(self):
+        calls=[]
+        def transport(command,payload):
+            self.assertEqual(command,'children');calls.append(payload.copy())
+            response=self.request(payload)
+            self.assertEqual(response.status_code,200,response.text)
+            return response.json()
+        def finish_and_reuse(interval):
+            with self.manager.database.connect() as db:
+                db.execute("UPDATE sessions SET tmux_name='renamed-active' WHERE id='active'")
+                db.execute("UPDATE sessions SET attention_state='ready_for_review' WHERE id='grandchild'")
+            self.insert('replacement','active-name','parent')
+        args=SimpleNamespace(command='session',session_command='wait-for-children',name='active-name',
+            timeout=5,poll_interval=1)
+        with patch.object(session_client,'request',side_effect=transport), \
+                patch.object(session_client.time,'sleep',side_effect=finish_and_reuse) as sleep:
+            result=session_client.run(args)
+        sleep.assert_called_once()
+        self.assertEqual(calls,[{'name':'active-name'},{'name':'active'}])
+        self.assertEqual(result['outcome'],'success')
+        self.assertEqual([child['id'] for child in result['children']],['grandchild'])
+        self.assertNotIn('selected_child_ids',result)
+
+    def test_managed_wait_rejects_changed_parent_in_both_modes(self):
+        child={'id':'active','tmux_name':'active-name','parent_session_id':'parent',
+               'running':True,'attention_state':'normal'}
+        for selectors in (None, ['active']):
+            args=SimpleNamespace(command='session',session_command='wait-for-children',name='parent-name',
+                timeout=5,poll_interval=1,child_selectors=selectors)
+            first={'parent_id':'parent','children':[child.copy()],'selected_child_ids':['active']}
+            second={**first,'parent_id':'replacement','children':[child.copy()]}
+            with self.subTest(selectors=selectors), \
+                    patch.object(session_client,'request',side_effect=[first,second]), \
+                    patch.object(session_client.time,'sleep'), \
+                    self.assertRaisesRegex(RuntimeError,'changed.*parent'):
+                session_client.run(args)
+
+    def test_managed_read_only_wait_can_observe_unrelated_parent(self):
+        self.insert('outside-child','outside-child-name','outside')
+        with self.manager.database.connect() as db:
+            db.execute("UPDATE sessions SET profile='reviewer',agent_mode='plan' WHERE id='parent'")
+        for selection in ({}, {'child_selectors':['outside-child-name']}):
+            with self.subTest(selection=selection):
+                response=self.request({'name':'outside-name',**selection})
+                self.assertEqual(response.status_code,200,response.text)
+                self.assertEqual(response.json()['parent_id'],'outside')
+                self.assertEqual([row['id'] for row in response.json()['children']],['outside-child'])
 
 
 if __name__=='__main__':

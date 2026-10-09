@@ -1,3 +1,11 @@
+## 0.28.27 — unreleased, 2026-10-10 (#186)
+
+- Impact: managed agents can inspect all recorded Console sessions by name or durable ID across projects and trees. Writable non-Plan children can update attention, interrupt, restart, and stop ancestors as well as descendants within the authorized task. Sibling/unrelated mutations, read-only/Plan mutations of others, private integration content, and delegation inheritance remain restricted.
+- Fixes: child waits use inspection permission and pin the parent ID in both scoped and unscoped modes, preserving the target across rename and name reuse. Known session API failures display fixed CLI reasons; arbitrary error bodies are never echoed.
+- Configuration/migration: no database migration or new flags. Inspection scope broadens for every authenticated managed session. Deploy client and server together: new wait clients require `parent_id` in every children response. Bundled role text and new session guidance reflect the policy; customized installed roles and existing snapshots require their normal explicit refresh. Package and displayed version advance beyond the installed 0.28.26 release.
+- Verification: baseline live inspection and isolated API/CLI fixtures reproduced the denials, stable-ID review failure, and rename/wait failure before edits. The session-control, inspection, managed-context, session-client, scoped-wait, child-capacity, lifecycle/identity, profile, core, and version suites passed through `scripts/test-isolated.py`: 342 tests and 735 subtests. Whitespace checks passed. Live rollout and external CI remain pending.
+- Rollback: select the retained prior release through its schema guard and restart web only, preserving databases and live sessions. Restore the matching CLI to avoid wait protocol mismatch; previous project/tree inspection and descendant-only control restrictions return.
+
 ## 0.28.25 — unreleased, 2026-10-05 (#182)
 
 - Impact: full-history secret scanning recognizes six proven synthetic logging-redaction fixture findings from two July commits. Exceptions identify exact commit/file/rule/line fingerprints; no token, path or rule is globally excluded. Product behavior remains the reviewed 0.28.24 batch.
