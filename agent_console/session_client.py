@@ -11,6 +11,24 @@ from .managed_context import managed_context
 NETWORK_PERMISSION_ERROR = ("Console session network access was denied by the sandbox. "
                             "Retry with authorized network access or network escalation; "
                             "no local writer fallback was attempted.")
+SAFE_REJECTION_DETAILS = frozenset({
+    'valid session reporting capability required',
+    'session not found',
+    'session or required field not found',
+    'session control requires a managed interactive caller',
+    'session control requires a managed interactive target',
+    'read-only sessions cannot control other sessions',
+    'this operation requires an ancestor or descendant session',
+    'session is not an ancestor or descendant of the caller',
+    'delegation must originate from the caller',
+    'parent role cannot delegate this child role',
+    'read-only or Plan parent cannot delegate writable work',
+    'child must inherit the parent project',
+    'child must inherit the parent repository',
+    'writable child sessions require an isolated worktree',
+    'selected session is not a direct child of the requested parent',
+    'child selector is unknown or ambiguous; use a unique durable child ID',
+})
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -33,6 +51,19 @@ def request(command, payload):
             return json.loads(raw)
     except urllib.error.HTTPError as exc:
         # Remote error bodies may contain submitted data or credentials.
+        detail = None
+        try:
+            with exc:
+                raw = exc.read(4097)
+            if len(raw) <= 4096:
+                body = json.loads(raw)
+                candidate = body.get('detail') if isinstance(body, dict) else None
+                if isinstance(candidate, str) and candidate in SAFE_REJECTION_DETAILS:
+                    detail = candidate
+        except Exception:
+            pass  # A broken error response must not hide the HTTP status.
+        if detail is not None:
+            raise ValueError(f'Console session request rejected (HTTP {exc.code}): {detail}') from None
         raise ValueError(f'Console session request rejected (HTTP {exc.code}); check session authorization and request constraints') from None
     except PermissionError:
         raise RuntimeError(NETWORK_PERMISSION_ERROR) from None
@@ -74,7 +105,7 @@ def run(args):
             raise ValueError('provide exactly one of NAME or --current')
         return request(command, {'name':current_ref(args.name),'state':args.state,'note':args.note})
     if command == 'kill' and (not args.yes or args.allow_unmanaged):
-        raise PermissionError('managed descendant kill requires --yes and cannot target unmanaged sessions')
+        raise PermissionError('managed session kill requires --yes and cannot target unmanaged sessions')
     if command != 'wait-for-children':
         return request(command, {'name':current_ref(args.name)})
     timeout = args.timeout if args.timeout is not None else 300
@@ -91,13 +122,19 @@ def run(args):
             payload['child_ids' if selected_ids is not None else 'child_selectors'] = selected_ids if selected_ids is not None else selectors
         observed = request('children', payload)
         children = observed['children']
+        observed_parent = observed.get('parent_id')
+        if not isinstance(observed_parent, str) or not observed_parent:
+            raise RuntimeError('Console did not confirm the wait parent; waiting requires an updated server')
+        if parent_id is not None and observed_parent != parent_id:
+            raise RuntimeError('Console changed the wait parent; inspect the session tree')
+        parent_id = observed_parent
         if selectors is not None:
             from .child_waits import select_children
-            if not observed.get('parent_id') or not observed.get('selected_child_ids'):
+            if not observed.get('selected_child_ids'):
                 raise RuntimeError('Console did not confirm the selected child batch; scoped waiting requires an updated server')
-            if parent_id is not None and (observed['parent_id'] != parent_id or observed['selected_child_ids'] != selected_ids):
+            if selected_ids is not None and observed['selected_child_ids'] != selected_ids:
                 raise RuntimeError('Console changed the selected wait batch; inspect the session tree')
-            parent_id, selected_ids = observed['parent_id'], observed['selected_child_ids']
+            selected_ids = observed['selected_child_ids']
             children = select_children(children, parent_id, selected_ids, ids_only=True)
         for child in children:
             attention = child.get('attention_state')

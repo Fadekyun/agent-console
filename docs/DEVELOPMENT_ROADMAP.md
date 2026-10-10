@@ -1,3 +1,9 @@
+## Session inspection and ancestor-control corrections — 2026-10-10 (#186)
+
+- [x] Allow bounded inspection of all recorded Console sessions, including cross-project peers by name or durable ID; keep relative selectors tree-scoped and private integration content redacted.
+- [x] Permit task-authorized ancestor and descendant controls for writable non-Plan sessions; retain unrelated/sibling mutation denials and delegation inheritance checks.
+- [x] Make child waits read-only, pin durable parent IDs across renames, and expose only fixed safe CLI failure explanations. Add API/CLI regressions for permissions, identity, and retained restrictions.
+
 ## Exact historical secret-scan fixture exceptions — 2026-10-05 (#182)
 
 - Scope six synthetic logging-redaction findings to their original commit, file, rule and line. Preserve all scan rules and future findings; no workflow or product behavior change.

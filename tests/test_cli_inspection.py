@@ -159,7 +159,10 @@ class CliInspectionTests(unittest.TestCase):
             self.assertEqual(self.invoke_views(['session', 'review', '--relative', 'child', '--index', '0'])[0], 2)
             self.assertEqual(self.invoke_views(['session', 'review', 'one', '--relative', 'child'])[0], 2)
             self.add_relative('outside', None)
-            self.assertEqual(self.invoke_views(['session', 'review', '--session-id', 'outside'])[0], 2)
+            code, out, error = self.invoke_views(['session', 'review', '--session-id', 'outside'])
+            self.assertEqual(code, 0, error)
+            self.assertEqual(json.loads(out)['session']['id'], 'outside')
+            self.assertEqual(self.invoke_views(['session', 'review', '--session-id', 'missing'])[0], 2)
 
     def test_relatives_ancestor_order_limits_and_corrupt_tree(self):
         self.add_relative('b', 's')

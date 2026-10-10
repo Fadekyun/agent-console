@@ -268,10 +268,12 @@ class InspectionViews:
         return relatives(self.sessions, current["id"])
 
     def relative_name(self, relation=None, index=None, session_id=None):
-        group = self.relatives()
         if session_id:
-            matches = [item for item in group["members"] if item["id"] == session_id]
+            matches = [item for item in self.sessions if item["id"] == session_id]
+            if len(matches) != 1:
+                raise ValueError("session ID is not available; run session list")
         else:
+            group = self.relatives()
             matches = [item for item in group["members"] if
                        item["id"] in group["relations"][relation]]
             # Follow the documented relation order, including nearest ancestors first.
