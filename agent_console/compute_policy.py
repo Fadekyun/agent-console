@@ -24,6 +24,12 @@ HOST_RESERVE_BYTES = 2 * GiB
 GUEST_RESERVE_BYTES = 512 * MiB
 GUEST_DISK_RESERVE_BYTES = 6 * GiB
 LAPTOP_RAM_CEILING_BYTES = 16_000_000_000
+HOST_GATE_REASONS = frozenset({
+    'host_snapshot_unavailable', 'host_snapshot_stale', 'host_maintenance',
+    'host_snapshot_memory_low', 'host_snapshot_container_memory_low',
+    'host_snapshot_disk_low', 'host_snapshot_temporary_disk_low',
+    'host_snapshot_memory_pressure',
+})
 
 
 @dataclass(frozen=True)
@@ -160,6 +166,9 @@ def admission(
         return 'telemetry_missing'
     if telemetry.get('enabled') is not True:
         return 'worker_disabled'
+    if telemetry.get('host_gate') is not None:
+        gate = telemetry['host_gate']
+        return gate if isinstance(gate, str) and gate in HOST_GATE_REASONS else 'invalid_telemetry:host_gate'
     if telemetry.get('operator_hold') is not False:
         return 'operator_hold'
     if telemetry.get('online') is not True:

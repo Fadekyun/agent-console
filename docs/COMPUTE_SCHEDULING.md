@@ -14,6 +14,12 @@ receipts and status page are available without enabling dispatch. Neither an API
 request nor a queued job can change the environment flag or enable laptop profiles.
 Canary mode does not start the dispatcher.
 
+Integration update (2026-10-10): the deployed private Console is already 0.29.1,
+with native-history recovery and host launch admission absent from public main.
+This source candidate is 0.30.0. Root must retain/integrate those private changes
+before any release; deploying this PR's public-main tree directly would regress
+the live recovery/admission behavior. This change does not authorize such a switch.
+
 The only executable adapter, `maintenance.report`, returns a compact allowlisted
 copy of trusted resource telemetry in process. It opens no browser, runs no job
 subprocess, takes no arbitrary command, and performs no production writes. Its
@@ -82,6 +88,14 @@ raw host command output and credentials are not exposed in status.
 
 Admission requires all of:
 
+- The existing root-owned host snapshot at `/run/agent-console-host-resources.json`
+  (or `AGENT_CONSOLE_RESOURCE_SNAPSHOT`). The queue honors its maintenance flag,
+  RAM/pressure/disk/temp-space vetoes and sixty-second freshness limit before any
+  host probe. Missing, malformed, symlinked, non-root-owned or group/world-writable
+  snapshots fail closed, with no SSH fallback around the shared gate. A veto resets
+  warm-up. This keeps the host maintenance controller authoritative; the detailed
+  compute checks below remain stricter. No snapshot producer or live launch setting
+  is changed by this source update.
 - An enabled dispatcher, released persistent hold and fresh telemetry (at most 30
   seconds old). Five minutes of continuously fresh healthy observations are needed;
   restart, hold, clock discontinuity, stale observations or pressure reset warm-up.
@@ -99,6 +113,15 @@ free in CT115 and thin-pool data at 89.87% (metadata 3.55%). Both violate admiss
 limits; live dispatch must stay blocked until both storage conditions recover.
 No cleanup is included in this change. Root's heavy-work/Console-hunt coordination uses the persistent
 hold; unrelated launch paths do not yet acquire this reservation automatically.
+
+The Oct 5 readings above are historical. On Oct 10, prior approved host maintenance
+had already restored roughly 10.8 GiB of CT115 free space and reduced pressure.
+An additional run of the existing bounded storage-maintenance service returned
+freed blocks and reduced thin-pool usage from 81.82% to 80.29%; it found download
+caches within budget and deleted none. A bounded root-only trim of CT101 then
+reduced pool usage to 79.64%. No files were deleted or services restarted by these
+trims. The 80% compute threshold is unchanged.
+Recheck current values before admission; never infer present capacity from this note.
 
 ## Laptop descriptor and later enrollment
 

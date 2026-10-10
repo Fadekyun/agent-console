@@ -14,13 +14,17 @@ import selectors
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import time
+
+from .compute_policy import HOST_GATE_REASONS
 
 
 GIB = 1024 ** 3
 MAX_PROBE_BYTES = 32768
 PROBE_TIMEOUT_SECONDS = 12.0
+DEFAULT_RESOURCE_SNAPSHOT = '/run/agent-console-host-resources.json'
 
 # Both the volume and its backing pool are checked.  A different storage layout
 # is unsupported, rather than silently borrowing another pool's free space.
@@ -148,6 +152,50 @@ def _memory_available(raw: str) -> int:
     return int(_number(int(rows[0][0]))) * 1024
 
 
+def host_snapshot_gate(path: str | None, now: float) -> str | None:
+    """Honor the existing root sampler's veto; never substitute SSH for it.
+
+    The host publishes this numeric snapshot into the guest as UID 0. The path is
+    service configuration, never job input. Detailed compute limits still apply
+    after this shared launch gate, including the stricter memory/storage reserves.
+    """
+    if not path:
+        return None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd) as stream:
+            metadata = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0
+                    or metadata.st_mode & 0o022 or metadata.st_size > 8192):
+                raise ProbeError('untrusted snapshot')
+            raw = stream.read(8193)
+            if len(raw) > 8192:
+                raise ProbeError('oversized snapshot')
+            data = json.loads(raw)
+        for key in ('sampled_at', 'host_available_bytes', 'host_full_psi_avg10',
+                    'ct115_memory_headroom_bytes', 'ct115_disk_free_bytes', 'tmp_free_bytes'):
+            _number(data[key])
+        if not isinstance(data.get('maintenance'), bool):
+            raise ProbeError('missing maintenance state')
+        if data['maintenance']:
+            return 'host_maintenance'
+        if not -5 <= now - data['sampled_at'] <= 60:
+            return 'host_snapshot_stale'
+        for key, threshold, reason in (
+            ('host_available_bytes', 2 * GIB, 'host_snapshot_memory_low'),
+            ('ct115_memory_headroom_bytes', GIB // 2, 'host_snapshot_container_memory_low'),
+            ('ct115_disk_free_bytes', 4 * GIB, 'host_snapshot_disk_low'),
+            ('tmp_free_bytes', 10 * GIB, 'host_snapshot_temporary_disk_low'),
+        ):
+            if data[key] < threshold:
+                return reason
+        if data['host_full_psi_avg10'] > 5:
+            return 'host_snapshot_memory_pressure'
+    except (OSError, ValueError, KeyError, TypeError):
+        return 'host_snapshot_unavailable'
+    return None
+
+
 class ComputeSampler:
     """Trusted server-side sampler; restart or a stale sample resets warm-up."""
 
@@ -156,6 +204,7 @@ class ComputeSampler:
                  read_text: Callable[[Path], str] = _read_text,
                  disk_free: Callable[[Path], int] | None = None,
                  device_id: Callable[[Path], int] | None = None,
+                 resource_snapshot: str | None = None,
                  hostname: Callable[[], str] = socket.gethostname):
         self.filesystem_path = Path(filesystem_path)
         self._transport = transport
@@ -163,6 +212,8 @@ class ComputeSampler:
         self._disk_free = disk_free or (lambda path: shutil.disk_usage(path).free)
         self._device_id = device_id or (lambda path: path.stat().st_dev)
         self._hostname = hostname
+        self._resource_snapshot = ((os.getenv('AGENT_CONSOLE_RESOURCE_SNAPSHOT') or DEFAULT_RESOURCE_SNAPSHOT)
+                                   if resource_snapshot is None else resource_snapshot)
         self._healthy_since: float | None = None
         self._previous_sample: float | None = None
 
@@ -204,6 +255,10 @@ class ComputeSampler:
         if not enabled:
             self._healthy_since = self._previous_sample = None
             return {**result, 'error': 'disabled'}
+        gate = host_snapshot_gate(self._resource_snapshot, timestamp)
+        if gate:
+            self._healthy_since = self._previous_sample = None
+            return {**result, 'host_gate': gate, 'error': gate}
         try:
             # This adapter knows only CT115's root thin volume. A relocated
             # state/scratch volume needs its own verified storage mapping.
@@ -268,6 +323,7 @@ def maintenance_report(telemetry: Mapping) -> dict:
             result[key] = _number(telemetry.get(key))
         except ProbeError:
             continue
-    if telemetry.get('error') in ('disabled', 'telemetry_unavailable', ''):
-        result['error'] = telemetry['error']
+    error = telemetry.get('error')
+    if isinstance(error, str) and error in {'disabled', 'telemetry_unavailable', '', *HOST_GATE_REASONS}:
+        result['error'] = error
     return result

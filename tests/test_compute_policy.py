@@ -64,6 +64,12 @@ class ComputePolicyTests(unittest.TestCase):
         self.assertEqual(self.reason(operator_hold=None), 'operator_hold')
         self.assertEqual(self.reason(enabled=1), 'worker_disabled')
 
+    def test_existing_host_admission_veto_is_preserved(self):
+        self.assertEqual(self.reason(host_gate='host_maintenance'), 'host_maintenance')
+        self.assertEqual(self.reason(host_gate='host_snapshot_stale'), 'host_snapshot_stale')
+        for value in ('arbitrary', [], True, ''):
+            self.assertEqual(self.reason(host_gate=value), 'invalid_telemetry:host_gate')
+
     def test_placement_uses_physical_host_and_exact_guest(self):
         self.assertEqual(self.reason(physical_host='lxc-115'), 'physical_host_mismatch')
         self.assertEqual(self.reason(guest_id='lxc-106'), 'guest_mismatch')

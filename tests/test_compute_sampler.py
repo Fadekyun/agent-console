@@ -1,9 +1,14 @@
 import json
+import os
+from pathlib import Path
 import subprocess
+import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from agent_console.compute_sampler import (
-    GIB, HOST_PROBE_COMMAND, MAX_PROBE_BYTES, ComputeSampler, maintenance_report,
+    GIB, HOST_PROBE_COMMAND, MAX_PROBE_BYTES, ComputeSampler, maintenance_report, host_snapshot_gate,
 )
 
 
@@ -32,6 +37,7 @@ class ComputeSamplerTests(unittest.TestCase):
             read_text=lambda path: self.files[str(path)],
             disk_free=lambda path: self.free,
             device_id=lambda path: 1,
+            resource_snapshot='',
             hostname=lambda: 'agent-console-staging',
         )
 
@@ -50,6 +56,14 @@ class ComputeSamplerTests(unittest.TestCase):
         self.assertEqual(report['error'], 'disabled')
         self.assertEqual(self.calls, [])
         self.assertNotIn('host_available_bytes', report)
+
+    def test_host_veto_prevents_probe_and_resets_observation_history(self):
+        self.sample(0)
+        with patch('agent_console.compute_sampler.host_snapshot_gate', return_value='host_maintenance'):
+            report = self.sample(10)
+        self.assertEqual(report['host_gate'], 'host_maintenance')
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.sample(20)['healthy_since'], 20)
 
     def test_relocated_state_volume_fails_closed_before_host_probe(self):
         self.sampler._device_id = lambda path: 1 if str(path) == '/' else 2
@@ -166,12 +180,71 @@ class ComputeSamplerTests(unittest.TestCase):
 
     def test_report_excludes_non_numeric_or_non_finite_telemetry(self):
         report = maintenance_report({'host_available_bytes': 'secret', 'guest_available_bytes': float('nan'),
-                                     'sampled_at': True, 'physical_host': 'untrusted', 'online': 'yes'})
+                                     'sampled_at': True, 'physical_host': 'untrusted', 'online': 'yes', 'error': []})
         self.assertNotIn('host_available_bytes', report)
         self.assertNotIn('guest_available_bytes', report)
         self.assertNotIn('sampled_at', report)
         self.assertNotIn('physical_host', report)
         self.assertNotIn('online', report)
+        self.assertNotIn('error', report)
+
+
+class HostSnapshotGateTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name) / 'resources.json'
+        self.data = dict(sampled_at=1000, host_available_bytes=6 * GIB,
+                         host_full_psi_avg10=0, ct115_memory_headroom_bytes=2 * GIB,
+                         ct115_disk_free_bytes=10 * GIB, tmp_free_bytes=16 * GIB,
+                         maintenance=False)
+        self.owner, self.mode = 0, 0o100644
+        self.stat = os.fstat
+
+    def gate(self, **changes):
+        self.path.write_text(json.dumps({**self.data, **changes}))
+
+        def metadata(fd):
+            actual = self.stat(fd)
+            return SimpleNamespace(st_uid=self.owner, st_mode=self.mode, st_size=actual.st_size)
+
+        with patch('agent_console.compute_sampler.os.fstat', side_effect=metadata):
+            return host_snapshot_gate(str(self.path), 1000)
+
+    def test_healthy_existing_snapshot_and_explicit_unconfigured_host(self):
+        self.assertIsNone(self.gate())
+        self.assertIsNone(host_snapshot_gate(None, 1000))
+
+    def test_shared_maintenance_freshness_and_resource_vetoes(self):
+        for changes, reason in (
+            ({'maintenance': True}, 'host_maintenance'),
+            ({'sampled_at': 939}, 'host_snapshot_stale'),
+            ({'sampled_at': 1006}, 'host_snapshot_stale'),
+            ({'host_available_bytes': GIB}, 'host_snapshot_memory_low'),
+            ({'ct115_memory_headroom_bytes': 1}, 'host_snapshot_container_memory_low'),
+            ({'ct115_disk_free_bytes': GIB}, 'host_snapshot_disk_low'),
+            ({'tmp_free_bytes': GIB}, 'host_snapshot_temporary_disk_low'),
+            ({'host_full_psi_avg10': 6}, 'host_snapshot_memory_pressure'),
+        ):
+            with self.subTest(reason=reason):
+                self.assertEqual(self.gate(**changes), reason)
+
+    def test_untrusted_owner_writable_or_nonregular_snapshot_fails_closed(self):
+        for owner, mode in ((1000, 0o100644), (0, 0o100666), (0, 0o010644)):
+            self.owner, self.mode = owner, mode
+            self.assertEqual(self.gate(), 'host_snapshot_unavailable')
+
+    def test_missing_symlink_and_malformed_data_never_bypass_gate(self):
+        self.assertEqual(host_snapshot_gate(str(self.path), 1000), 'host_snapshot_unavailable')
+        self.gate()
+        link = self.path.with_name('linked.json')
+        link.symlink_to(self.path)
+        self.assertEqual(host_snapshot_gate(str(link), 1000), 'host_snapshot_unavailable')
+        for change in ({'maintenance': None}, {'sampled_at': True},
+                       {'host_available_bytes': float('nan')}, {'tmp_free_bytes': 'secret'},
+                       {'unused': 'x' * 9000}):
+            with self.subTest(change=next(iter(change))):
+                self.assertEqual(self.gate(**change), 'host_snapshot_unavailable')
 
 
 if __name__ == '__main__':
