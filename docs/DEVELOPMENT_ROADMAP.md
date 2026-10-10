@@ -1,3 +1,10 @@
+## Durable compute queue and physical-host admission — 2026-10-10 (#181)
+
+- Implement the first source slice: companion-store compute receipts, immutable job keys, atomic physical-host reservations, lease/generation fencing, conservative n100/CT115 telemetry admission, and a bounded in-process report adapter.
+- Add authenticated operator API/local CLI and read-only status. Dispatch defaults disabled with a separate persistent hold; preserve unknown reservations and reject unchanged-budget OOM retry.
+- Integrate public feature `338942af427d682ed86cd3f1ef87371af9ca4819` onto private 0.29.2 `6efbe6dc86d44f6b73b5efd555e453b365c68309`. Honor the root-owned host resource snapshot before compute probes; retain native-history recovery, host launch admission, terminal responsiveness, harness compatibility and the latest session permissions/wait protocol. Keep package/UI versions at 0.30.0 and initial deployment compute-disabled with its persistent hold on.
+- Keep the verified AGC laptop descriptor disabled, with provisional reclaimable 16 GB ceiling and Wednesday–Sunday availability. Worker enrollment, cgroup subprocess adapters, staff-priority throttling, timer migration and interruption-safe production publication follow after root review; no laptop/runtime deployment is part of this source change. See `COMPUTE_SCHEDULING.md` for acceptance and rollback.
+
 ## Session inspection and ancestor-control corrections — 2026-10-10 (#186)
 
 - [x] Allow bounded inspection of all recorded Console sessions, including cross-project peers by name or durable ID; keep relative selectors tree-scoped and private integration content redacted.

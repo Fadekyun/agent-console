@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Compute queue · Agent Console</title>
+  <script src="/static/theme-bootstrap.js?v=1"></script>
+  <link rel="stylesheet" href="/static/workbench.css?v=0.29.0">
+  <style>
+    main { max-width: 72rem; margin: auto; padding: 1.5rem; }
+    .compute-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; }
+    .compute-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: .7rem; vertical-align: top; overflow-wrap: anywhere; }
+    th { border-bottom: 1px solid currentColor; }
+    #compute-message { min-height: 1.5em; }
+    .compute-detail { white-space: pre-wrap; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <header class="top"><a class="brand" href="/work">← Agent Console</a></header>
+  <main>
+    <h1>Compute queue</h1>
+    <p>Queued work stays on the server while a worker is offline. This page shows status and refreshes every ten seconds.</p>
+    <p id="compute-message" role="status" aria-live="polite">Loading compute status…</p>
+    <section class="panel" aria-labelledby="dispatch-heading">
+      <h2 id="dispatch-heading">Dispatch</h2>
+      <p id="compute-dispatch"></p>
+      <p id="compute-counts"></p>
+    </section>
+    <section aria-labelledby="workers-heading">
+      <h2 id="workers-heading">Workers</h2>
+      <div id="compute-workers" class="compute-cards"></div>
+    </section>
+    <section class="panel" aria-labelledby="jobs-heading">
+      <h2 id="jobs-heading">Jobs</h2>
+      <p>The most recent 100 jobs are shown. Counts include the full queue.</p>
+      <p id="compute-empty" hidden>The queue is empty.</p>
+      <div class="compute-scroll"><table>
+        <thead><tr><th scope="col">Job</th><th scope="col">Work</th><th scope="col">Worker</th><th scope="col">State</th><th scope="col">Details</th></tr></thead>
+        <tbody id="compute-jobs"></tbody>
+      </table></div>
+    </section>
+    <section class="panel" aria-labelledby="reservations-heading">
+      <h2 id="reservations-heading">Reserved capacity</h2>
+      <p>Unknown attempts retain their reservation until termination is verified. An expired lease does not prove a process stopped.</p>
+      <div id="compute-reservations"></div>
+    </section>
+  </main>
+  <script type="module">
+    const element = (tag, content, className) => {
+      const node = document.createElement(tag);
+      node.textContent = content == null ? '' : String(content);
+      if (className) node.className = className;
+      return node;
+    };
+    const detail = value => value == null ? '' : typeof value === 'string' ? value : JSON.stringify(value);
+    const array = value => Array.isArray(value) ? value : [];
+    const message = document.getElementById('compute-message');
+    let timer;
+    let refreshing = false;
+    let lastUpdated;
+
+    function render(status) {
+      document.getElementById('compute-dispatch').textContent =
+        status.enabled ? (status.held ? 'Dispatch is on hold.' : 'Dispatch is enabled; admission checks apply.') : 'Dispatch is disabled.';
+      document.getElementById('compute-counts').textContent =
+        Object.entries(status.counts || {}).map(([state, count]) => `${state}: ${count}`).join(' · ');
+      const workers = array(status.workers).map(worker => {
+        const card = element('article', '', 'panel');
+        card.append(element('h3', worker.worker_id), element('p', `Host: ${worker.physical_host || 'unverified'}`));
+        card.append(element('p', worker.enabled ? 'Enabled' : 'Disabled'));
+        card.append(element('p', detail(worker.availability), 'compute-detail'));
+        if (worker.reason || worker.blocked_reason) card.append(element('p', detail(worker.reason || worker.blocked_reason), 'compute-detail'));
+        return card;
+      });
+      document.getElementById('compute-workers').replaceChildren(...workers);
+      const jobs = array(status.jobs);
+      document.getElementById('compute-empty').hidden = jobs.length !== 0;
+      document.getElementById('compute-jobs').replaceChildren(...jobs.map(job => {
+        const row = element('tr');
+        [job.id || job.job_id, job.kind, job.execution_target, job.state || job.phase,
+          detail(job.blocked_reason || job.reason || job.admission_reasons || '')].forEach(value => row.append(element('td', value)));
+        return row;
+      }));
+      const reservations = array(status.reservations);
+      document.getElementById('compute-reservations').replaceChildren(...(reservations.length ? reservations.map(reservation =>
+        element('p', detail(reservation), 'compute-detail')) : [element('p', 'No active reservations.')]));
+    }
+
+    async function refresh() {
+      clearTimeout(timer);
+      if (document.hidden || refreshing) return;
+      refreshing = true;
+      const abort = new AbortController();
+      const deadline = setTimeout(() => abort.abort(), 8000);
+      try {
+        const response = await fetch('/api/compute', {credentials: 'same-origin', cache: 'no-store', signal: abort.signal});
+        if (!response.ok) throw new Error('Status unavailable');
+        render(await response.json());
+        lastUpdated = new Date().toLocaleTimeString();
+        message.textContent = `Updated ${lastUpdated}.`;
+      } catch {
+        message.textContent = lastUpdated ? `Status unavailable. Displayed data is stale; last updated ${lastUpdated}.` : 'Compute status is unavailable. Check your connection and operator access.';
+      } finally {
+        clearTimeout(deadline);
+        refreshing = false;
+        if (!document.hidden) timer = setTimeout(refresh, 10000);
+      }
+    }
+    document.addEventListener('visibilitychange', () => {
+      clearTimeout(timer);
+      if (!document.hidden) refresh();
+    });
+    refresh();
+  </script>
+</body>
+</html>
