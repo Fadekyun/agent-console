@@ -283,16 +283,21 @@ class ScopedChildWaitTests(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError,'changed.*parent'):
                 session_client.run(args)
 
-    def test_managed_read_only_wait_can_observe_unrelated_parent(self):
+    def test_managed_read_only_wait_requires_same_tree(self):
         self.insert('outside-child','outside-child-name','outside')
         with self.manager.database.connect() as db:
             db.execute("UPDATE sessions SET profile='reviewer',agent_mode='plan' WHERE id='parent'")
-        for selection in ({}, {'child_selectors':['outside-child-name']}):
-            with self.subTest(selection=selection):
-                response=self.request({'name':'outside-name',**selection})
-                self.assertEqual(response.status_code,200,response.text)
-                self.assertEqual(response.json()['parent_id'],'outside')
-                self.assertEqual([row['id'] for row in response.json()['children']],['outside-child'])
+        for linked in (False, True):
+            if linked:
+                with self.manager.database.connect() as db:
+                    db.execute("UPDATE sessions SET parent_session_id='parent' WHERE id='outside'")
+            for selection in ({}, {'child_selectors':['outside-child-name']}, {'child_ids':['outside-child']}):
+                with self.subTest(linked=linked, selection=selection):
+                    response=self.request({'name':'outside-name',**selection})
+                    self.assertEqual(response.status_code,200 if linked else 403,response.text)
+                    if linked:
+                        self.assertEqual(response.json()['parent_id'],'outside')
+                        self.assertEqual([row['id'] for row in response.json()['children']],['outside-child'])
 
 
 if __name__=='__main__':

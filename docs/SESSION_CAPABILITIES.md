@@ -17,14 +17,19 @@ counts as successful completion. Saved transcripts and metadata remain readable.
 The Linux guarded offline reader remains available outside managed sessions.
 Service-backed file reads use descriptor containment checks on Linux and macOS.
 
-Writable, non-Plan roles can update attention, interrupt, restart, or stop their
-ancestors and descendants within the current task authorization. Mutations of
-siblings and unrelated sessions remain denied; a role cannot interrupt, restart,
-or stop itself. Targets and callers must be managed interactive sessions.
+Every role, including read-only and Plan sessions, can update attention, interrupt,
+restart, or stop other sessions sharing its root tree within the current task
+authorization. This includes parents, siblings, cousins, and descendants, even
+when the user manually links sessions from different projects. A shared project
+does not grant control of another tree. A session can update its own attention,
+but cannot interrupt, restart, or stop itself. Targets and callers must be managed
+interactive sessions. Controls pin the target's durable ID, so a renamed session's
+old name cannot redirect an operation to its replacement.
+
+Session coordination does not change repository or delegation permissions.
 Writable roles can delegate any compatible role within the current authorization.
 Read-only or Plan parents can delegate read-only roles,
-including verifier, but cannot upgrade to writable modes. Read-only callers can
-signal their own attention state. Children inherit the project and repository;
+including verifier, but cannot upgrade to writable modes. Children inherit the project and repository;
 coding delegates and writable delegates into Git repositories get isolated worktrees.
 Non-coding general/shell work in a non-Git workspace remains supported.
 Human Add-session links retain their existing operator authority; agent capability
@@ -33,8 +38,9 @@ configured positive per-parent child limits (default `0`, unlimited), and global
 A child that disappears without `ready_for_review` is a failure; `blocked` or
 `needs_input` requires intervention. Ordinary single sessions need no extra stages.
 
-Child waits observe metadata and are available to read-only/Plan callers for any
-recorded managed interactive parent. Both scoped and unscoped waits pin the
+Child waits observe metadata and are available to every role for a managed
+interactive parent in the same tree, including the caller itself. Both scoped
+and unscoped waits pin the
 parent's durable ID on the first response, so renames and reused names cannot
 change the target. Every `children` response includes `parent_id`; a new client
 rejects an older server that cannot confirm it. No database migration is needed.
@@ -46,12 +52,13 @@ CLI examples:
 ```sh
 agentctl session relatives --current
 agentctl session review --relative child --index 1
+agentctl session interrupt OTHER_SESSION_ID
 agentctl delegate verifier --parent "$AGENT_CONSOLE_SESSION_ID" --task 'Verify the acceptance criteria'
 agentctl session attention --current --state ready_for_review
 ```
 
-The capability does not grant push, merge, deployment, release, or environment
-management authority. Harness sandbox guarantees still differ; Pi, Hermes, and
+The capability does not grant terminal input, push, merge, deployment, release,
+or environment management authority. Harness sandbox guarantees still differ; Pi, Hermes, and
 shell do not gain filesystem enforcement from these Console API checks.
 
 ## Skills and customized roles
