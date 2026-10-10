@@ -94,7 +94,7 @@ def parser() -> argparse.ArgumentParser:
     review.add_argument("name", nargs="?")
     review.add_argument("--relative", choices=["parent", "root", "child", "sibling", "ancestor", "descendant"])
     review.add_argument("--index", type=int, help="1-based index from session relatives")
-    review.add_argument("--session-id", help="stable ID of a member of your tree")
+    review.add_argument("--session-id", help="stable ID of any recorded Console session")
     review.add_argument("--lines", type=int, default=200)
     review.add_argument("--json", action="store_true")
     inspect = session_commands.add_parser("inspect")
@@ -104,7 +104,7 @@ def parser() -> argparse.ArgumentParser:
     context_show.add_argument("--current", action="store_true")
     context_show.add_argument("--json", action="store_true")
     attention = session_commands.add_parser("attention")
-    attention.add_argument("name", nargs="?")
+    attention.add_argument("name", nargs="?", help="session name or ID; managed agents may target their own tree")
     attention.add_argument("--current", action="store_true")
     attention.add_argument(
         "--state",
@@ -131,9 +131,9 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--plan-effort", choices=sorted(CODEX_EFFORT_LEVELS),
                         help="Codex plan-mode reasoning effort (codex/codex-pro only)")
     interrupt = session_commands.add_parser("interrupt")
-    interrupt.add_argument("name")
+    interrupt.add_argument("name", help="session name or ID; managed agents may target another session in their tree")
     restart = session_commands.add_parser("restart-agent")
-    restart.add_argument("name")
+    restart.add_argument("name", help="session name or ID; managed agents may target another session in their tree")
     resume = session_commands.add_parser('resume')
     resume.add_argument('name')
     rename = session_commands.add_parser("rename")
@@ -158,7 +158,7 @@ def parser() -> argparse.ArgumentParser:
     group_open.add_argument("group_id")
 
     kill = session_commands.add_parser("kill")
-    kill.add_argument("name")
+    kill.add_argument("name", help="session name or ID; managed agents may target another session in their tree")
     kill.add_argument("--yes", action="store_true")
     kill.add_argument("--allow-unmanaged", action="store_true")
     archive = session_commands.add_parser("archive")
@@ -167,7 +167,7 @@ def parser() -> argparse.ArgumentParser:
     archive.add_argument("--yes", action="store_true")
     archive.add_argument("--allow-unmanaged", action="store_true")
     wait_children = session_commands.add_parser("wait-for-children")
-    wait_children.add_argument("name")
+    wait_children.add_argument("name", help="parent session name or ID; managed agents may target their own tree")
     wait_children.add_argument("--child", dest="child_selectors", action="append", metavar="ID_OR_NAME",
                                help="wait only for these direct children; repeat for a batch")
     wait_children.add_argument("--timeout", type=int, default=None)

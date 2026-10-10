@@ -5,6 +5,14 @@
 - Verification: run isolated Environment/CommandCode/provider/model/session regressions, broker fake-upstream tests, protected launch integration tests and browser Environment/media checks. Tests use synthetic values and private temporary state; real integrations remain an operator acceptance step.
 - Rollback: keep the broker available for existing broker-connected sessions. Restore the previous reviewed application and native launch assets through the normal rollback process, or stop those sessions and create new ones after restoring direct account configuration. Removing broker settings changes new launches only; this version refuses restart or resume of a broker-backed session with broker mode disabled before touching its process, credentials, or launch assets. No keys are exported to legacy files.
 
+## 0.30.2 — unreleased, 2026-10-10 (#190)
+
+- Impact: all managed interactive roles, including read-only and Plan sessions, can coordinate other sessions sharing their root tree: attention, interrupt, restart, and stop. Parents, siblings, cousins, and descendants are included across projects. Child waits use the same tree boundary. Recorded-session inspection remains available across trees; sharing a project alone does not grant control.
+- Boundaries: durable target IDs, rejection of unmanaged/noninteractive targets, existing self-operation rules, restart readiness, and delegation role/mode/repository/worktree checks remain in place. This grants no terminal-input, environment, or release authority.
+- Configuration/migration: apply the same-tree controls to the current compute queue and cache-aware sampler base; those features are preserved. No database migration or permission settings. Bundled profiles and new launch guidance describe the policy; customized installed profiles and existing session snapshots retain their normal explicit refresh process. No running sessions are changed.
+- Verification: focused session-control, session-client, selected-child wait, lifecycle identity and version checks cover all roles, mixed-project trees, cousins, separate roots, cycles, rename/name reuse and excluded operations. Original change verification also covered profiles, managed context, delegation, restart readiness and inspection. No full suite or live session mutation is part of this integration.
+- Rollback: select the retained previous release and its matching CLI, then restart only the web service. Prior ancestor/descendant and writable-role control restrictions return; preserve databases and live sessions.
+
 ## 0.30.1 — unreleased, 2026-10-10 (#191)
 
 - Impact: fix false low-memory launch blocks when CT115 holds reclaimable inactive file cache. Each finite parent/namespace memory limit is evaluated against its own usage and cache counters; the tightest adjusted headroom wins. Anonymous, active-file and kernel memory stay charged.

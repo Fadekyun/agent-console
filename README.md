@@ -56,7 +56,7 @@ Open a session and choose **+ Add session** to put a helper beneath it. Give the
 
 The tree groups related work. A tree link does not send a task, share conversation memory or make one session wait for another. A manually added session starts immediately; review and send its task draft when ready. Scheduling is optional and has its own controls.
 
-Managed sessions can inspect recorded sessions, including other projects and trees. Sessions with writable roles outside Plan mode can manage their ancestors and descendants within the authorized task. They cannot control siblings or unrelated sessions. See [session capabilities](docs/SESSION_CAPABILITIES.md) for command details and restrictions.
+Managed sessions can inspect and control related interactive sessions in the same tree, including parents and siblings. Repository editing permissions still come from their role and mode. Other trees cannot be controlled through a session credential. See [session capabilities](docs/SESSION_CAPABILITIES.md) for command details and restrictions.
 
 Choose a role that matches the task:
 
@@ -108,7 +108,7 @@ The broker is optional and must be configured by the host operator before protec
 | The terminal disconnected | Reopen or reconnect the terminal. Check the session state before restarting it. |
 | A normal environment change has not appeared | Explicitly restart the affected session when you are ready. |
 | A protected connection fails | Check the broker service, its fixed upstream configuration and the key's scope. |
-| A session cannot control another session | Check that the caller has a writable role outside Plan mode and that the target is a managed interactive ancestor or descendant. Sibling controls require the owner UI. |
+| A session cannot control another session | Check that both belong to the same tree and that the target is a managed interactive session. |
 
 Useful host commands:
 
@@ -131,9 +131,9 @@ For an existing Git installation, the guarded update command is `scripts/update.
 
 - [Documentation index](docs/README.md)
 - [Operations and recovery](docs/operations.md) · [Recovery guide](docs/recovery.md)
+- [Optional compute queue and host admission](docs/COMPUTE_SCHEDULING.md)
 - [Security and authentication](docs/security.md) · [Accounts](docs/auth-contexts.md)
 - [Pi and Hermes model setup](docs/PI_HERMES_COMMANDCODE.md)
-- [Optional compute queue and host admission](docs/COMPUTE_SCHEDULING.md)
 - [CLI entrypoints](docs/selected-release-entrypoints.md) · [Architecture](docs/architecture.md)
 - [Roadmap](docs/DEVELOPMENT_ROADMAP.md) · [Release notes](docs/RELEASE_NOTES.md)
 - [Contribution rules](AGENTS.md) · [Recreate the README media](docs/media/README.md)

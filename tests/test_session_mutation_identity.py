@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from agent_console.manager import SessionIdentityConflict, SessionManager
+from agent_console.session_control import SessionControl
 from test_web import WebTests as _Fixture
 
 
@@ -87,6 +88,27 @@ class SessionMutationIdentityTests(unittest.TestCase):
             with self.assertRaises(SessionIdentityConflict):
                 self.manager.interrupt('absent', session_id='absent-id')
             interrupt.assert_not_called()
+
+    def test_same_tree_control_snapshot_cannot_mutate_reused_name(self):
+        caller = self.create('caller')
+        target = self.create('target')
+        with self.manager.database.connect() as db:
+            db.execute("UPDATE sessions SET parent_session_id=?,profile='reviewer',agent_mode='plan' WHERE id=?",
+                       (target['id'],caller['id']))
+        control = SessionControl(self.manager, {'id':caller['id']})
+        self.manager.rename(target['tmux_name'], 'target-renamed')
+        replacement = self.create(target['tmux_name'])
+        with patch.object(self.manager.tmux, 'kill') as kill, \
+             patch.object(self.manager.tmux, 'interrupt') as interrupt, \
+             patch.object(self.manager.tmux, 'restart') as restart:
+            for command in ('attention','interrupt','restart-agent','kill'):
+                with self.subTest(command=command), self.assertRaises(SessionIdentityConflict):
+                    control.run(command, {'name':target['id'],'state':'ready_for_review'})
+            kill.assert_not_called()
+            interrupt.assert_not_called()
+            restart.assert_not_called()
+        self.assertEqual(self.manager.inspect(replacement['tmux_name'])['attention_state'],'normal')
+        self.assertTrue(self.manager.inspect(replacement['tmux_name'])['running'])
 
     def test_rename_waits_for_validated_mutation_and_reuse_stays_protected(self):
         original = self.create('race-original')
