@@ -167,6 +167,7 @@ class ModelCatalogue:
     executable: str = os.getenv("AGCONSOLE_OPENCODE_BIN", "opencode")
     ttl_seconds: int = 900
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run
+    broker: Any = None
 
     def _cache_path(self, provider: str) -> Path:
         if provider not in PROVIDERS:
@@ -180,12 +181,21 @@ class ModelCatalogue:
         if cached and fresh and not refresh:
             return {**cached, "stale": False}
         try:
+            launch = {}
+            if self.broker:
+                from .broker_client import strip_protected
+                from .broker_launch import opencode_config
+                env = strip_protected(dict(os.environ))
+                env.update(self.broker.environment(account_ref="openrouter-main"))
+                env["OPENCODE_CONFIG_CONTENT"] = json.dumps(opencode_config(env, {}))
+                launch["env"] = env
             result = self.runner(
                 [self.executable, "models", provider, "--verbose"],
                 check=False,
                 capture_output=True,
                 text=True,
                 timeout=30,
+                **launch,
             )
             if result.returncode != 0:
                 raise RuntimeError("OpenCode model catalogue command failed")

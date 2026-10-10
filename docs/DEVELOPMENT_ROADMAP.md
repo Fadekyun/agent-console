@@ -1,3 +1,12 @@
+## Protected credentials and clear setup documentation — 2026-10-10 (#189)
+
+- [x] Keep the Environment key/value form and scope controls; route five protected names into a separate-user credential broker.
+- [x] Proxy four existing MCP endpoints and two model APIs without narrowing tools or passing upstream keys to managed launches. Resolve protected changes on every request; keep ordinary environment revisions separate.
+- [x] Generate native broker references for Codex, Claude, OpenCode, Pi and Hermes. Bypass legacy selected credential files when broker mode is enabled.
+- [x] Add synthetic storage, API, proxy and launch tests plus reproducible screenshots and animations in the beginner README.
+- [x] Refuse restart or resume of broker-backed sessions after broker mode is disabled, preserving their current processes and launch assets.
+- [ ] Operator enables broker service after reviewing the separate-UID setup, then enters real keys through Environment. No rotation or automatic migration.
+
 ## Cache-aware CT115 launch admission — 2026-10-10 (#191)
 
 - [x] Discount bounded inactive file cache at each actual finite-limit cgroup, preserving raw counters and the existing admission JSON key.

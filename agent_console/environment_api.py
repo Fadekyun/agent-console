@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from .environment_service import describe, mutate
+from .broker_client import BrokerUnavailable
 
 
 def environment_routes(manager, require_identity, static_root):
@@ -17,7 +18,10 @@ def environment_routes(manager, require_identity, static_root):
 
     @router.get('/api/environment')
     def get(project_id: str | None = None):
-        return describe(manager, project_id)
+        try:
+            return describe(manager, project_id)
+        except BrokerUnavailable:
+            raise HTTPException(503, "Credential broker unavailable") from None
 
     @router.put('/api/environment/{name}')
     async def put(name: str, request: Request, project_id: str | None = None, auth=Depends(require_identity)):
@@ -33,13 +37,18 @@ def environment_routes(manager, require_identity, static_root):
             mutate(manager, project_id, lambda: manager.environment.put(name, project_id=project_id, **payload))
         except (ValueError, TypeError, UnicodeError):
             raise HTTPException(400, "Invalid environment request: check name, value, state and reserved variable rules") from None
+        except BrokerUnavailable:
+            raise HTTPException(503, "Credential broker unavailable") from None
         manager.database.audit('environment.updated', name, 'success', actor=auth.actor,
                                surface=auth.access_surface, details={'scope': manager.environment.scope(project_id)})
         return describe(manager, project_id)
 
     @router.delete('/api/environment/{name}')
     def delete(name: str, project_id: str | None = None, auth=Depends(require_identity)):
-        mutate(manager, project_id, lambda: manager.environment.delete(name, project_id=project_id))
+        try:
+            mutate(manager, project_id, lambda: manager.environment.delete(name, project_id=project_id))
+        except BrokerUnavailable:
+            raise HTTPException(503, "Credential broker unavailable") from None
         manager.database.audit('environment.deleted', name, 'success', actor=auth.actor,
                                surface=auth.access_surface, details={'scope': manager.environment.scope(project_id)})
         return describe(manager, project_id)

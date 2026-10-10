@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 
 from .environment import EnvironmentStore, read_private, write_private
+from .broker_client import BrokerClient, strip_protected, PROTECTED_NAMES, CONTROL_PREFIX, CAPABILITY as BROKER_CAPABILITY
+from .broker_launch import argv_for as broker_argv, opencode_config, refresh_native, refresh_codex
 from .auth import AuthRegistry
 from .admission import admission_lock
 from .resources import require_launch_resources
@@ -132,15 +134,16 @@ class SessionManager:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings.from_env()
         self.settings.ensure_state_dirs()
-        self.auth = AuthRegistry(self.settings.config_dir or self.settings.state_dir / "config")
-        self.environment = EnvironmentStore(self.settings.config_dir or self.settings.state_dir / "config")
+        broker = BrokerClient.configured()
+        self.auth = AuthRegistry(self.settings.config_dir or self.settings.state_dir / "config", broker=broker)
+        self.environment = EnvironmentStore(self.settings.config_dir or self.settings.state_dir / "config", broker=broker)
         self.database = Database(self.settings.database_path)
         self.database.migrate()
         try:
             self.database.prune_audit_events(self.settings.log_retention_days)
         except Exception:
             log.warning("audit prune failed: %s", traceback.format_exc())
-        self.models = ModelCatalogue(self.settings.state_dir / "model-cache")
+        self.models = ModelCatalogue(self.settings.state_dir / "model-cache", broker=broker)
         validate_profile_schema()
         self._deployer_override: Deployer | None = None
         self.tmux = Tmux(
@@ -1310,7 +1313,8 @@ class SessionManager:
         adapter = provider_adapter(tool, self.auth)
         if not adapter.binary.is_file():
             raise FileNotFoundError(f"tool launcher is missing: {adapter.binary}")
-        resolved_environment, environment_revision = self.environment.resolve(project_id, secret_files=adapter.secret_files(context))
+        resolved_environment, environment_revision = self.environment.resolve(project_id, secret_files=adapter.secret_files(context),
+            account_ref=context.get("secret_ref") or context.get("name"))
         spec = adapter.build_launch_spec(
             resolved_environment=resolved_environment,
             context=context,
@@ -1324,7 +1328,8 @@ class SessionManager:
             plan_reasoning_effort=plan_reasoning_effort,
             read_only=PROFILE_SCHEMA[profile]["read_write_capability"] == "read_only",
         )
-        return LaunchSpec(spec.argv, spec.environment, spec.secret_files, resolved_environment, environment_revision)
+        argv = broker_argv(tool, spec.argv, resolved_environment, context_path.parent / context_path.stem)
+        return LaunchSpec(argv, spec.environment, spec.secret_files, resolved_environment, environment_revision)
 
     def _launcher_args(
         self,
@@ -1390,6 +1395,9 @@ class SessionManager:
         else:
             resolved, revision = dict(spec.resolved_environment), spec.environment_revision
         resolved.update(merged)
+        if self.environment.broker:
+            resolved = strip_protected(resolved)
+            merged = strip_protected(merged)
         # The capability and managed values only live in the private environment
         # snapshot, never executable shell text or process arguments.
         public = {k: v for k, v in merged.items() if not k.endswith("_CAPABILITY")}
@@ -1414,6 +1422,7 @@ class SessionManager:
         auth_context: dict[str, Any],
         isolated_skills_root: Path,
         *, session_id: str | None = None, native_home: Path | None = None,
+        resolved_environment: dict[str, str] | None = None,
     ) -> dict[str, str]:
         overlay_env: dict[str, str] = {}
         base = self.settings.state_dir / "tool-overlays" / session_name
@@ -1443,6 +1452,7 @@ class SessionManager:
             if not skills_link.exists():
                 skills_link.symlink_to(isolated_skills_root, target_is_directory=True)
             overlay_env["CODEX_HOME"] = str(overlay)
+            refresh_codex(overlay, resolved_environment or {})
         elif tool == "claude":
             # Native Claude loads added-directory .claude/skills. CLAUDE_HOME
             # is not a supported discovery override. Preserve native account
@@ -1464,10 +1474,10 @@ class SessionManager:
             context_path = self.settings.state_dir / "contexts" / f"{session_name}.md"
             overlay_env["AGENT_CONSOLE_ISOLATED_SKILLS_ROOT"] = str(isolated_skills_root)
             overlay_env["OPENCODE_CONFIG_CONTENT"] = json.dumps(
-                {
+                opencode_config(resolved_environment or {}, {
                     "instructions": [str(context_path)],
                     "skills": [str(isolated_skills_root)],
-                },
+                }),
                 separators=(",", ":"),
             )
         elif tool == "hermes":
@@ -1557,6 +1567,8 @@ class SessionManager:
             raise RuntimeError(f"{tool}/{context['name']} is {context['status']}: {context['reason']}")
         if context["status"] == "setup-required":
             raise RuntimeError(f"{tool}/{context['name']} is setup-required: {context['reason']}")
+        if self.environment.broker:
+            self.environment.broker.require_model(context, project_id)
         if tool == "opencode":
             if reasoning_effort is not None or plan_reasoning_effort is not None:
                 raise ValueError(
@@ -1842,6 +1854,7 @@ class SessionManager:
             overlay_env = self._create_session_tool_overlay(
                 name, tool, context, isolated_root,
                 session_id=session_id,
+                resolved_environment=spec.resolved_environment,
             )
             provider_adapter(tool, self.auth).configure_shared_skills(
                 environment=spec.environment,
@@ -2118,6 +2131,10 @@ class SessionManager:
             raise ValueError("restart-agent is available only for managed sessions")
         if not session.get("running") and not resume_stopped:
             raise ValueError("restart-agent requires a live terminal; use session resume for stopped work")
+        if not self.environment.broker:
+            prior = read_private(self.settings.state_dir / "environment-launches" / f"{session['id']}.json")
+            if prior and prior.get("environment", {}).get(BROKER_CAPABILITY):
+                raise ValueError("This session uses the credential broker. Keep it enabled, or create a new session after restoring direct account configuration")
         project_id = session.get("project_id")
         if project_id is not None:
             with self.database.connect() as conn:
@@ -2165,6 +2182,8 @@ class SessionManager:
                     f"supports skill isolation (codex)."
                 )
         auth_context = self.auth.get_context(tool, session.get("auth_context"), require_ready=True)
+        if self.environment.broker:
+            self.environment.broker.require_model(auth_context, project_id)
         require_launch_resources()
         launcher_path = Path(session['launcher_path'])
         original_launcher = launcher_path.read_text(encoding='utf-8')
@@ -2176,7 +2195,8 @@ class SessionManager:
             raise RecoveryUnavailable('Provider remains paused; select its native conversation manually')
         adapter = provider_adapter(tool, self.auth)
         resolved_environment, environment_revision = self.environment.resolve(
-            project_id, secret_files=adapter.secret_files(auth_context))
+            project_id, secret_files=adapter.secret_files(auth_context),
+            account_ref=auth_context.get("secret_ref") or auth_context.get("name"))
         snapshot_path = self.settings.state_dir / "environment-launches" / f"{session['id']}.json"
         previous_snapshot = read_private(snapshot_path)
         canonical_root = _resolve_canonical_root()
@@ -2187,10 +2207,18 @@ class SessionManager:
         overlay_env = self._create_session_tool_overlay(
             name, tool, auth_context, isolated_root,
             session_id=session['id'], native_home=Path(binding['home']) if binding else None,
+            resolved_environment=resolved_environment,
         )
         launcher_path = Path(session["launcher_path"])
         launcher_text = refresh_launcher_runtime(resume_launcher(original_launcher, binding) if binding else original_launcher)
         launcher_env = _launcher_exports(launcher_text)
+        if self.environment.broker:
+            # Retire any legacy literal exports at this explicit restart.
+            # A stale launcher key must not override the filtered snapshot.
+            dropped = {key for key in launcher_env if key in PROTECTED_NAMES or key.startswith(CONTROL_PREFIX)}
+            launcher_text = "\n".join(line for line in launcher_text.splitlines()
+                if not any(line.startswith("export " + key + "=") for key in dropped)) + "\n"
+            launcher_env = strip_protected(launcher_env)
         for key, value in overlay_env.items():
             line = f"export {key}={shlex.quote(value)}\n"
             if f"export {key}=" in launcher_text:
@@ -2215,10 +2243,16 @@ class SessionManager:
                 if key in launcher_env:
                     resolved_environment[key] = launcher_env[key]
             resolved_environment.update(overlay_env)
+            if self.environment.broker:
+                resolved_environment = strip_protected(resolved_environment)
             for key, value in previous_snapshot["environment"].items():
                 if key == "AGENT_CONSOLE_EVIDENCE_CAPABILITY":
                     resolved_environment[key] = value
             previous_snapshot.update(environment=resolved_environment, revision=environment_revision)
+            if self.environment.broker:
+                previous_snapshot["launcher_keys"] = [key for key in previous_snapshot.get("launcher_keys", [])
+                    if key not in PROTECTED_NAMES and not key.startswith(CONTROL_PREFIX)]
+                previous_snapshot["secret_files"] = [str(p) for p in adapter.secret_files(auth_context)]
             write_private(snapshot_path, previous_snapshot)
         else:
             # Legacy launchers migrate on explicit restart. Existing command and
@@ -2226,12 +2260,23 @@ class SessionManager:
             _, argv = launcher_command(launcher_text)
             if '$AGENT_CONSOLE_CLAUDE_SKILLS_DIR' in argv:
                 argv = [overlay_env.get("AGENT_CONSOLE_CLAUDE_SKILLS_DIR", a) if a == '$AGENT_CONSOLE_CLAUDE_SKILLS_DIR' else a for a in argv]
-            spec = LaunchSpec(argv, launcher_env, adapter.secret_files(auth_context))
+            spec = LaunchSpec(argv, launcher_env, adapter.secret_files(auth_context), resolved_environment, environment_revision)
             self._write_launcher(name, session["id"], spec,
                 parent_session_id=session.get("parent_session_id"), linked_plan_id=session.get("linked_plan_id"),
                 overlay_env=overlay_env, project_id=project_id)
             launcher_text = launcher_path.read_text(encoding="utf-8")
-        if tool in {"pi", "hermes"}:
+        if self.environment.broker:
+            native_env = {**launcher_env, **resolved_environment, **overlay_env}
+            refresh_native(tool, native_env)
+            prefix, argv = launcher_command(launcher_text)
+            context_file = native_env.get("AGENT_CONSOLE_CONTEXT_FILE")
+            config_dir = Path(context_file).with_suffix("") if context_file else self.settings.state_dir / "contexts" / name
+            argv = broker_argv(tool, argv, native_env, config_dir)
+            command_start = re.search(r"^exec ", launcher_text, re.MULTILINE)
+            if command_start is None:
+                raise ValueError("Pinned launcher has no command")
+            launcher_text = launcher_text[:command_start.start()] + "exec " + shlex.join(prefix + argv) + "\n"
+        elif tool in {"pi", "hermes"}:
             from .commandcode import session_mcp_servers, pi_mcp_config, hermes_mcp_servers, write_private_json
             servers = session_mcp_servers(resolved_environment)
             if tool == "pi":

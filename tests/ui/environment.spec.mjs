@@ -186,3 +186,80 @@ for (const scope of ['', 'a']) test(`environment deletion requires confirmation 
   expect(new URL(deletions[0]).searchParams.get('project_id')).toBe(scope || null);
   await expect(page.locator('#environment-value')).toHaveValue('unsaved-synthetic-draft');
 });
+
+const protectedNames = ['N8N_MCP_TOKEN', 'DIRECTUS_MCP_TOKEN', 'BUSHI_MCP_TOKEN', 'OPENROUTER_API_KEY', 'CMD_API_KEY'];
+const protectedData = saved => ({
+  broker_enabled:true, protected_names:protectedNames, broker_revision:saved?1:0,
+  entries:saved?[{name:'CMD_API_KEY',state:'enabled',protected:true,immediate:true}]:[],
+  effective:saved?[{name:'CMD_API_KEY',source:'project:a',protected:true,immediate:true}]:[],
+  host_names:[], sessions:[],
+});
+
+test('protected key uses the existing project form and reports next-request updates', async ({page}) => {
+  await scopes(page);let saved=false;const writes=[];
+  await page.route('**/api/environment**',async route=>{
+    const request=route.request();
+    if(request.method()==='PUT') {writes.push({url:request.url(),body:request.postDataJSON()});saved=true;}
+    await route.fulfill({json:protectedData(saved)});
+  });
+  await page.goto('/environment?project_id=a');
+  await expect(page.locator('#environment-protection')).toContainText('Save them here as usual');
+  await expect(page.locator('#environment-effective')).toHaveText('No managed values are active.');
+  await page.locator('#environment-name').fill('CMD_API_KEY');
+  await page.locator('#environment-value').fill('synthetic-protected-value');
+  await page.getByRole('button',{name:'Save variable',exact:true}).click();
+  await expect(page.locator('#environment-message')).toHaveText('Protected key saved. The change applies on the next broker request.');
+  await expect(page.locator('#environment-value')).toHaveValue('');
+  await expect(page.locator('#environment-entries')).toContainText('CMD_API_KEY · enabled · protected · applies on next request');
+  await expect(page.locator('body')).not.toContainText('synthetic-protected-value');
+  expect(writes).toHaveLength(1);
+  expect(new URL(writes[0].url).searchParams.get('project_id')).toBe('a');
+  expect(writes[0].body).toEqual({value:'synthetic-protected-value',state:'enabled'});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
+test('broker outage during load disables the form until metadata can be retried', async ({page}) => {
+  await scopes(page);let offline=true;const writes=[];
+  await page.route('**/api/environment**',async route=>{
+    if(route.request().method()!=='GET')writes.push(route.request().url());
+    return offline
+      ?route.fulfill({status:503,json:{detail:'Credential broker unavailable'}})
+      :route.fulfill({json:protectedData(false)});
+  });
+  await page.goto('/environment?project_id=a');
+  await expect(page.locator('#environment-message')).toHaveText('Credential broker unavailable');
+  await expect(page.locator('#environment-value')).toBeDisabled();
+  await expect(page.getByRole('button',{name:'Save variable',exact:true})).toBeDisabled();
+  await expect(page.locator('#environment-protection')).not.toContainText('Variables are passed to sessions');
+  expect(writes).toEqual([]);
+  offline=false;await page.getByRole('button',{name:'Retry loading variables'}).click();
+  await expect(page.locator('#environment-value')).toBeEnabled();
+  await expect(page.locator('#environment-protection')).toContainText('Agents use the broker');
+  await expect(page.locator('#environment-message')).not.toContainText('Credential broker unavailable');
+});
+
+test('broker save outage keeps the masked draft and requires an explicit retry', async ({page}) => {
+  await scopes(page);let attempts=0,saved=false;
+  await page.route('**/api/environment**',async route=>{
+    if(route.request().method()==='PUT'){
+      attempts++;
+      if(attempts===1)return route.fulfill({status:503,json:{detail:'Credential broker unavailable'}});
+      saved=true;
+    }
+    return route.fulfill({json:protectedData(saved)});
+  });
+  await page.goto('/environment?project_id=a');
+  await page.locator('#environment-name').fill('CMD_API_KEY');
+  await page.locator('#environment-value').fill('synthetic-protected-retry-value');
+  await page.getByRole('button',{name:'Save variable',exact:true}).click();
+  await expect(page.locator('#environment-message')).toHaveText('Credential broker unavailable');
+  await expect(page.locator('#environment-value')).toHaveAttribute('type','password');
+  await expect(page.locator('#environment-value')).toHaveValue('synthetic-protected-retry-value');
+  await expect(page.locator('body')).not.toContainText('synthetic-protected-retry-value');
+  expect(attempts).toBe(1);
+  await expect(page.getByRole('button',{name:'Save variable',exact:true})).toBeEnabled();
+  await page.getByRole('button',{name:'Save variable',exact:true}).click();
+  await expect(page.locator('#environment-value')).toHaveValue('');
+  await expect(page.locator('#environment-message')).toContainText('next broker request');
+  expect(attempts).toBe(2);
+});
