@@ -1,0 +1,11 @@
+[Unit]
+Description=Sample Agent Console launch headroom
+
+[Timer]
+OnBootSec=20
+OnUnitActiveSec=15
+AccuracySec=1
+Unit=n100-resource-sampler.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=SSD temporary storage preserving Agent Console work
+Before=local-fs.target
+RequiresMountsFor=/var/lib/agent-console-tmp
+
+[Mount]
+What=/var/lib/agent-console-tmp
+Where=/tmp
+Type=none
+Options=bind,nosuid,nodev
+
+[Install]
+WantedBy=local-fs.target

@@ -1,0 +1,4 @@
+services:
+  agent-console:
+    security_opt:
+      - apparmor=unconfined

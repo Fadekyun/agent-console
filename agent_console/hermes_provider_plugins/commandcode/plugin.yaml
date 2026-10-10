@@ -1,0 +1,5 @@
+name: commandcode-reasoning
+kind: model-provider
+version: 1.0.0
+description: CommandCode model-aware reasoning_effort gate (overrides the custom profile)
+author: Agent Console

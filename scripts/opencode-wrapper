@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SECRETS_FILE="${AGENT_CONSOLE_SECRET_FILE:-$HOME/.config/agent-console/secrets.d/openrouter-main.env}"
+if [[ -f "$SECRETS_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$SECRETS_FILE"
+  set +a
+fi
+
+REAL_OPENCODE="$HOME/.opencode/bin/opencode"
+if [[ ! -x "$REAL_OPENCODE" ]]; then
+  echo "opencode real binary missing: $REAL_OPENCODE" >&2
+  exit 127
+fi
+exec "$REAL_OPENCODE" "$@"

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+profile_root="${AGENT_CONSOLE_PROFILE_DIR:-$HOME/codex/agent-profiles}"
+canonical_skills="${AGENT_CONSOLE_SKILL_ROOT:-$HOME/codex/skills}"
+hermes_bin="${HERMES_BIN:-$HOME/.local/bin/hermes}"
+
+for role_file in "$profile_root"/*.md; do
+  role="$(basename "$role_file" .md)"
+  profile="agent-console-$role"
+  alias="hermes-agent-console-$role"
+  destination="$HOME/.hermes/profiles/$profile"
+  if [[ ! -d "$destination" ]]; then
+    "$hermes_bin" profile create "$profile" --no-alias --no-skills \
+      --description "Managed Agent Console $role role"
+  fi
+  "$hermes_bin" profile alias "$profile" --name "$alias" >/dev/null
+  install -m 0600 "$role_file" "$destination/SOUL.md"
+  install -d -m 0700 "$destination/skills"
+  link="$destination/skills/homelab"
+  if [[ -e "$link" && ! -L "$link" ]]; then
+    echo "refusing to replace non-link Hermes skill path: $link" >&2
+    exit 1
+  fi
+  ln -sfn "$canonical_skills" "$link"
+done
+
+echo "Hermes managed profiles synchronized without copying credentials."

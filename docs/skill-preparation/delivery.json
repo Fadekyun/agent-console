@@ -1,0 +1,12 @@
+{
+  "state": "prepared-not-installed",
+  "authoritative_root": "/home/fadekyun/codex/skills",
+  "staging_mirror": "/home/agentstage/codex/skills",
+  "updates": [
+    {"existing_skill": "agent-console-ops", "reference": "session-recovery-and-digest.md", "helpers": ["scripts/session-digest.py"], "covers": ["session-takeover manual recovery", "session-digest"]},
+    {"existing_skill": "agent-console-ops", "reference": "authoring-validation.md", "helpers": ["scripts/validate-skill-content.py"], "covers": ["skill-authoring validator"]},
+    {"existing_skill": "agc-ops", "reference": "agc-remote-and-release.md", "helpers": [], "covers": ["agc-remote allowlist preparation", "agc-release-verify recipe"]},
+    {"existing_skill": "agc-github-ops", "reference": "agc-remote-and-release.md", "helpers": [], "covers": ["agc-release-verify protected-branch checks"]}
+  ],
+  "delivery_gate": "Review canonical diffs, append reference links to existing SKILL.md files, then deliver from the authoritative workspace through the existing approved sync workflow. No live sync or assignment in this source task."
+}

@@ -1,0 +1,120 @@
+@import url("/static/themes.css?v=1");
+@import url("/static/icons.css?v=1");
+:root{font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+*{box-sizing:border-box}body{margin:0}a{color:var(--green)}button,input,select,textarea,.button{font:inherit}button,.button{cursor:pointer;min-height:44px;padding:9px 14px;border:1px solid var(--line);border-radius:7px;background:var(--paper);color:var(--ink);text-decoration:none}button:disabled{opacity:.55;cursor:wait}button:hover,.button:hover{background:var(--tint)}.primary{background:var(--green);color:var(--accent-foreground);border-color:var(--green)}.primary:hover{filter:brightness(.9);background:var(--green)}.danger{color:var(--danger)}:focus-visible{outline:3px solid var(--green);outline-offset:3px}input,select,textarea{min-width:0;width:100%;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink)}label{display:grid;gap:6px;font-size:13px}textarea{resize:vertical}h1,h2,h3,p{margin:0 0 12px}h1{font-size:34px;letter-spacing:-1px;line-height:1.2}h2{font-size:18px}h3{font-size:15px}.muted{color:var(--muted)}.small{font-size:12px}.eyebrow{font-size:11px;letter-spacing:1.5px;font-weight:600}.top{display:flex;justify-content:space-between;align-items:center;padding:16px 32px;background:var(--paper);border-bottom:1px solid var(--line);gap:12px}.brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);font-weight:650}.brand b{padding:5px;background:var(--green);color:var(--accent-foreground);border-radius:6px;font-size:12px}.brand span{font-size:11px;color:var(--muted);font-weight:400}.top nav{display:flex;gap:22px}.top nav a{text-decoration:none;font-size:13px}main{max-width:1480px;margin:auto;padding:38px 36px 60px}.heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:24px}.heading p:last-child{margin-bottom:0}.heading button{flex-shrink:0}.filter-row{display:flex;align-items:end;gap:12px;margin-bottom:24px}.search{flex:1;max-width:480px}.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,310px),1fr));gap:18px}.card,.panel,.tree-panel{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:22px;min-width:0}.card{display:flex;flex-direction:column;gap:12px}.card h3{overflow-wrap:anywhere;margin:0}.card p{margin:0}.card .brief{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}.card a.button{margin-top:auto;text-align:center}.badge{font-size:11px;padding:4px 8px;background:var(--tint);border-radius:4px;align-self:start}.badge.attention{background:var(--warning-soft);color:var(--warning)}.meta{font-size:12px;overflow-wrap:anywhere;color:var(--muted)}.back{display:inline-block;margin-bottom:20px;text-decoration:none}.workspace{display:grid;grid-template-columns:280px minmax(0,1fr);gap:22px;align-items:start}.tree-panel{padding:18px}.node{margin:12px 0 12px min(calc(var(--depth)*14px),56px);border-left:2px solid var(--line);padding-left:10px;overflow-wrap:anywhere}.node.active{border-left-color:var(--green)}.node a{display:block;color:var(--ink);text-decoration:none;font-size:13px}.node button{font-size:12px;border:0;background:transparent;color:var(--green);padding:6px 0;text-align:left}.node small{display:block;color:var(--muted)}.session-main{min-width:0}.actions{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}#attention-form{display:grid;gap:12px;grid-template-columns:1fr 2fr auto;align-items:end}#attention-form textarea{max-height:200px}.terminal-panel{height:540px;min-height:340px;max-height:85dvh;resize:vertical;overflow:hidden;border:1px solid var(--line);border-radius:9px;background:var(--paper);display:flex;flex-direction:column;margin-bottom:18px}.terminal-panel>header{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;gap:8px}.terminal-panel header button{min-height:34px;padding:5px 9px;font-size:12px}#terminal-frames{flex:1;min-height:0;position:relative}#terminal-frames iframe{width:100%;height:100%;border:0;display:block}#terminal-panel.expanded{position:fixed;inset:0;width:100%;height:100dvh;max-height:none;z-index:50;margin:0;border-radius:0;resize:none}pre{background:var(--bg);padding:14px;max-height:50dvh;overflow:auto;overscroll-behavior:contain;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}#session-title{overflow-wrap:anywhere}#session-meta,#session-brief{overflow-wrap:anywhere}#notice{border:1px solid var(--line);background:var(--tint);padding:12px;margin-bottom:20px}.empty{padding:30px 0;color:var(--muted)}dialog{width:min(580px,calc(100% - 24px));max-height:90dvh;overflow:auto;overscroll-behavior:contain;border:1px solid var(--line);border-radius:12px;padding:24px;background:var(--paper);color:var(--ink)}dialog::backdrop{background:#122a2377}dialog form{display:grid;gap:15px}dialog .heading{margin:0}dialog h2,dialog p{margin:0}.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.check{display:flex;align-items:center}.check input{width:auto}summary{cursor:pointer;min-height:44px}details label{margin-bottom:12px}.mobile-nav{display:none}.skip{position:absolute;left:-9999px}.skip:focus{left:10px;top:10px;z-index:100;background:var(--paper);padding:12px}.tool{padding:12px 0;border-bottom:1px solid var(--line)}.panel h2:not(:first-child){margin-top:24px}#create-error{color:var(--danger)}[hidden]{display:none!important}
+@media(max-width:760px){.top{padding:14px 18px}.brand{font-size:14px}.brand span{font-size:10px}.top nav{display:none}main{padding:26px 18px 100px}.heading{align-items:start;gap:10px}h1{font-size:28px}.heading p{font-size:12px}.heading button{font-size:12px;padding:9px 11px}.filter-row{display:grid;grid-template-columns:minmax(0,1fr) 130px 44px}.search{max-width:none}.cards{gap:12px}.card{padding:18px;gap:9px}.card h3{font-size:17px}.card .brief{font-size:13px;-webkit-line-clamp:2}.card .meta{display:none}.workspace{display:flex;flex-direction:column;gap:16px}.tree-panel,.session-main{width:100%}.tree-panel{order:1}.session-main{order:2}.panel{padding:18px}#attention-form{grid-template-columns:1fr}#attention-form button{justify-self:start}.mobile-nav{position:fixed;bottom:0;left:0;right:0;padding:10px 20px max(10px,env(safe-area-inset-bottom));background:var(--paper);border-top:1px solid var(--line);display:flex;justify-content:space-around;z-index:10}.mobile-nav a{text-decoration:none;padding:10px 20px;border-radius:7px}.mobile-nav a[aria-current=page]{background:var(--tint)}.terminal-panel{position:fixed;inset:0;height:100dvh;max-height:none;width:100%;z-index:50;border:0;border-radius:0;resize:none}#expand-terminal{display:none}dialog{padding:18px}.form-row{grid-template-columns:1fr 1fr}button{touch-action:manipulation}}
+
+#session-detail>summary {font-weight:600;margin-bottom:12px;}
+#session-detail:not([open])>summary {margin-bottom:0;}
+
+#terminal-status{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-size:12px}.terminal-panel>header>div{flex-shrink:0}
+@media(max-width:760px){#session-view>.heading{display:block}#session-view>.heading h1{font-size:24px}#session-view>.heading .muted{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#session-view>.heading button{width:100%;margin-top:16px}.terminal-panel>header button{min-height:44px}}
+
+.skill-identity dd { margin: 0 0 .8rem; overflow-wrap:anywhere; }
+.skill-identity dt { font-weight:600; }
+#skills-content .actions { flex-wrap:wrap; }
+#skills-content > .panel > input { width:100%; margin-bottom:.75rem; }
+#skills-content .panel > button { margin:.25rem; }
+
+#session-results .panel { margin:12px 0; overflow-wrap:anywhere; }
+#session-results label { margin:12px 0; }
+#session-results .workflow-reason { display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden; }
+#session-results form > details { margin:12px 0; }
+
+.session-actions{display:flex;gap:8px;flex-wrap:wrap}
+#results-view{max-width:840px;margin:auto}#results-session{overflow-wrap:anywhere}#session-results>details:not([open])>summary{margin:0;min-height:24px}#session-results>h2{margin-top:24px}
+@media(max-width:760px){.session-actions{margin-top:16px}#session-view>.heading .session-actions button{margin-top:0;width:auto;flex:1}#results-view h1{font-size:26px}}
+
+.work-section{margin:24px 0 32px}.work-section>h2{font-size:15px;color:var(--muted)}.work-statuses{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}.work-statuses .badge{font-size:11px}.overview-meta{font-size:12px;color:var(--muted);overflow-wrap:anywhere}.work-card-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto}.work-card-actions .button{flex:1}.recent-result{padding:12px;border-radius:6px;background:var(--tint);font-size:13px}.recent-result strong{display:block;margin-bottom:6px}.attention-strip{display:flex;flex-wrap:wrap;gap:16px;padding:14px;background:var(--tint);border:1px solid var(--line);border-radius:8px;margin-bottom:18px}.work-filters{margin-bottom:18px}.filter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}.filter-grid>button{align-self:end}.node details>summary{font-size:12px}.node details a{font-size:12px;padding:8px 0}#session-statuses{margin-bottom:18px}
+@media(max-width:760px){.filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.work-statuses{gap:4px}.work-card-actions .button{font-size:13px}.work-section{margin-top:20px}.attention-strip{font-size:13px}.work-filters>summary{font-size:13px}}
+
+.configuration-list{display:grid;grid-template-columns:minmax(110px,1fr) minmax(0,2fr);gap:8px;font-size:13px}.configuration-list dt{font-weight:600}.configuration-list dd{margin:0;overflow-wrap:anywhere}#launch-preview{border-top:1px solid var(--line);padding-top:18px}#launch-preview>p,#recipe-list .brief{overflow-wrap:anywhere}#recipe-list .panel{margin:14px 0}#recipe-list .brief{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}#session-configuration{margin-top:18px}
+@media(max-width:760px){#work-view>.heading{display:block}#work-view>.heading .session-actions button{flex:1}.configuration-list{grid-template-columns:1fr 1.5fr}}
+
+.release-evidence{min-width:0;margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:7px}.release-evidence label{display:flex;align-items:flex-start;gap:10px;min-height:44px;padding:8px 0}.release-evidence input[type=checkbox]{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;padding:0}.release-evidence label span{min-width:0;overflow-wrap:anywhere}
+
+/* Keep the page behind an open full-screen terminal still, including the mobile keyboard. */
+body.terminal-open{overflow:hidden}
+#terminal-panel.expanded{top:var(--terminal-top,0px);height:var(--terminal-height,100dvh);bottom:auto}
+@media(max-width:760px){.terminal-panel{top:var(--terminal-top,0px);height:var(--terminal-height,100dvh);bottom:auto}.terminal-panel>header{padding:4px 8px}.terminal-panel>header>div{display:flex;gap:4px}.terminal-panel>header button{padding:5px 7px}#session-view>.heading .session-actions{display:flex;gap:8px}#session-view>.heading .session-actions button{flex:1}}
+
+/* Keep tree actions visible and row geometry stable during hover and focus. */
+.workspace.tree-collapsed{grid-template-columns:104px minmax(0,1fr)}
+.tree-panel{padding:10px;max-height:75dvh;overflow:auto;overscroll-behavior:contain}
+.tree-panel>summary{font-weight:600;display:list-item;min-height:44px;padding:10px 0}
+.node{position:relative;margin-top:8px;margin-bottom:8px;padding-bottom:6px}
+.node-heading{display:flex;align-items:center;gap:4px}
+.node-heading>a{flex:1;min-width:0}
+.node .branch-toggle{min-width:32px;min-height:44px;padding:4px;text-align:center;flex:none}
+.node small{font-size:11px}
+.node>.add-session{display:block;color:var(--muted)}
+.node>.add-session:hover,.node>.add-session:focus-visible{color:var(--green);background:var(--tint)}
+#sessions-dialog{width:min(460px,calc(100% - 20px))}
+#sessions-dialog .heading{position:sticky;top:-24px;background:var(--paper);padding:8px 0;z-index:1}
+#attention-controls{margin:14px 0}
+.settings-section{margin:20px 0}
+.settings-section>summary{font-weight:600}
+#session-view>.heading{margin-bottom:16px}
+#session-view>.back{margin-bottom:12px}
+#session-title{font-size:26px}
+.terminal-panel>header>div{display:flex;gap:4px}
+/* One compact outer row on phones. The status stays in the accessibility tree (sr-only) because the embedded terminal hides its own connection line. */
+@media(max-width:760px){.tree-panel{max-height:45dvh}.workspace.tree-collapsed{display:flex}.terminal-panel>header{flex-wrap:nowrap}.terminal-panel>header #terminal-status{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}.terminal-panel>header>div{margin-left:auto;flex-wrap:nowrap}}
+
+/* An open desktop session fills the available window; only its panes scroll. */
+@media(min-width:761px){
+  body.session-terminal{overflow:hidden}
+  body.session-terminal .top{padding:10px 20px}
+  body.session-terminal main{height:calc(var(--terminal-height,100dvh) - var(--workbench-top,56px));padding:12px 20px;display:flex;flex-direction:column;min-height:0}
+  body.session-terminal #notice{flex:none;max-height:15dvh;overflow:auto;margin-bottom:8px}
+  body.session-terminal #session-view{flex:1;min-height:0;display:flex;flex-direction:column}
+  body.session-terminal #session-view>.back{align-self:start;margin-bottom:6px}
+  body.session-terminal #session-view>.heading{flex:none;margin-bottom:10px}
+  body.session-terminal #session-view>.heading>div:first-child{flex:1;min-width:0}
+  body.session-terminal #session-view>.heading>.session-actions{flex:none;display:flex;gap:8px}
+  body.session-terminal #session-state{margin-bottom:4px}
+  body.session-terminal #session-title{font-size:22px;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  body.session-terminal #session-meta{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  body.session-terminal .workspace{flex:1;min-height:0;align-items:stretch;gap:14px}
+  body.session-terminal .tree-panel{max-height:100%;overscroll-behavior:contain}
+  body.session-terminal .session-main{display:flex;flex-direction:column;min-height:0}
+  body.session-terminal .terminal-panel:not(.expanded){flex:1;min-height:120px;height:auto;max-height:none;resize:none;margin-bottom:8px}
+  body.session-terminal #session-detail{flex:none;max-height:40%;overflow:auto;overscroll-behavior:contain;padding:8px 14px}
+  body.session-terminal #session-detail>summary{position:sticky;top:-8px;background:var(--paper);z-index:1}
+}
+
+/* Phone terminal header: compact connection state inside the 44px Sessions button */
+#terminal-sessions{min-width:0;white-space:nowrap;min-height:44px;display:flex;flex-direction:column;align-items:stretch;justify-content:center;gap:0;padding:2px 9px 2px 9px;text-align:left}
+#terminal-connection-label{display:none}
+@media(max-width:760px){#terminal-sessions{display:flex;flex-direction:column;justify-content:center;gap:0;line-height:1.2;min-width:0}#terminal-connection-label{display:block;font-size:10px;max-width:85px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.work-history{margin:24px 0;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.work-history>summary{font-weight:600;min-height:44px;padding:8px 0}
+.work-history>.cards{margin:12px 0}.matched-children{display:grid;gap:4px;overflow-wrap:anywhere}
+.hidden-filter{align-self:end;min-height:44px;white-space:nowrap}
+@media(max-width:760px){.filter-row>.hidden-filter{grid-column:1/-1}.work-history{padding:10px}.matched-children a{padding:5px 0}}
+
+/* Let linked actions take up their real padded height, just like buttons. */
+a.button{display:inline-flex;align-items:center;justify-content:center;max-width:100%;overflow-wrap:anywhere;text-align:center}
+.top>.brand{min-width:0;flex-wrap:wrap;column-gap:10px;row-gap:2px}
+.top>.brand>span{overflow-wrap:anywhere}
+.node-heading>a{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+#role-description:empty,#create-error:empty{display:none}
+@media(max-width:400px){
+  .filter-row{grid-template-columns:minmax(0,1fr) 44px;gap:10px}
+  .filter-row>.search{grid-column:1/-1}
+}
+/* The Sessions label must not shrink underneath a long terminal status. */
+#terminal-sessions{flex-shrink:0}
+
+/* A single brand with an optional distinct instance label; routes share one nav model. */
+.top>.brand{flex-direction:column;align-items:flex-start;justify-content:center;flex:0 1 auto;gap:2px;min-height:44px;overflow:hidden}
+.top .brand-name{font-size:inherit;font-weight:650;color:var(--ink);white-space:nowrap}
+.top #instance{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.top nav{gap:4px;flex-shrink:0}
+.top nav a{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:10px 12px;border-radius:7px}
+.top nav a[aria-current="page"]{background:var(--tint);color:var(--ink);font-weight:600}
+.mobile-nav a{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px}
+@media(max-width:760px){
+  .mobile-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding-inline:10px}
+  .mobile-nav a{padding:10px 8px}
+}

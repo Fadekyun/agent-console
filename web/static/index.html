@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en" data-theme="system">
+<head><script src="/static/theme-bootstrap.js?v=1"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Agent Console</title>
+  <script>
+
+    try { if(location.pathname==='/'){const v=localStorage.getItem('agent-console-layout')||'auto';if(v==='mobile'||(v==='auto'&&matchMedia('(max-width:760px)').matches))location.replace('/mobile'+location.search+location.hash);} } catch { /* Layout defaults remain usable without storage. */ }
+  </script>
+  <link rel="stylesheet" href="/static/styles.css?v=0.28.9">
+</head>
+<body class="app-page">
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <div class="brand"><span class="brand-mark">AC</span><span class="nav-label"><strong>Agent Console</strong><small>v0.28.25</small></span></div>
+      <nav class="nav-list">
+        <button class="nav-button" data-view="sessions" aria-label="Sessions"><span data-icon="sessions" aria-hidden="true"></span><span class="nav-label">Sessions</span></button>
+        <button class="nav-button" data-view="projects" aria-label="Projects"><span data-icon="projects" aria-hidden="true"></span><span class="nav-label">Projects</span></button>
+        <button class="nav-button" data-view="profiles" aria-label="Profiles"><span data-icon="profiles" aria-hidden="true"></span><span class="nav-label">Profiles</span></button>
+        <button class="nav-button" data-view="skills" aria-label="Skills"><span data-icon="skills" aria-hidden="true"></span><span class="nav-label">Skills</span></button>
+        <button class="nav-button" data-view="jevghost" aria-label="Jev Ghost"><span data-icon="probe" aria-hidden="true"></span><span class="nav-label">Jev Ghost</span></button>
+        <button class="nav-button" data-view="orchestration" aria-label="Orchestration"><span data-icon="workflow" aria-hidden="true"></span><span class="nav-label">Orchestration</span></button>
+        <button class="nav-button" data-view="new" aria-label="New session"><span data-icon="plus" aria-hidden="true"></span><span class="nav-label">New session</span></button>
+        <a class="nav-button" href="/environment" aria-label="Environment"><span data-icon="settings" aria-hidden="true"></span><span class="nav-label">Environment</span></a>
+      </nav>
+      <div class="sidebar-footer">
+        <label class="theme-field"><span class="nav-label">Theme</span><select id="theme-select" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        <label class="theme-field"><span class="nav-label">Palette</span><select data-palette-select aria-label="Palette"><option value="forest">Forest</option><option value="ocean">Ocean</option><option value="violet">Violet</option></select></label>
+        <button id="rail-toggle" class="nav-button" aria-label="Collapse navigation"><span data-icon="chevron-left" aria-hidden="true"></span><span class="nav-label">Collapse</span></button>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div><h1 id="view-title">Sessions</h1><p id="identity" class="muted">Connecting…</p></div>
+        <div class="topbar-actions"><details class="provider-health"><summary id="provider-summary">Provider health</summary><div id="provider-status" class="status-strip" aria-label="Provider readiness"></div></details><button class="primary" data-view="new">New session</button><select id="layout-select" aria-label="Layout"><option value="auto">Auto</option><option value="mobile">Mobile</option><option value="desktop">Desktop</option></select><select id="mobile-theme-select" class="mobile-theme" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+      </header>
+      <div id="notice" role="status" aria-live="polite" hidden></div>
+
+      <main class="view-stack">
+        <section class="view" data-view-panel="sessions">
+          <div class="view-heading"><div><h2>Session operations</h2><p class="muted">Explicit attention state and mechanical tmux state remain independent.</p></div><button id="refresh">Refresh</button></div>
+          <div class="attention-summary" aria-label="Session attention summary">
+            <button data-attention-filter="blocked"><span class="summary-label">Blocked</span><strong id="count-blocked">0</strong></button>
+            <button data-attention-filter="needs_input"><span class="summary-label">Needs input</span><strong id="count-needs-input">0</strong></button>
+            <button data-attention-filter="ready_for_review"><span class="summary-label">Ready for review</span><strong id="count-ready-review">0</strong></button>
+            <button data-attention-filter="normal"><span class="summary-label">Normal</span><strong id="count-normal">0</strong></button>
+          </div>
+          <div class="filters" aria-label="Session filters">
+            <label>Search<input id="filter-search" type="search" placeholder="Name, repository, task"></label>
+            <label>Tool<select id="filter-tool"><option value="">All tools</option></select></label>
+            <label>Profile<select id="filter-profile"><option value="">All profiles</option></select></label>
+            <label>Mechanical state<select id="filter-state"><option value="active">Active</option><option value="all">All</option><option value="stopped">Stopped</option></select></label>
+            <label>Attention<select id="filter-attention"><option value="">All attention states</option><option value="blocked">Blocked</option><option value="needs_input">Needs input</option><option value="ready_for_review">Ready for review</option><option value="normal">Normal</option></select></label>
+          </div>
+          <div class="session-table-shell"><table class="session-table"><thead><tr><th>State</th><th>Session</th><th>Tool / mode</th><th>Role</th><th>Repository</th><th>Activity</th><th>Clients</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody id="active-sessions"></tbody></table></div>
+          <details class="history"><summary>History <span id="history-count" class="count">0</span></summary><div class="session-table-shell"><table class="session-table"><thead><tr><th>State</th><th>Session</th><th>Tool / mode</th><th>Role</th><th>Repository</th><th>Activity</th><th>Clients</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody id="session-history"></tbody></table></div></details>
+        </section>
+
+        <section class="view" data-view-panel="profiles" hidden>
+          <div class="view-heading"><div><h2>Agent Profiles</h2><p class="muted">Role-specific instructions and capability metadata from the profile schema.</p></div><button id="refresh-profiles">Refresh</button></div>
+          <div id="profiles-list" class="profiles-grid"></div>
+        </section>
+
+        <section class="view" data-view-panel="skills" hidden>
+          <div class="view-heading"><div><h2>Skills &amp; Superpowers</h2><p class="muted">Retained skill catalog, per-tool sync status, and approval-gated superpowers.</p></div><div class="dialog-actions"><button id="skills-sync">Sync now</button><button id="skills-doctor">Run doctor</button></div></div>
+          <div id="skills-status" role="status"></div>
+          <div id="skills-list" class="skills-grid"></div>
+        </section>
+
+        <section class="view" data-view-panel="jevghost" hidden>
+          <div class="view-heading"><div><h2>Jev ghost probes</h2><p class="muted">Continuous bounded probes of the shared Jev credential and typed-answer path. Read-only; no credential value is ever shown.</p></div><button id="jev-ghost-refresh">Refresh</button></div>
+          <div id="jev-ghost-summary" class="status-strip" role="status" aria-label="Jev ghost summary"></div>
+          <div id="jev-ghost-skill" class="status-strip" aria-label="Shared-skill discovery status"></div>
+          <div class="session-table-shell"><table class="session-table"><thead><tr><th>When</th><th>Scenario</th><th>Status</th><th>Checks</th><th>HTTP</th><th>Typed answers</th><th>Duration</th></tr></thead><tbody id="jev-ghost-runs"></tbody></table></div>
+        </section>
+
+        <section class="view" data-view-panel="projects" hidden>
+          <div class="view-heading"><div><h2>Projects</h2><p class="muted">Project-scoped session pools with shared repository context.</p></div><button id="new-project-btn">New project</button></div>
+          <div id="projects-list" class="projects-grid"></div>
+        </section>
+
+        <section class="view" data-view-panel="orchestration" hidden>
+          <div class="view-heading"><div><h2>Orchestration</h2><p class="muted">Independent terminals, bounded delegation, and plan handoff.</p></div></div>
+          <div class="orchestration-grid">
+            <div class="panel"><div class="panel-heading"><h3>Session tree</h3><span class="muted">Mechanical state only</span></div><div id="session-tree" class="tree-list"></div></div>
+            <div class="panel"><div class="panel-heading"><h3>Planned work</h3><span class="muted">Separate implementation sessions</span></div><div id="plans" class="plan-list"></div></div>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="new" hidden>
+          <div class="view-heading"><div><h2>New session</h2><p class="muted">Codex defaults to Auto. OpenCode defaults to Plan and the lowest-cost selectable model.</p></div></div>
+          <form id="new-session" class="progressive-form">
+            <fieldset><legend>1. Agent</legend><div class="form-grid"><label>Tool<select name="tool"></select></label><label>Profile<select name="profile"></select></label><label id="agent-mode-field" hidden><span id="agent-mode-label">Agent mode</span><select name="agent_mode"></select><small id="agent-mode-help" class="muted"></small></label></div></fieldset>
+            <fieldset><legend>2. Account and model</legend><div class="form-grid"><label>Account context<select name="auth_context"></select></label><label id="provider-field" hidden>Provider<select name="provider"><option value="opencode-go" selected>OpenCode GO (default, paid)</option><option value="opencode">OpenCode ZEN (free)</option><option value="openrouter">OpenRouter</option></select></label><label id="model-field" class="wide" hidden>Exact model<input name="model" list="model-options" placeholder="Loading models…"><datalist id="model-options"></datalist><small id="model-status" class="muted"></small><details id="model-cost-details" class="model-cost-details"><summary>Compare model costs</summary><div class="preset-row" role="group" aria-label="Token estimate presets"><button type="button" data-cost-preset="small">Small prompt</button><button type="button" data-cost-preset="coding">Typical coding task</button><button type="button" data-cost-preset="review">Long-context review</button><button type="button" data-cost-preset="custom">Custom</button></div><span class="model-estimator"><span class="estimate-field"><span>Uncached input</span><input id="estimate-uncached" type="number" min="0" value="0" aria-label="Uncached input tokens"></span><span class="estimate-field"><span>Cached input</span><input id="estimate-cached" type="number" min="0" value="0" aria-label="Cached input tokens"></span><span class="estimate-field"><span>Output</span><input id="estimate-output" type="number" min="0" value="0" aria-label="Output tokens"></span><span class="estimate-field"><span>Reasoning</span><input id="estimate-reasoning" type="number" min="0" value="0" aria-label="Reasoning tokens"></span><button id="estimate-models" type="button">Find cheapest</button></span><small class="estimator-help muted">Optional comparison only; actual session usage depends on repository reads, tool calls, caching, and output.</small></details></label><label id="codex-model-field" hidden>Codex model<input name="codex_model" placeholder="e.g. gpt-5.6-sol (blank = account default)"><small class="muted">Optional overrides; availability depends on the selected account.</small></label><label id="codex-effort-field" hidden>Reasoning effort<select name="codex_effort"><option value="" selected>Default</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option><option value="ultra">ultra</option></select></label><label id="codex-plan-effort-field" hidden>Plan effort<select name="codex_plan_effort"><option value="" selected>Default</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option><option value="ultra">ultra</option></select></label></div></fieldset>
+            <fieldset><legend>3. Workspace</legend><div class="form-grid"><label>Repository<input name="repository" value=""></label><label>Project<select name="project_id"><option value="">None</option></select></label><label class="check"><input type="checkbox" name="worktree"> Create isolated worktree</label></div></fieldset>
+            <fieldset><legend>4. Brief</legend><div class="form-grid"><label class="wide">Brief loaded into the terminal composer, never sent automatically<textarea name="task" rows="5"></textarea></label></div></fieldset>
+            <details class="advanced-fields"><summary>Advanced</summary><div class="form-grid"><label>Name<input name="name" placeholder="Generated automatically"></label></div></details>
+            <button type="submit" class="primary">Create session</button>
+          </form>
+          <p id="form-status" role="status"></p>
+        </section>
+      </main>
+    </div>
+
+    <nav class="bottom-nav" aria-label="Mobile navigation">
+      <button data-view="sessions">Sessions</button><button data-view="orchestration">Orchestration</button><button data-view="new">New</button><button id="open-navigation" type="button" data-icon="chevron-down" data-icon-only aria-label="More navigation" aria-haspopup="dialog" aria-controls="navigation-dialog" aria-expanded="false">More</button>
+    </nav>
+  </div>
+
+  <dialog id="navigation-dialog" aria-labelledby="navigation-title">
+    <div class="panel-heading"><h2 id="navigation-title">More navigation</h2><button type="button" data-close="navigation-dialog" aria-label="Close navigation">Close</button></div>
+    <nav class="nav-list" aria-label="Additional navigation">
+      <button class="navigation-link" data-view="projects">Projects</button>
+      <button class="navigation-link" data-view="profiles">Profiles</button>
+      <button class="navigation-link" data-view="skills">Skills</button>
+      <button class="navigation-link" data-view="jevghost">Jev Ghost</button>
+      <a class="navigation-link" href="/environment">Environment</a>
+    </nav>
+  </dialog>
+
+  <aside id="session-inspector" class="session-inspector" aria-label="Session inspector" hidden>
+    <header><div><span class="eyebrow">Session inspector</span><h2 id="inspector-name">Session</h2></div><button id="inspector-close" aria-label="Close inspector">Close</button></header>
+    <div id="inspector-content" class="inspector-content"></div>
+    <form id="attention-form" class="attention-form"><label>Attention state<select name="state"><option value="normal">Normal</option><option value="needs_input">Needs input</option><option value="blocked">Blocked</option><option value="ready_for_review">Ready for review</option></select></label><label>Optional note<textarea name="note" maxlength="1000" rows="3"></textarea></label><button type="submit" class="primary">Update state</button><p id="attention-status" role="status"></p></form>
+    <div id="inspector-actions" class="inspector-actions"></div>
+  </aside>
+
+  <section id="terminal-dock" class="terminal-dock" aria-label="Terminal dock" hidden>
+    <div id="terminal-dock-handle" class="terminal-dock-handle" role="separator" aria-orientation="horizontal" aria-label="Resize terminal dock"></div>
+    <header class="terminal-dock-header"><div id="terminal-tabs" class="terminal-tabs" role="tablist" aria-label="Open terminals"></div><div class="terminal-dock-actions"><button id="terminal-dock-fullscreen">Full screen</button><button id="terminal-dock-collapse">Collapse</button></div></header>
+    <div id="terminal-frames" class="terminal-frames"></div>
+  </section>
+
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+    <form method="dialog">
+      <h2 id="confirm-title">Confirm action</h2><p id="confirm-text"></p>
+      <label id="unmanaged-warning" class="check" hidden><input id="unmanaged-check" type="checkbox"> I understand this session is unmanaged</label>
+      <div class="dialog-actions"><button value="cancel">Cancel</button><button id="confirm-submit" class="danger" value="confirm">Confirm kill</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="delegate-dialog" aria-labelledby="delegate-dialog-title">
+    <form id="delegate-form" class="dialog-form">
+      <h2 id="delegate-dialog-title">Delegate work</h2><p id="delegate-parent" class="muted"></p>
+      <input name="parent" type="hidden">
+      <label>Profile<select name="profile"></select></label>
+      <label>Tool<select name="tool"></select></label>
+      <label>Account context<select name="auth_context"></select></label>
+      <label id="delegate-mode-field" hidden>OpenCode mode<select name="agent_mode"><option value="plan">Plan</option></select></label>
+      <label>Name<input name="name" placeholder="Generated automatically"></label>
+      <label>Repository<input name="repository"></label>
+      <label>Task<textarea name="task" rows="5" required></textarea></label>
+      <p id="delegate-status" role="status"></p>
+      <div class="dialog-actions"><button type="button" data-close="delegate-dialog">Cancel</button><button type="submit" class="primary">Create child</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="plan-dialog" aria-labelledby="plan-title">
+    <form id="plan-form" class="dialog-form">
+      <h2 id="plan-title">Plan</h2><p id="plan-meta" class="muted"></p><pre id="plan-content" class="plan-preview"></pre>
+      <input name="plan_id" type="hidden">
+      <label>Implementation profile<select name="profile"><option value="coder">Coder</option><option value="bugfix">Bugfix</option></select></label>
+      <label>Session name<input name="name" placeholder="Generated automatically"></label>
+      <label id="revision-warning" class="check" hidden><input name="allow_revision_change" type="checkbox"> Repository revision changed; execute against the current revision</label>
+      <p id="plan-status" role="status"></p>
+      <div class="dialog-actions"><button type="button" data-close="plan-dialog">Cancel</button><button type="submit" class="primary">Confirm and execute</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="review-dialog" aria-labelledby="review-title">
+    <form method="dialog" class="dialog-form review-dialog-form"><h2 id="review-title">Peer review</h2><p id="review-notice" class="muted"></p><pre id="review-content" class="plan-preview"></pre><div class="dialog-actions"><button value="close">Close</button></div></form>
+  </dialog>
+
+  <dialog id="new-project-dialog" aria-labelledby="new-project-dialog-title">
+    <form id="new-project-form" class="dialog-form">
+      <h2 id="new-project-dialog-title">New project</h2>
+      <label>Name<input name="name" required minlength="1"></label>
+      <label>Repository<input name="repository" placeholder="Optional repository path"></label>
+      <label>Description<textarea name="description" rows="3"></textarea></label>
+      <p id="new-project-status" role="status"></p>
+      <div class="dialog-actions"><button type="button" data-close="new-project-dialog">Cancel</button><button type="submit" class="primary">Create</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="group-dialog" aria-labelledby="group-dialog-title">
+    <form id="group-form" class="dialog-form">
+      <h2 id="group-dialog-title">New session group</h2>
+      <label>Group name<input name="group_name" required minlength="1" maxlength="80"></label>
+      <label>Purpose<textarea name="group_purpose" rows="3" maxlength="2000" placeholder="Optional description of this group's goal"></textarea></label>
+      <p id="group-dialog-status" role="status"></p>
+      <div class="dialog-actions"><button type="button" data-close="group-dialog">Cancel</button><button type="submit" class="primary">Create group</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="group-detail-dialog" aria-labelledby="group-detail-title">
+    <div class="dialog-form">
+      <h2 id="group-detail-title">Group</h2>
+      <p id="group-detail-purpose" class="muted"></p>
+      <p id="group-detail-meta" class="muted"></p>
+      <div id="group-detail-sessions" class="tree-list"></div>
+      <div class="dialog-actions"><button type="button" data-close="group-detail-dialog">Close</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="project-detail-dialog" aria-labelledby="project-detail-title">
+    <form class="dialog-form">
+      <h2 id="project-detail-title">Project</h2>
+      <p id="project-detail-repo" class="muted"></p>
+      <p id="project-detail-status" class="muted"></p>
+      <div id="project-detail-sessions" class="tree-list"></div>
+      <hr>
+      <label>Assign session<select id="project-assign-select"><option value="">Select session…</option></select>
+      <button id="project-assign-btn" type="button" class="primary">Assign</button></label>
+      <p id="project-assign-status" role="status"></p>
+      <div class="dialog-actions"><button type="button" data-close="project-detail-dialog">Close</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="profile-editor-dialog" aria-labelledby="profile-editor-title">
+    <form id="profile-editor-form" class="dialog-form">
+      <h2 id="profile-editor-title">Edit profile</h2>
+      <input name="profile_name" type="hidden">
+      <div id="profile-editor-meta" class="profile-meta-summary"></div>
+      <label>Instructions<textarea name="content" rows="12" class="code-textarea"></textarea></label>
+      <p id="profile-editor-status" role="status"></p>
+      <div class="dialog-actions"><button type="button" data-close="profile-editor-dialog">Cancel</button><button type="submit" class="primary">Save</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="assign-skill-dialog" aria-labelledby="assign-skill-title">
+    <form id="assign-skill-form" class="dialog-form">
+      <h2 id="assign-skill-title">Assign skill to profile</h2>
+      <input name="skill_name" type="hidden">
+      <label>Profile<select name="profile"></select></label>
+      <p class="muted">Assigning a skill enables it for the selected profile. Superpowers may require additional human approval before use.</p>
+      <p id="assign-skill-status" role="status"></p>
+      <div class="dialog-actions"><button type="button" data-close="assign-skill-dialog">Cancel</button><button type="submit" class="primary">Assign</button></div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/static/app.js?v=0.29.0"></script>
+<script type="module" src="/static/icons.js?v=1"></script>
+</body>
+</html>

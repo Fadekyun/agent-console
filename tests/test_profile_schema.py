@@ -1,0 +1,387 @@
+from __future__ import annotations
+
+import unittest
+
+from pathlib import Path
+
+from agent_console.profiles import (
+    CAPABILITY_ENFORCEMENTS,
+    PROFILE_SCHEMA,
+    READ_ONLY_PROFILES,
+    WRITE_PROFILES,
+    profile_summaries,
+    validate_profile_capability,
+    validate_profile_schema,
+)
+from agent_console.validation import PROFILES
+
+PROFILE_DIR = Path(__file__).resolve().parent.parent / "agent-profiles"
+
+
+class ProfileSchemaTests(unittest.TestCase):
+    def test_schema_has_all_required_profiles(self) -> None:
+        self.assertEqual(
+            frozenset(PROFILE_SCHEMA.keys()),
+            PROFILES,
+            "PROFILE_SCHEMA keys must match validation.PROFILES exactly",
+        )
+
+    def test_validate_passes(self) -> None:
+        validate_profile_schema()
+
+    def test_read_only_derived_correctly(self) -> None:
+        expected = frozenset(
+            name for name, meta in PROFILE_SCHEMA.items()
+            if meta["read_write_capability"] == "read_only"
+        )
+        self.assertEqual(READ_ONLY_PROFILES, expected)
+
+    def test_write_derived_correctly(self) -> None:
+        expected = frozenset(
+            name for name, meta in PROFILE_SCHEMA.items()
+            if meta["read_write_capability"] == "write"
+        )
+        self.assertEqual(WRITE_PROFILES, expected)
+
+    def test_verifier_is_read_only(self) -> None:
+        self.assertIn("verifier", READ_ONLY_PROFILES)
+        self.assertEqual(
+            PROFILE_SCHEMA["verifier"]["read_write_capability"], "read_only"
+        )
+
+    def test_general_is_write_default(self) -> None:
+        self.assertIn("general", WRITE_PROFILES)
+        self.assertEqual(
+            PROFILE_SCHEMA["general"]["read_write_capability"], "write"
+        )
+
+    def test_coder_and_bugfix_prefer_worktree(self) -> None:
+        for name in ("coder", "bugfix"):
+            self.assertEqual(
+                PROFILE_SCHEMA[name]["worktree_requirement"], "preferred"
+            )
+
+    def test_read_only_profiles_are_plan_constrained(self) -> None:
+        for name in READ_ONLY_PROFILES:
+            self.assertEqual(
+                PROFILE_SCHEMA[name]["provider_mode_constraints"],
+                frozenset({"plan"}),
+                f"{name} should be constrained to plan mode",
+            )
+
+    def test_write_profiles_have_no_mode_constraint(self) -> None:
+        for name in WRITE_PROFILES:
+            self.assertEqual(
+                PROFILE_SCHEMA[name]["provider_mode_constraints"],
+                frozenset(),
+                f"{name} should have no mode constraints",
+            )
+
+    def test_release_requires_human_approval(self) -> None:
+        for name in ("release",):
+            self.assertTrue(
+                PROFILE_SCHEMA[name]["requires_human_approval"],
+                f"{name} should require human approval",
+            )
+
+    def test_other_profiles_do_not_require_human_approval(self) -> None:
+        for name in ("general", "coder", "planner", "scout", "reviewer",
+                       "researcher", "verifier", "bugfix", "orchestrator"):
+            self.assertFalse(
+                PROFILE_SCHEMA[name]["requires_human_approval"],
+                f"{name} should not require human approval",
+            )
+
+    def test_coder_planner_release_orchestrator_manage_session_links(self) -> None:
+        for name in ("coder", "planner", "release", "orchestrator"):
+            self.assertTrue(
+                PROFILE_SCHEMA[name]["manages_session_links"],
+                f"{name} should manage session links",
+            )
+
+    def test_delegation_profiles_are_consistent(self) -> None:
+        for name, meta in PROFILE_SCHEMA.items():
+            allowed = meta["allowed_delegation_profiles"]
+            for dep in allowed:
+                self.assertIn(
+                    dep, PROFILES,
+                    f"{name} allows delegation to unknown profile {dep}",
+                )
+
+    def test_collaboration_profiles_are_full_set(self) -> None:
+        for name, meta in PROFILE_SCHEMA.items():
+            self.assertEqual(
+                meta["allowed_collaboration_profiles"],
+                PROFILES,
+                f"{name} should collaborate with all profiles",
+            )
+
+    def test_operator_is_legacy_alias_for_orchestrator(self) -> None:
+        self.assertEqual(
+            PROFILE_SCHEMA["orchestrator"]["legacy_aliases"],
+            frozenset({"operator"}),
+            "orchestrator should have operator as legacy alias",
+        )
+        self.assertEqual(
+            PROFILE_SCHEMA["orchestrator"]["replacement_profile"],
+            None,  # orchestrator itself is not a replacement
+        )
+        # operator is not in PROFILE_SCHEMA (it's a legacy alias)
+        self.assertNotIn("operator", PROFILE_SCHEMA)
+
+    def test_all_profiles_have_no_replacement_except_orchestrator(self) -> None:
+        for name, meta in PROFILE_SCHEMA.items():
+            if name == "orchestrator":
+                continue  # operator is legacy alias, not a replacement profile
+            self.assertIsNone(
+                meta["replacement_profile"],
+                f"{name} should have no replacement profile",
+            )
+
+    def test_all_profiles_are_active(self) -> None:
+        for name, meta in PROFILE_SCHEMA.items():
+            self.assertEqual(
+                meta["status"], "active",
+                f"{name} should be active",
+            )
+
+    def test_read_only_profiles_have_read_only_delegation_permission(self) -> None:
+        for name, meta in PROFILE_SCHEMA.items():
+            if meta["read_write_capability"] == "read_only":
+                self.assertEqual(
+                    meta["delegation_permissions"],
+                    frozenset({"read_only"}),
+                    f"{name} should have read_only delegation permission",
+                )
+
+    def test_write_profiles_can_delegate_authorized_write_work(self) -> None:
+        for name, meta in PROFILE_SCHEMA.items():
+            if meta["read_write_capability"] == "write":
+                self.assertEqual(
+                    meta["delegation_permissions"],
+                    frozenset({"read_only", "write"}),
+                    f"{name} should have read_only delegation permission set",
+                )
+
+    def test_general_worktree_requirement_is_none(self) -> None:
+        self.assertEqual(
+            PROFILE_SCHEMA["general"]["worktree_requirement"], "none"
+        )
+
+    def test_every_profile_has_all_expected_fields(self) -> None:
+        expected_fields = {
+            "name", "display_name", "description", "read_write_capability",
+            "worktree_requirement", "delegation_permissions",
+            "allowed_delegation_profiles", "allowed_collaboration_profiles",
+            "legacy_aliases", "replacement_profile", "provider_mode_constraints",
+            "requires_human_approval", "manages_session_links", "status",
+        }
+        for name, meta in PROFILE_SCHEMA.items():
+            self.assertEqual(
+                set(meta.keys()),
+                expected_fields,
+                f"{name} should have exactly the expected fields",
+            )
+
+
+class ProfileSummaryTests(unittest.TestCase):
+    def test_summaries_contain_all_profiles(self) -> None:
+        summaries = profile_summaries()
+        names = {s["name"] for s in summaries}
+        self.assertEqual(names, set(PROFILES))
+
+    def test_summary_includes_key_fields(self) -> None:
+        summaries = profile_summaries()
+        for summary in summaries:
+            self.assertIn("name", summary)
+            self.assertIn("display_name", summary)
+            self.assertIn("read_write_capability", summary)
+            self.assertIn("worktree_requirement", summary)
+            self.assertIn("requires_human_approval", summary)
+            self.assertIn("status", summary)
+
+    def test_general_is_first_summary(self) -> None:
+        summaries = profile_summaries()
+        self.assertEqual(summaries[0]["name"], "general")
+
+
+class ProfiledValidationFailureTests(unittest.TestCase):
+    def test_missing_profile_validation_fails(self) -> None:
+        from agent_console.profiles import PROFILE_SCHEMA as real_schema
+        saved = dict(real_schema)
+        try:
+            real_schema["ghost"] = {
+                "name": "ghost",
+                "display_name": "Ghost",
+                "description": "unknown",
+                "read_write_capability": "read_only",
+                "worktree_requirement": "none",
+                "allowed_delegation_profiles": frozenset(),
+                "allowed_collaboration_profiles": frozenset(),
+                "legacy_aliases": frozenset(),
+                "replacement_profile": None,
+                "provider_mode_constraints": frozenset(),
+                "requires_human_approval": False,
+                "manages_session_links": False,
+                "status": "active",
+            }
+            with self.assertRaises(RuntimeError):
+                validate_profile_schema()
+        finally:
+            real_schema.clear()
+            real_schema.update(saved)
+
+    def test_unknown_profile_validation_fails(self) -> None:
+        saved = dict(PROFILE_SCHEMA)
+        try:
+            PROFILE_SCHEMA.pop("verifier", None)
+            with self.assertRaises(RuntimeError):
+                validate_profile_schema()
+        finally:
+            PROFILE_SCHEMA.clear()
+            PROFILE_SCHEMA.update(saved)
+
+
+class ProfileFileAlignmentTests(unittest.TestCase):
+    """Tests that every profile in PROFILE_SCHEMA has a matching markdown file."""
+
+    def test_every_profile_has_markdown_file(self) -> None:
+        for name in PROFILE_SCHEMA:
+            path = PROFILE_DIR / f"{name}.md"
+            self.assertTrue(
+                path.is_file(),
+                f"profile {name!r} has no markdown file at {path}",
+            )
+
+    def test_every_markdown_file_corresponds_to_schema_profile(self) -> None:
+        md_files = {p.stem for p in PROFILE_DIR.glob("*.md")}
+        schema_profiles = set(PROFILE_SCHEMA.keys())
+        # operator.md is legacy alias, not in schema — expected
+        extra = md_files - schema_profiles
+        self.assertEqual(
+            extra, {"operator"},
+            "unexpected markdown files not in PROFILE_SCHEMA",
+        )
+
+    def test_markdown_title_contains_display_name(self) -> None:
+        for name, meta in PROFILE_SCHEMA.items():
+            path = PROFILE_DIR / f"{name}.md"
+            content = path.read_text(encoding="utf-8")
+            first_line = content.splitlines()[0]
+            self.assertIn(
+                meta["display_name"],
+                first_line,
+                f"{name}.md title {first_line!r} should contain display_name {meta['display_name']!r}",
+            )
+
+    def test_read_only_files_have_read_only_label(self) -> None:
+        for name in READ_ONLY_PROFILES:
+            path = PROFILE_DIR / f"{name}.md"
+            first_line = path.read_text(encoding="utf-8").splitlines()[0]
+            self.assertIn(
+                "Read Only",
+                first_line,
+                f"{name}.md title should indicate read-only capability",
+            )
+
+    def test_release_file_has_approval_label(self) -> None:
+        path = PROFILE_DIR / "release.md"
+        first_line = path.read_text(encoding="utf-8").splitlines()[0]
+        self.assertIn("Approval", first_line)
+
+    def test_orchestrator_distinguishes_inspect_from_review(self) -> None:
+        desc = PROFILE_SCHEMA["orchestrator"]["description"]
+        self.assertIn("inspect to read attention/live state", desc)
+        self.assertIn("review to read bounded terminal output", desc)
+
+    def test_orchestrator_clarifies_attention_notes_no_parentage(self) -> None:
+        desc = PROFILE_SCHEMA["orchestrator"]["description"]
+        self.assertIn("do not establish parentage", desc)
+
+
+class CapabilityValidationTests(unittest.TestCase):
+    def test_read_only_denies_codex_auto(self) -> None:
+        for profile in READ_ONLY_PROFILES:
+            result = validate_profile_capability(profile, "codex", "auto")
+            self.assertFalse(result["allowed"], f"{profile}+codex+auto should be denied")
+            self.assertEqual(result["enforcement"], "enforced")
+
+    def test_read_only_denies_opencode_build(self) -> None:
+        for profile in READ_ONLY_PROFILES:
+            result = validate_profile_capability(profile, "opencode", "build")
+            self.assertFalse(result["allowed"], f"{profile}+opencode+build should be denied")
+            self.assertEqual(result["enforcement"], "enforced")
+
+    def test_read_only_denies_claude_build(self) -> None:
+        for profile in READ_ONLY_PROFILES:
+            result = validate_profile_capability(profile, "claude", "build")
+            if result["allowed"]:
+                continue
+            self.assertEqual(result["enforcement"], "enforced")
+
+    def test_read_only_allows_plan_modes(self) -> None:
+        for profile in READ_ONLY_PROFILES:
+            for tool in ("codex", "opencode", "claude"):
+                result = validate_profile_capability(profile, tool, "plan")
+                self.assertTrue(result["allowed"], f"{profile}+{tool}+plan should be allowed")
+
+    def test_write_profiles_allow_all_modes(self) -> None:
+        for profile in WRITE_PROFILES:
+            for tool, modes in (("codex", ("plan", "auto")), ("opencode", ("plan", "build"))):
+                for mode in modes:
+                    result = validate_profile_capability(profile, tool, mode)
+                    self.assertTrue(result["allowed"], f"{profile}+{tool}+{mode} should be allowed")
+
+    def test_general_allows_all_modes(self) -> None:
+        for tool, modes in (("codex", ("plan", "auto", None)), ("opencode", ("plan", "build", None))):
+            for mode in modes:
+                result = validate_profile_capability("general", tool, mode)
+                self.assertTrue(result["allowed"], f"general+{tool}+{mode} should be allowed")
+
+    def test_shell_is_unsupported(self) -> None:
+        for profile in PROFILE_SCHEMA:
+            result = validate_profile_capability(profile, "shell", None)
+            self.assertTrue(result["allowed"], f"{profile}+shell should be allowed")
+            self.assertEqual(result["enforcement"], "unsupported")
+
+    def test_hermes_enforcement_is_unsupported(self) -> None:
+        for profile in PROFILE_SCHEMA:
+            result = validate_profile_capability(profile, "hermes", None)
+            self.assertTrue(result["allowed"], f"{profile}+hermes should be allowed")
+            self.assertEqual(result["enforcement"], "unsupported")
+
+    def test_release_is_pending_approval(self) -> None:
+        for profile in ("release",):
+            result = validate_profile_capability(profile, "codex", "auto")
+            self.assertTrue(result["allowed"], f"{profile}+codex should be allowed")
+            self.assertEqual(result["enforcement"], "pending_approval")
+
+    def test_claude_advisory_note(self) -> None:
+        for profile in ("general", "coder", "bugfix"):
+            result = validate_profile_capability(profile, "claude", "plan")
+            self.assertTrue(result["allowed"])
+            self.assertEqual(result["enforcement"], "unsupported")
+
+    def test_unknown_profile_rejected(self) -> None:
+        result = validate_profile_capability("nonexistent", "codex", "plan")
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["enforcement"], "enforced")
+
+    def test_worktree_required_denies_no_worktree(self) -> None:
+        for name, meta in PROFILE_SCHEMA.items():
+            if meta["worktree_requirement"] == "required":
+                result = validate_profile_capability(name, "codex", "plan", worktree=False)
+                self.assertFalse(result["allowed"], f"{name} should require worktree")
+
+    def test_enforcement_values_are_valid(self) -> None:
+        for profile in PROFILE_SCHEMA:
+            for tool in ("codex", "opencode", "claude", "shell", "hermes"):
+                result = validate_profile_capability(profile, tool, None)
+                self.assertIn(
+                    result["enforcement"], CAPABILITY_ENFORCEMENTS,
+                    f"{profile}+{tool}: unexpected enforcement {result['enforcement']!r}",
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()

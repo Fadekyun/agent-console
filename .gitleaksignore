@@ -1,0 +1,8 @@
+# Issue #182: six synthetic logging-redaction fixtures in two historical commits.
+# Exact commit:path:rule:line only. New commits and other findings remain scanned.
+3853f29493b85b2f4cd1bef7c9094bf2aa08e10b:tests/test_logging.py:slack-legacy-workspace-token:201
+3853f29493b85b2f4cd1bef7c9094bf2aa08e10b:tests/test_logging.py:slack-legacy-workspace-token:203
+3853f29493b85b2f4cd1bef7c9094bf2aa08e10b:tests/test_logging.py:slack-legacy-workspace-token:484
+a7488f6959041fe0d1d0ff4621038222b911eb5b:tests/test_logging.py:slack-legacy-workspace-token:176
+a7488f6959041fe0d1d0ff4621038222b911eb5b:tests/test_logging.py:slack-legacy-workspace-token:178
+a7488f6959041fe0d1d0ff4621038222b911eb5b:tests/test_logging.py:slack-legacy-workspace-token:234

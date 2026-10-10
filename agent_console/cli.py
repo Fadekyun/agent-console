@@ -1,0 +1,730 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from typing import Any
+
+from .manager import CODEX_EFFORT_LEVELS, SessionManager
+from .integration_requests import (
+    IntegrationError,
+    IntegrationService,
+    REQUEST_MAX_BYTES,
+    integration_error_for_raw,
+)
+from .secrets_store import migrate_openrouter_secret, secret_status, set_openrouter_secret
+from .skills import approve_superpower, doctor_skills, get_effective_skills, list_superpower_approvals, revoke_superpower, sync_skills
+from .validation import PROFILES, TOOLS
+from .inspection_views import inspection_route, read_route
+from .managed_context import has_managed_markers, managed_context
+
+
+def emit(value: Any) -> None:
+    print(json.dumps(value, indent=2, sort_keys=True, default=str))
+
+
+def print_session_tree(tree: dict[str, Any]) -> None:
+    def visit(nodes: list[dict[str, Any]], depth: int = 0) -> None:
+        for node in nodes:
+            detail = " · ".join(
+                value
+                for value in (
+                    node.get("tool") or "legacy",
+                    node.get("profile") or "legacy",
+                    node.get("live_state") or "missing",
+                    node.get("current_command") or "no process",
+                )
+                if value
+            )
+            print(f"{'  ' * depth}- {node['tmux_name']} ({detail})")
+            if node.get("repository"):
+                print(f"{'  ' * (depth + 1)}repository: {node['repository']}")
+            if node.get("initial_task"):
+                task = " ".join(str(node["initial_task"]).split())
+                print(f"{'  ' * (depth + 1)}task: {task[:180]}")
+            visit(node.get("children", []), depth + 1)
+
+    visit(tree["roots"])
+
+
+def confirm_typed(prompt: str, *, expected: str) -> bool:
+    if not sys.stdin.isatty():
+        return False
+    return input(f"{prompt} Type {expected!r} to confirm: ").strip() == expected
+
+
+def confirm_twice(prompt: str) -> bool:
+    if not sys.stdin.isatty():
+        return False
+    first = input(f"{prompt} [y/N]: ").strip().lower() in {"y", "yes"}
+    if not first:
+        return False
+    return input("Are you sure? [y/N]: ").strip().lower() in {"y", "yes"}
+
+
+def parser() -> argparse.ArgumentParser:
+    from .owner_cli import OwnerArgumentParser
+    root = OwnerArgumentParser(prog="agentctl")
+    root.add_argument("--json", action="store_true", help="emit JSON (currently the default format)")
+    commands = root.add_subparsers(dest="command", required=True)
+
+    integration = commands.add_parser("integration")
+    integration_commands = integration.add_subparsers(
+        dest="integration_command", required=True
+    )
+    integration_commands.add_parser("review-request")
+    integration_commands.add_parser("review-status")
+    plan_request = integration_commands.add_parser("plan-request")
+    plan_request.add_argument("--stdin", action="store_true", required=True)
+    plan_status = integration_commands.add_parser("plan-status")
+    plan_status.add_argument("--stdin", action="store_true", required=True)
+
+    session = commands.add_parser("session")
+    session_commands = session.add_subparsers(dest="session_command", required=True)
+    session_commands.add_parser("list")
+    tree = session_commands.add_parser("tree")
+    tree.add_argument("--json", action="store_true")
+    tree.add_argument("--current", action="store_true", help="show only this session’s tree")
+    relatives = session_commands.add_parser("relatives", help="live context for this session’s tree")
+    relatives.add_argument("name", nargs="?")
+    relatives.add_argument("--current", action="store_true")
+    relatives.add_argument("--json", action="store_true")
+    review = session_commands.add_parser("review")
+    review.add_argument("name", nargs="?")
+    review.add_argument("--relative", choices=["parent", "root", "child", "sibling", "ancestor", "descendant"])
+    review.add_argument("--index", type=int, help="1-based index from session relatives")
+    review.add_argument("--session-id", help="stable ID of a member of your tree")
+    review.add_argument("--lines", type=int, default=200)
+    review.add_argument("--json", action="store_true")
+    inspect = session_commands.add_parser("inspect")
+    inspect.add_argument("name")
+    context_show = session_commands.add_parser("context")
+    context_show.add_argument("name", nargs="?")
+    context_show.add_argument("--current", action="store_true")
+    context_show.add_argument("--json", action="store_true")
+    attention = session_commands.add_parser("attention")
+    attention.add_argument("name", nargs="?")
+    attention.add_argument("--current", action="store_true")
+    attention.add_argument(
+        "--state",
+        required=True,
+        choices=["normal", "needs_input", "blocked", "ready_for_review"],
+    )
+    attention.add_argument("--note")
+    attach = session_commands.add_parser("attach")
+    attach.add_argument("name")
+    create = session_commands.add_parser("create")
+    create.add_argument("--tool", required=True, choices=sorted(TOOLS))
+    create.add_argument("--profile", default="general", choices=sorted(PROFILES))
+    create.add_argument("--name")
+    create.add_argument("--parent", help="parent session name or durable ID; inherits project and repository")
+    create.add_argument("--task")
+    create.add_argument("--repository")
+    create.add_argument("--worktree", action="store_true")
+    create.add_argument("--auth-context")
+    create.add_argument("--agent-mode", choices=["plan", "build", "auto"])
+    create.add_argument("--provider", choices=["openrouter", "opencode", "opencode-go"])
+    create.add_argument("--model")
+    create.add_argument("--effort", choices=sorted(CODEX_EFFORT_LEVELS),
+                        help="Codex reasoning effort (codex/codex-pro only)")
+    create.add_argument("--plan-effort", choices=sorted(CODEX_EFFORT_LEVELS),
+                        help="Codex plan-mode reasoning effort (codex/codex-pro only)")
+    interrupt = session_commands.add_parser("interrupt")
+    interrupt.add_argument("name")
+    restart = session_commands.add_parser("restart-agent")
+    restart.add_argument("name")
+    resume = session_commands.add_parser('resume')
+    resume.add_argument('name')
+    rename = session_commands.add_parser("rename")
+    rename.add_argument("name")
+    rename.add_argument("new_name")
+    group = session_commands.add_parser("group")
+    group_commands = group.add_subparsers(dest="group_command", required=True)
+    group_create = group_commands.add_parser("create")
+    group_create.add_argument("name")
+    group_create.add_argument("--purpose")
+    group_create.add_argument("--parent-session")
+    group_commands.add_parser("list")
+    group_show = group_commands.add_parser("show")
+    group_show.add_argument("group_id")
+    group_add = group_commands.add_parser("add")
+    group_add.add_argument("group_id")
+    group_add.add_argument("session_name")
+    group_remove = group_commands.add_parser("remove")
+    group_remove.add_argument("group_id")
+    group_remove.add_argument("session_name")
+    group_open = group_commands.add_parser("open")
+    group_open.add_argument("group_id")
+
+    kill = session_commands.add_parser("kill")
+    kill.add_argument("name")
+    kill.add_argument("--yes", action="store_true")
+    kill.add_argument("--allow-unmanaged", action="store_true")
+    archive = session_commands.add_parser("archive")
+    archive.add_argument("name")
+    archive.add_argument("--kill", action="store_true")
+    archive.add_argument("--yes", action="store_true")
+    archive.add_argument("--allow-unmanaged", action="store_true")
+    wait_children = session_commands.add_parser("wait-for-children")
+    wait_children.add_argument("name")
+    wait_children.add_argument("--child", dest="child_selectors", action="append", metavar="ID_OR_NAME",
+                               help="wait only for these direct children; repeat for a batch")
+    wait_children.add_argument("--timeout", type=int, default=None)
+    wait_children.add_argument("--poll-interval", type=int, default=None)
+
+    profile = commands.add_parser("profile")
+    profile_commands = profile.add_subparsers(dest="profile_command", required=True)
+    profile_commands.add_parser("list")
+    profile_inspect = profile_commands.add_parser("inspect")
+    profile_inspect.add_argument("name", choices=sorted(PROFILES))
+
+    plan = commands.add_parser("plan")
+    plan_commands = plan.add_subparsers(dest="plan_command", required=True)
+    plan_commands.add_parser("list")
+    plan_inspect = plan_commands.add_parser("inspect")
+    plan_inspect.add_argument("plan_id")
+    plan_execute = plan_commands.add_parser("execute")
+    plan_execute.add_argument("plan_id")
+    plan_execute.add_argument("--profile", choices=["coder", "bugfix"], default="coder")
+    plan_execute.add_argument("--name")
+    plan_execute.add_argument("--allow-revision-change", action="store_true")
+    plan_execute.add_argument("--yes", action="store_true")
+
+    plan_evidence = plan_commands.add_parser("evidence")
+    plan_evidence.add_argument("plan_id")
+    plan_evidence.add_argument("--type", required=True, choices=["review", "verification", "scout"])
+    plan_evidence.add_argument("--result", required=True, choices=["pass", "fail", "blocked"])
+    plan_evidence.add_argument("--sha", required=True)
+    plan_evidence.add_argument("--detail")
+    plan_evidence.add_argument("--capability")
+
+    plan_gate = plan_commands.add_parser("gate")
+    plan_gate.add_argument("plan_id")
+    plan_gate.add_argument("--json", action="store_true")
+
+    plan_promote = plan_commands.add_parser("promote")
+    plan_promote.add_argument("plan_id")
+    plan_promote.add_argument("--sha")
+    plan_promote.add_argument("--yes", action="store_true")
+
+    delegate = commands.add_parser("delegate")
+    delegate.add_argument("profile", choices=sorted(PROFILES))
+    delegate.add_argument("--parent", required=True)
+    delegate.add_argument("--task", required=True)
+    delegate.add_argument("--repository")
+    delegate.add_argument("--tool", choices=sorted(TOOLS), default="codex")
+    delegate.add_argument("--name")
+    delegate.add_argument("--auth-context")
+    delegate.add_argument("--agent-mode", choices=["plan", "build", "auto"])
+    delegate.add_argument("--provider", choices=["openrouter", "opencode", "opencode-go"])
+    delegate.add_argument("--model", help="Model for the child (codex/codex-pro or provider-qualified OpenCode)")
+    delegate.add_argument("--effort", choices=sorted(CODEX_EFFORT_LEVELS),
+                          help="Codex reasoning effort (codex/codex-pro only)")
+    delegate.add_argument("--plan-effort", choices=sorted(CODEX_EFFORT_LEVELS),
+                          help="Codex plan-mode reasoning effort (codex/codex-pro only)")
+
+    models = commands.add_parser("models")
+    model_commands = models.add_subparsers(dest="models_command", required=True)
+    model_list = model_commands.add_parser("list")
+    model_list.add_argument("--provider", required=True, choices=["openrouter", "opencode"])
+    model_list.add_argument("--refresh", action="store_true")
+    model_list.add_argument("--json", action="store_true")
+    estimate = model_commands.add_parser("estimate")
+    estimate.add_argument("--provider", required=True, choices=["openrouter", "opencode"])
+    estimate.add_argument("--uncached-input-tokens", type=int, default=0)
+    estimate.add_argument("--cached-input-tokens", type=int, default=0)
+    estimate.add_argument("--output-tokens", type=int, default=0)
+    estimate.add_argument("--reasoning-tokens", type=int, default=0)
+
+    skills = commands.add_parser("skills")
+    skills_commands = skills.add_subparsers(dest="skills_command", required=True)
+    from .skill_cli import add_commands
+    add_commands(skills_commands)
+    skills_commands.add_parser("sync")
+    skills_doctor = skills_commands.add_parser("doctor")
+    skills_doctor.add_argument("--quiet", action="store_true")
+    skills_effective = skills_commands.add_parser("effective")
+    skills_effective.add_argument("profile", choices=sorted(PROFILES))
+    skills_validate = skills_commands.add_parser("validate-profile", help="Validate effective assignments for a profile")
+    skills_validate.add_argument("profile", choices=sorted(PROFILES))
+    skills_approve = skills_commands.add_parser("approve")
+    skills_approve.add_argument("profile", choices=sorted(PROFILES))
+    skills_approve.add_argument("skill_name")
+    skills_revoke = skills_commands.add_parser("revoke")
+    skills_revoke.add_argument("profile", choices=sorted(PROFILES))
+    skills_revoke.add_argument("skill_name")
+    skills_commands.add_parser("approvals")
+
+    secrets = commands.add_parser("secrets")
+    secrets_commands = secrets.add_subparsers(dest="secrets_command", required=True)
+    secrets_set = secrets_commands.add_parser("set")
+    secrets_set.add_argument("provider", choices=["openrouter"])
+    secrets_set.add_argument("--credential", default="openrouter-main")
+    secrets_commands.add_parser("status")
+    secrets_commands.add_parser("migrate-openrouter")
+
+    auth = commands.add_parser("auth")
+    auth_commands = auth.add_subparsers(dest="auth_command", required=True)
+    auth_login = auth_commands.add_parser("login")
+    auth_login.add_argument("tool", choices=sorted(TOOLS - {"shell"}))
+    auth_login.add_argument("--context")
+    context = auth_commands.add_parser("context")
+    context_commands = context.add_subparsers(dest="context_command", required=True)
+    context_list = context_commands.add_parser("list")
+    context_list.add_argument("--tool", choices=sorted(TOOLS))
+    context_add = context_commands.add_parser("add")
+    context_add.add_argument("tool", choices=sorted(TOOLS))
+    context_add.add_argument("name")
+    context_add.add_argument("--provider", required=True)
+    context_add.add_argument("--kind", required=True, choices=["oauth-native", "api-key", "none"])
+    context_add.add_argument("--secret-ref")
+    context_add.add_argument("--source-ref")
+    context_add.add_argument("--disabled", action="store_true")
+    context_add.add_argument("--verified", action="store_true")
+    context_add.add_argument("--default", action="store_true")
+    context_default = context_commands.add_parser("set-default")
+    context_default.add_argument("tool", choices=sorted(TOOLS))
+    context_default.add_argument("name")
+    context_status = context_commands.add_parser("status")
+    context_status.add_argument("--tool", choices=sorted(TOOLS))
+    context_status.add_argument("--context")
+    context_commands.add_parser("doctor")
+    context_disable = context_commands.add_parser("disable")
+    context_disable.add_argument("tool", choices=sorted(TOOLS))
+    context_disable.add_argument("name")
+    context_disable.add_argument("--reason", default="context disabled")
+
+    deploy = commands.add_parser("deploy")
+    deploy_commands = deploy.add_subparsers(dest="deploy_command", required=True)
+    deploy_apply = deploy_commands.add_parser("apply")
+    deploy_apply.add_argument("plan_id")
+    deploy_apply.add_argument("--yes", action="store_true")
+    deploy_commands.add_parser("list")
+    deploy_commands.add_parser("current")
+    deploy_commands.add_parser("canary")
+    deploy_validate = deploy_commands.add_parser("validate")
+    deploy_validate.add_argument("release_name")
+    deploy_promote_user = deploy_commands.add_parser("promote-user-service")
+    deploy_promote_user.add_argument("release_name")
+    deploy_promote_user.add_argument("--yes", action="store_true")
+    deploy_rollback = deploy_commands.add_parser("rollback")
+    deploy_rollback.add_argument("--target", default="previous")
+    deploy_rollback.add_argument("--yes", action="store_true")
+    deploy_commands.add_parser("doctor")
+
+    from .workflow_cli import add_commands as add_workflow_commands
+    add_workflow_commands(commands)
+    from .owner_cli import add_commands as add_owner_commands
+    add_owner_commands(commands)
+    commands.add_parser("doctor")
+    return root
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        route = inspection_route(args)
+        context = managed_context() if args.command in {"session", "delegate"} else None
+        if args.command in {"project", "environment"}:
+            if has_managed_markers():
+                raise PermissionError("project and environment owner commands are unsupported in managed sessions; use a local human owner terminal")
+            from .owner_cli import run
+            emit(run(args, SessionManager()))
+            return 0
+        if route is not None:
+            if context is not None and route[0] == "session" and len(route) == 2:
+                from .session_client import managed_read
+                result = managed_read(args, route)
+            else:
+                result = read_route(args, route)
+            if route == ("session", "tree") and not args.json:
+                print_session_tree(result)
+            elif route == ("session", "review") and not args.json:
+                session = result["session"]
+                print(f"Session: {session['tmux_name']} · {session['live_state']} · {result['source']}")
+                print(result["notice"])
+                print("--- peer terminal output begins ---")
+                print(result["content"], end="" if result["content"].endswith("\n") else "\n")
+                print("--- peer terminal output ends ---")
+            else:
+                emit(result)
+            return 0
+        if args.command == "workflow":
+            if args.workflow_command == "manage":
+                from .operator_workflow_cli import run as run_owner_workflow
+                emit(run_owner_workflow(args, manager_factory=SessionManager))
+                return 0
+            from .workflow_cli import run as run_workflow_command
+            emit(run_workflow_command(args))
+            return 0
+        if args.command == "skills":
+            from .skill_cli import COMMANDS, run as run_skill_command
+            if args.skills_command in COMMANDS:
+                result = run_skill_command(args)
+                emit(result)
+                return 1 if args.skills_command == 'validate' and not result['valid'] else 0
+            if args.skills_command == "effective":
+                manager = SessionManager()
+                emit(get_effective_skills(manager.database, args.profile))
+                return 0
+            if args.skills_command == "validate-profile":
+                manager = SessionManager()
+                from .skills import validate_profile_skills
+                result = validate_profile_skills(manager.database, args.profile)
+                emit(result)
+                return 0 if result["valid"] else 1
+            if args.skills_command == "approve":
+                manager = SessionManager()
+                from .skills import approve_superpower
+                emit(approve_superpower(manager.database, args.profile, args.skill_name,
+                                         actor="CLI-user", surface="CLI"))
+                return 0
+            if args.skills_command == "revoke":
+                manager = SessionManager()
+                from .skills import revoke_superpower
+                emit(revoke_superpower(manager.database, args.profile, args.skill_name,
+                                        actor="CLI-user", surface="CLI"))
+                return 0
+            if args.skills_command == "approvals":
+                manager = SessionManager()
+                emit(list_superpower_approvals(manager.database))
+                return 0
+            result = sync_skills() if args.skills_command == "sync" else doctor_skills()
+            if not getattr(args, "quiet", False):
+                emit(result)
+            return 0 if result["ok"] else 1
+        if args.command == "secrets":
+            if args.secrets_command == "set":
+                emit(set_openrouter_secret(credential=args.credential))
+            elif args.secrets_command == "migrate-openrouter":
+                emit(migrate_openrouter_secret())
+            else:
+                emit(secret_status())
+            return 0
+        if args.command == "integration":
+            raw = sys.stdin.buffer.read(REQUEST_MAX_BYTES + 1)
+            try:
+                service = (IntegrationService(SessionManager(), review=True)
+                           if args.integration_command.startswith("review-")
+                           else IntegrationService(SessionManager()))
+                if args.integration_command in {"plan-request", "review-request"}:
+                    response, exit_code = service.submit(raw)
+                else:
+                    response, exit_code = service.status(raw)
+            except IntegrationError as exc:
+                response = integration_error_for_raw(raw, exc)
+                exit_code = exc.exit_code
+            except Exception:
+                error = IntegrationError("internal_error", exit_code=4)
+                response = integration_error_for_raw(raw, error)
+                exit_code = 4
+            emit(response)
+            if exit_code:
+                print("agentctl: integration operation rejected", file=sys.stderr)
+            return exit_code
+        from .session_client import handles, run as run_session_control
+        if handles(args) and context is not None:
+            result = run_session_control(args)
+            emit(result)
+            return result.get("exit_code", 0) if isinstance(result, dict) else 0
+        manager = SessionManager()
+        if args.command == "auth":
+            if args.auth_command == "login":
+                return manager.auth_login(args.tool, args.context)
+            if args.context_command == "list":
+                emit(manager.auth_contexts(args.tool))
+            elif args.context_command == "add":
+                emit(
+                    manager.auth.add_context(
+                        args.tool,
+                        args.name,
+                        provider=args.provider,
+                        kind=args.kind,
+                        secret_ref=args.secret_ref,
+                        source_ref=args.source_ref,
+                        enabled=not args.disabled,
+                        verified=args.verified,
+                        make_default=args.default,
+                    )
+                )
+            elif args.context_command == "set-default":
+                emit(manager.auth.set_default(args.tool, args.name))
+            elif args.context_command == "status":
+                emit(
+                    manager.auth.get_context(args.tool, args.context)
+                    if args.tool
+                    else manager.tool_catalog()
+                )
+            elif args.context_command == "doctor":
+                result = manager.auth.doctor()
+                emit(result)
+                return 0 if result["ok"] else 1
+            elif args.context_command == "disable":
+                emit(manager.auth.disable(args.tool, args.name, args.reason))
+            return 0
+        if args.command == "deploy":
+            if args.deploy_command == "apply":
+                confirmed = args.yes or confirm_typed(
+                    "Create immutable release and select canary?",
+                    expected=args.plan_id,
+                )
+                emit(manager.deploy_apply(args.plan_id, confirmed=confirmed))
+            elif args.deploy_command == "list":
+                emit(manager.list_releases())
+            elif args.deploy_command == "current":
+                result = manager.current_release()
+                emit(result or {"release_name": None, "release_path": None})
+            elif args.deploy_command == "canary":
+                result = manager.canary_release()
+                emit(result or {"release_name": None, "release_path": None})
+            elif args.deploy_command == "validate":
+                emit(manager.validate_release(args.release_name))
+            elif args.deploy_command == "promote-user-service":
+                confirmed = args.yes or confirm_typed(
+                    "Promote canary release to user-service? This is equivalent to selecting current.",
+                    expected=args.release_name,
+                )
+                if not confirmed:
+                    raise PermissionError("promotion confirmation required")
+                emit(manager.promote_user_service(args.release_name))
+            elif args.deploy_command == "rollback":
+                confirmed = args.yes or confirm_typed(
+                    "Rollback to previous release?",
+                    expected="rollback",
+                )
+                if not confirmed:
+                    raise PermissionError("rollback confirmation required")
+                emit(manager.rollback_release(target=args.target))
+            elif args.deploy_command == "doctor":
+                emit(manager.deployer_doctor())
+            return 0
+        if args.command == "doctor":
+            result = manager.doctor()
+            emit(result)
+            return 0 if result["ok"] else 1
+        if args.command == "models":
+            if args.models_command == "list":
+                emit(manager.model_catalogue(args.provider, refresh=args.refresh))
+            else:
+                emit(manager.estimate_models(
+                    args.provider,
+                    uncached_input_tokens=args.uncached_input_tokens,
+                    cached_input_tokens=args.cached_input_tokens,
+                    output_tokens=args.output_tokens,
+                    reasoning_tokens=args.reasoning_tokens,
+                ))
+            return 0
+        if args.command == "session":
+            if args.session_command == "list":
+                emit(manager.list_sessions())
+            elif args.session_command == "tree":
+                tree_result = manager.session_tree()
+                emit(tree_result) if args.json else print_session_tree(tree_result)
+            elif args.session_command == "review":
+                review_result = manager.review_session(args.name, lines=args.lines)
+                if args.json:
+                    emit(review_result)
+                else:
+                    session = review_result["session"]
+                    print(
+                        f"Session: {session['tmux_name']} · {session['live_state']} · "
+                        f"{review_result['source']}"
+                    )
+                    print(review_result["notice"])
+                    print("--- peer terminal output begins ---")
+                    print(review_result["content"], end="" if review_result["content"].endswith("\n") else "\n")
+                    print("--- peer terminal output ends ---")
+            elif args.session_command == "inspect":
+                emit(manager.inspect(args.name))
+            elif args.session_command == "context":
+                emit(manager.session_context(None if args.current else args.name))
+            elif args.session_command == "attention":
+                if args.current == bool(args.name):
+                    raise ValueError("provide exactly one of NAME or --current")
+                emit(
+                    manager.set_attention(
+                        None if args.current else args.name,
+                        state=args.state,
+                        note=args.note,
+                    )
+                )
+            elif args.session_command == "attach":
+                manager.attach(args.name)
+            elif args.session_command == "create":
+                parent = None
+                if args.parent:
+                    with manager.database.connect() as conn:
+                        rows = conn.execute("SELECT tmux_name FROM sessions WHERE id=? OR tmux_name=?",
+                                            (args.parent, args.parent)).fetchall()
+                    if len(rows) != 1:
+                        raise ValueError("Choose an existing, unambiguous parent session")
+                    parent = manager.inspect(rows[0]["tmux_name"])
+                    if not parent.get("managed") or parent.get("execution_kind") == "integration-plan":
+                        raise ValueError("Choose a managed interactive parent session")
+                emit(
+                    manager.create(
+                        tool=args.tool,
+                        profile=args.profile,
+                        name=args.name,
+                        task=args.task,
+                        repository=args.repository or (parent.get("repository") if parent else None),
+                        parent_session_id=parent["id"] if parent else None,
+                        project_id=parent.get("project_id") if parent else None,
+                        worktree=args.worktree,
+                        auth_context=args.auth_context,
+                        agent_mode=args.agent_mode,
+                        provider=args.provider,
+                        model=args.model,
+                        reasoning_effort=args.effort,
+                        plan_reasoning_effort=args.plan_effort,
+                    )
+                )
+            elif args.session_command == "interrupt":
+                emit(manager.interrupt(args.name))
+            elif args.session_command == "restart-agent":
+                emit(manager.restart(args.name))
+            elif args.session_command == 'resume':
+                emit(manager.resume(args.name))
+            elif args.session_command == "rename":
+                emit(manager.rename(args.name, args.new_name))
+            elif args.session_command == "kill":
+                if not args.yes and not confirm_twice("Kill the tmux session?"):
+                    raise PermissionError("confirmation required")
+                emit(manager.kill(args.name, allow_unmanaged=args.allow_unmanaged))
+            elif args.session_command == "wait-for-children":
+                result = manager.wait_for_children(
+                    args.name,
+                    timeout=args.timeout,
+                    poll_interval=args.poll_interval,
+                    child_selectors=args.child_selectors,
+                )
+                if args.json:
+                    emit(result)
+                else:
+                    outcome = result.get("outcome", "unknown")
+                    exit_code = result.get("exit_code", 1)
+                    print(f"Wait outcome: {outcome} (exit code {exit_code})")
+                    for child in result.get("children", []):
+                        status = child.get("wait_status", "unknown")
+                        attn = child.get("attention_state", "normal")
+                        name = child["tmux_name"]
+                        note = f" — {child.get('attention_note', '')}" if child.get("attention_note") else ""
+                        print(f"  {name}: {status} (attention: {attn}){note}")
+                return result.get("exit_code", 1) or 0
+            elif args.session_command == "archive":
+                if args.kill and not args.yes and not confirm_twice(
+                    "Archive and kill the tmux session?"
+                ):
+                    raise PermissionError("confirmation required")
+                emit(
+                    manager.archive(
+                        args.name,
+                        kill=args.kill,
+                        allow_unmanaged=args.allow_unmanaged,
+                    )
+                )
+            elif args.session_command == "group":
+                if args.group_command == "list":
+                    emit(manager.list_groups())
+                elif args.group_command == "create":
+                    emit(manager.create_group(args.name, args.purpose, args.parent_session))
+                elif args.group_command == "show":
+                    emit(manager.get_group(args.group_id))
+                elif args.group_command == "add":
+                    emit(manager.add_group_session(args.group_id, args.session_name))
+                elif args.group_command == "remove":
+                    emit(manager.remove_group_session(args.group_id, args.session_name))
+                elif args.group_command == "open":
+                    emit(manager.open_group(args.group_id))
+        elif args.command == "profile":
+            emit(
+                manager.list_profiles()
+                if args.profile_command == "list"
+                else manager.inspect_profile(args.name)
+            )
+        elif args.command == "plan":
+            if args.plan_command == "list":
+                emit(manager.list_plans())
+            elif args.plan_command == "inspect":
+                emit(manager.inspect_plan(args.plan_id))
+            elif args.plan_command == "evidence":
+                cap = args.capability or os.environ.get("AGENT_CONSOLE_EVIDENCE_CAPABILITY")
+                emit(
+                    manager.record_evidence(
+                        args.plan_id,
+                        evidence_type=args.type,
+                        result=args.result,
+                        candidate_sha=args.sha,
+                        detail=args.detail,
+                        capability=cap,
+                    )
+                )
+            elif args.plan_command == "gate":
+                gate = manager.check_release_gate(args.plan_id)
+                if args.json:
+                    emit(gate)
+                else:
+                    status = "ALLOWED" if gate["allowed"] else "BLOCKED"
+                    print(f"Release gate: {status}")
+                    print(f"  Plan: {args.plan_id}")
+                    print(f"  SHA: {gate.get('candidate_sha', 'none')}")
+                    print(f"  Reason: {gate['reason']}")
+                    if gate.get("blocked_by"):
+                        print(f"  Blocked by: {gate['blocked_by']}")
+            elif args.plan_command == "promote":
+                if not args.yes and not confirm_typed(
+                    "Promote plan to releasable?", expected=args.plan_id
+                ):
+                    raise PermissionError("confirmation required")
+                emit(
+                    manager.promote_plan(
+                        args.plan_id,
+                        candidate_sha=args.sha,
+                    )
+                )
+            elif args.plan_command == "execute":
+                plan = manager.inspect_plan(args.plan_id)
+                print(plan["plan"])
+                print(f"\nRepository: {plan.get('repository') or 'from metadata'}")
+                print(f"Implementation profile: {args.profile}")
+                if not args.yes and not confirm_typed(
+                    "Create a new isolated implementation session?", expected=args.plan_id
+                ):
+                    raise PermissionError("confirmation required")
+                emit(
+                    manager.execute_plan(
+                        args.plan_id,
+                        profile=args.profile,
+                        name=args.name,
+                        allow_revision_change=args.allow_revision_change,
+                    )
+                )
+        elif args.command == "delegate":
+            emit(
+                manager.delegate(
+                    profile=args.profile,
+                    parent=args.parent,
+                    task=args.task,
+                    repository=args.repository,
+                    tool=args.tool,
+                    name=args.name,
+                    auth_context=args.auth_context,
+                    agent_mode=args.agent_mode,
+                    model=args.model,
+                    provider=args.provider,
+                    reasoning_effort=args.effort,
+                    plan_reasoning_effort=args.plan_effort,
+                )
+            )
+        return 0
+    except (FileNotFoundError, FileExistsError, KeyError, PermissionError, RuntimeError, ValueError) as exc:
+        if route is not None and getattr(args, "json", False):
+            emit({"error": {"code": getattr(exc, "code", "inspection-unavailable"),
+                            "message": "inspection unavailable"}})
+        print(f"agentctl: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

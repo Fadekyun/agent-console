@@ -1,0 +1,113 @@
+# Pi and Hermes through CommandCode
+
+The CT115 default is `deepseek/deepseek-v4.1-flash`, validated against the
+69-model authenticated catalogue on 2026-09-14. V4 Flash is a separate model;
+the provisioner refuses to configure defaults if V4.1 Flash is missing.
+Pi's private `models.json` exposes the **entire** authenticated catalogue, not
+just the default: each entry carries the API-reported `context_length` as
+`contextWindow` (for example V4.1 Flash is 1000000, not the old 128000 pin), so
+`/model` can switch to any CommandCode model without editing the file. Pi reloads
+`models.json` whenever `/model` opens, so a refreshed catalogue takes effect in
+an existing session. Output remains pinned to a conservative `maxTokens=8192`;
+Hermes already accepted any catalogue model id, so this only changed Pi.
+
+## Installation and credential provisioning
+
+Install pi under `~/.local` with the pinned `pi-runtime` Node (22.22.2). The
+verified native MCP harness is `@earendil-works/pi-coding-agent` **0.99.2**.
+`scripts/pi-wrapper` names this scope and passes through arguments without
+rewriting generated MCP configuration. Managed contexts do not source host
+credential files or invoke a legacy MCP normalizer after Console resolves the
+environment. Empty and suppressed project variables remain empty/absent. It
+preserves an explicit theme and supplies a readable dark default only when no
+theme is set. Standalone invocation retains its host compatibility path. Install it as
+`~/.local/bin/pi-agent-console` and set `AGCONSOLE_PI_BIN` to that absolute path
+in Console's runtime.env.
+Pi resolves an `api_key` entry through its config-value expansion: from pi 0.74
+onwards a plain string is a literal and only the explicit **`$CMD_API_KEY`**
+form reads the environment. The adapter always writes that form in both
+`models.json` and `auth.json`, so no wrapper-side rewrite is required and a
+previously stored literal is never kept on disk. Keep the harness version pinned
+until the adapter and native smoke are reverified together.
+
+Install `scripts/hermes-wrapper` as `~/.local/bin/hermes` and set
+`AGCONSOLE_HERMES_BIN` to it. It invokes the existing Hermes checkout with its
+venv interpreter, avoiding stale entrypoint shebangs and editable-install paths.
+CT115's copied venv had a dangling Python link; its original target is retained
+as `venv/bin/python.pre-commandcode`, and `python` points to `/usr/bin/python3.11`.
+
+Run `python -m agent_console.commandcode` from the release with the credential
+on stdin, using a secure host-local pipe (never paste the value into arguments
+or logs). `--config-dir` defaults to `~/.config/agent-console`.
+The provisioner validates syntax and authenticated API access before creating
+or updating any files. It backs up existing credential and registry files under
+`config/backups/commandcode-<UTC timestamp>/`, writes the key only to
+`secrets.d/commandcode-main.env` (0600), and makes that context the default for
+both tools. Contexts hold the endpoint, catalogue IDs, default and verification
+timestamp, never the key. Rerun to refresh the catalogue or rotate the key.
+
+## Launch behavior and limitations
+
+The private launch bootstrap passes the resolved environment literally, including
+selected credential-file defaults and global/project overrides. Pi gets a private
+models.json with the `$CMD_API_KEY` environment reference and
+`--append-system-prompt` pointing to Console's context file; its `auth.json` is
+(re)written to the same reference so a previously stored literal is never kept
+on disk. Hermes gets a private HERMES_HOME/config.yaml with `${CMD_API_KEY}`; its
+wrapper reads the Console context into HERMES_EPHEMERAL_SYSTEM_PROMPT at launch,
+including after a rename/restart.
+
+Both harnesses receive generated MCP configuration for credential-enabled n8n,
+Directus, OpenRouter and Bushi servers. Pi uses native `headers`, `timeout` in
+seconds and `exposure: codemode`; Hermes uses `mcp_servers` with the same headers
+and timeout. Only `${VAR}` references are written. URL overrides are
+`N8N_MCP_URL`, `DIRECTUS_MCP_URL`, `OPENROUTER_MCP_URL` and `BUSHI_MCP_URL`.
+The 1200-second Bushi timeout preserves long browser operations.
+
+Missing credentials produce `{url, enabled: false}` in Pi and omit the Hermes
+entry. Relaunch regenerates the managed configuration, dropping stale active
+entries. Pi's trusted project `.pi/mcp.json` can override the agent-directory
+file; Hermes may add portable plugin servers. This is configuration delivery,
+not complete tool isolation. See [native MCP verification](NATIVE_MCP_VERIFICATION.md).
+Existing host wrappers are retained until their separate deployment is reviewed;
+the source adapters need no legacy MCP translation or server merge.
+The user still sends the stored session brief explicitly in the composer.
+
+Both desktop and mobile expose the selected context's model catalogue. The CLI
+accepts `--model` and validates it against that context. Unsupported agent-mode
+and reasoning-effort pins fail clearly. Console profile instructions reach both
+harnesses, but neither adapter enforces a sandbox, read-only execution, or human
+approval. Pi receives Console-selected copied skills in its private agent directory,
+while native project/settings/package discovery remains active. Hermes receives
+shared selections through `skills.external_dirs`; per-profile isolation remains
+unsupported. Neither placement claims to suppress all native sources.
+
+Existing OpenRouter contexts and files are preserved for rollback; the new
+Pi/Hermes adapters require verified CommandCode contexts. Old persisted
+launchers are not rewritten by release installation.
+
+## Verification and rollback
+
+Run `pytest tests/test_commandcode.py tests/test_auth_contexts.py
+tests/test_profile_schema.py tests/test_core.py tests/test_web.py tests/test_version.py`
+and the harness selector browser test. Run a bounded native smoke in a temporary
+directory: give the system context a marker and request a tool read of a random
+probe file; require both markers in the authenticated response. Exit status
+alone is insufficient (Pi can exit 0 after an API error).
+
+Before activation, snapshot runtime.env, auth-contexts.json, the existing
+credential (if any), wrappers, runner and selected-release target. Retain the
+previous release. Restore those files and the selected symlink, then restart
+only the web service to roll back; do not terminate existing tmux sessions.
+
+## Updating an existing host wrapper
+
+A custom installed launcher does not change when Console selects a new release.
+Before deploying this fix, compare its current hash with the reviewed preimage,
+back it up privately, and atomically install the reviewed `scripts/pi-wrapper`
+bytes at the existing `AGCONSOLE_PI_BIN` path. Keep standalone `pi` and unrelated
+host customizations intact. Verify the installed wrapper with dummy credential
+files, an inert native CLI and temporary HOME; never use real credential values
+in test output. Confirm override, empty/suppressed values, disabled native MCP
+entries, explicit theme and selected skill links survive. Future Pi launches and
+explicit restarts receive the change; existing processes keep their environment.
