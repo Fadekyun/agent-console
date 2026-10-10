@@ -1,3 +1,9 @@
+## Same-tree session management — 2026-10-10 (#190)
+
+- [x] Allow every role, including read-only and Plan sessions, to update attention, interrupt, restart, and stop other managed interactive sessions sharing their root tree across projects.
+- [x] Scope child waits to that tree, preserve global recorded-session inspection, and retain durable target IDs, self-operation rules, and delegation limits.
+- [x] Align bundled profiles, launch guidance, CLI help, and capability documentation; verify same-tree controls and separate-tree, stale-identity, and noninteractive rejections.
+
 ## Cache-aware CT115 launch admission — 2026-10-10 (#191)
 
 - [x] Discount bounded inactive file cache at each actual finite-limit cgroup, preserving raw counters and the existing admission JSON key.

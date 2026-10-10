@@ -20,6 +20,8 @@ SAFE_REJECTION_DETAILS = frozenset({
     'read-only sessions cannot control other sessions',
     'this operation requires an ancestor or descendant session',
     'session is not an ancestor or descendant of the caller',
+    'this operation requires another session in the same tree',
+    'session is not in the same tree as the caller',
     'delegation must originate from the caller',
     'parent role cannot delegate this child role',
     'read-only or Plan parent cannot delegate writable work',

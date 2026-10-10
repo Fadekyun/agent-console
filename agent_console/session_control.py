@@ -1,4 +1,4 @@
-"""Capability-authenticated Console inspection and ancestor/descendant control.
+"""Capability-authenticated Console inspection and same-tree session control.
 
 The service owns database access. A harness has only its existing reporting
 capability; neither caller-supplied role names nor mutable session names grant
@@ -75,8 +75,8 @@ class SessionControl:
         # Do not expose terminals that Console has never recorded.
         self.views.sessions = [row for row in self.views.sessions if row['id'] in ids]
 
-    def ancestors(self, key):
-        seen, ancestors = {key}, set()
+    def root(self, key):
+        seen = {key}
         while key in self.all_sessions:
             parent = self.all_sessions[key].get('parent_session_id')
             if parent not in self.all_sessions:
@@ -84,9 +84,8 @@ class SessionControl:
             if parent in seen or len(seen) > 128:
                 raise ValueError('invalid session ancestry')
             seen.add(parent)
-            ancestors.add(parent)
             key = parent
-        return ancestors
+        return key
 
     def target(self, name=None):
         if not name:
@@ -107,14 +106,13 @@ class SessionControl:
         if target['id'] == self.current['id']:
             if own:
                 return
-            raise PermissionError('this operation requires an ancestor or descendant session')
-        if self.current.get('profile') in READ_ONLY_PROFILES or self.current.get('agent_mode') == 'plan':
-            raise PermissionError('read-only sessions cannot control other sessions')
-        caller_ancestors = self.ancestors(self.current['id'])
-        target_ancestors = self.ancestors(target['id'])
-        if target['id'] in caller_ancestors or self.current['id'] in target_ancestors:
+            raise PermissionError('this operation requires another session in the same tree')
+        # Session coordination is independent of repository write permissions.
+        # Manually linked trees can span projects; project equality is not
+        # authority to control a separate tree.
+        if self.root(self.current['id']) == self.root(target['id']):
             return
-        raise PermissionError('session is not an ancestor or descendant of the caller')
+        raise PermissionError('session is not in the same tree as the caller')
 
     def run(self, command, payload):
         if command == 'read':
@@ -146,9 +144,9 @@ class SessionControl:
             config['name'] = payload.get('child_name')
             return self.manager.delegate(parent=self.current['id'], creator_surface='session-api', **config)
         if command == 'children':
-            # Waiting only observes metadata; it needs no mutation authority.
-            if not target.get('managed') or target.get('execution_kind') != 'interactive':
-                raise PermissionError('session control requires a managed interactive target')
+            # Waits are available to every role within the same tree. The
+            # broader read routes remain available for inspecting other trees.
+            self.authorize_control(target, own=True)
             if 'child_selectors' in payload or 'child_ids' in payload:
                 from .child_waits import select_children
                 if 'child_selectors' in payload and 'child_ids' in payload:
@@ -159,7 +157,7 @@ class SessionControl:
                 selected_ids = [child['id'] for child in children]
                 visible = {row['id']:row for row in self.views.sessions}
                 if any(identity not in visible for identity in selected_ids):
-                    raise PermissionError('selected child is outside the permitted project or tree')
+                    raise PermissionError('selected child is not a recorded session')
                 return {'parent_id':target['id'], 'selected_child_ids':selected_ids,
                         'children':[visible[identity] for identity in selected_ids]}
             from .session_relatives import relatives
