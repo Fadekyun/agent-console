@@ -17,10 +17,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binary', type=Path)
     parser.add_argument('--guides', type=Path, help='Optional validated Console guide packages to discover')
+    parser.add_argument("--expected-version", default="0.159.2")
     args = parser.parse_args()
     binary = str(args.binary.resolve())
     version = subprocess.check_output([binary, '--version'], text=True).strip()
-    assert version == 'codex-cli 0.159.2', version
+    assert version == f'codex-cli {args.expected_version}', version
     with tempfile.TemporaryDirectory(prefix='console-codex-skills-') as temporary:
         root = Path(temporary)
         home, project, native, snapshot = [root / part for part in ('home', 'project', 'native', 'snapshot')]
@@ -74,7 +75,7 @@ def main():
             expected = ['console-legacy-project', 'console-project', 'console-snapshot', 'console-user']
             assert names == sorted(expected + guides), {'discovered': names, 'errors': entry['errors']}
             assert not entry['errors'], entry['errors']
-            print(json.dumps({'harness': 'codex/codex-pro', 'version': '0.159.2',
+            print(json.dumps({'harness': 'codex/codex-pro', 'version': args.expected_version,
                               'native_skills': names, 'model_called': False,
                               'project_and_user_sources_remain_active': True}))
         finally:

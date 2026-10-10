@@ -29,7 +29,8 @@ class SessionControlTests(unittest.TestCase):
         self.db.migrate()
         self.manager = SimpleNamespace(database=self.db, settings=self.settings,
             set_attention=Mock(return_value={'attention_state':'ready_for_review'}),
-            interrupt=Mock(return_value={'interrupted':True}), delegate=Mock(return_value={'delegated':True}))
+            interrupt=Mock(return_value={'interrupted':True}), delegate=Mock(return_value={'delegated':True}),
+            restart=Mock(return_value={'restarted':True}), kill=Mock(return_value={'killed':True}))
         with self.db.connect() as db:
             db.execute("INSERT INTO projects(id,name,created_at,updated_at) VALUES('p','Project','2026-10-03','2026-10-03')")
             db.execute("INSERT INTO projects(id,name,created_at,updated_at) VALUES('q','Other','2026-10-03','2026-10-03')")
@@ -55,14 +56,47 @@ class SessionControlTests(unittest.TestCase):
         self.assertEqual(self.request('read',{'route':['session','list']},capability='peer-cap').status_code,403)
         self.assertEqual(self.client.post('/api/agent-sessions',json={'command':'read'}).status_code,403)
 
-    def test_metadata_survives_socket_failure_without_cross_project_leak(self):
+    def test_metadata_survives_socket_failure_across_projects(self):
         result = self.request('read',{'route':['session','list']})
         self.assertEqual(result.status_code,200,result.text)
         rows = result.json()
-        self.assertEqual({row['id'] for row in rows},{'parent','child','peer'})
+        self.assertEqual({row['id'] for row in rows},{'parent','child','peer','other'})
         self.assertTrue(all(row['running'] is None and row['live_state']=='unknown' for row in rows))
         self.assertNotIn('evidence_capability_hash',result.text)
-        self.assertEqual(self.request('read',{'route':['session','inspect'],'name':'other'}).status_code,403)
+        self.assertEqual(self.request('read',{'route':['session','inspect'],'name':'other'}).status_code,200)
+
+    def test_global_reads_by_name_and_id_preserve_relative_tree_scope(self):
+        transcript = self.settings.state_dir / 'other.txt'
+        transcript.write_text('earlier\npeer output\n')
+        with self.db.connect() as db:
+            db.execute("UPDATE sessions SET tmux_name='other-name',archived_transcript=? WHERE id='other'", (str(transcript),))
+        for project in ('p', None):
+            with self.db.connect() as db:
+                db.execute("UPDATE sessions SET project_id=? WHERE id='parent'", (project,))
+            for identity in ('parent', 'peer'):
+                for selector in ({'name':'other-name'}, {'name':'other'}, {'session_id':'other'}):
+                    with self.subTest(project=project, identity=identity, selector=selector):
+                        result = self.request('read', {'route':['session','review'], 'lines':1, **selector}, identity=identity)
+                        self.assertEqual(result.status_code,200,result.text)
+                        self.assertEqual(result.json()['session']['id'],'other')
+                        self.assertEqual(result.json()['content'],'peer output\n')
+            result = self.request('read', {'route':['session','tree']})
+            self.assertEqual({row['id'] for row in result.json()['roots']},{'parent','peer','other'})
+            result = self.request('read', {'route':['session','tree'], 'current':True})
+            self.assertEqual([row['id'] for row in result.json()['roots']],['parent'])
+            self.assertEqual([row['id'] for row in result.json()['roots'][0]['children']],['child'])
+            result = self.request('read', {'route':['session','review'], 'relative':'child'})
+            self.assertEqual(result.json()['session']['id'],'child')
+        result = self.request('read', {'route':['session','inspect'], 'name':'missing'})
+        self.assertEqual(result.status_code,404,result.text)
+
+    def test_global_reads_exclude_unrecorded_tmux_sessions(self):
+        observation = SimpleNamespace(sessions={'unrecorded':{'socket_scope':'canonical',
+            'current_command':'codex','attached_clients':0}}, observed_at='now')
+        with patch('agent_console.inspection_views.TmuxObservation', return_value=observation):
+            result = self.request('read', {'route':['session','list']})
+            self.assertNotIn('unrecorded', result.text)
+            self.assertEqual(self.request('read', {'route':['session','inspect'], 'name':'unrecorded'}).status_code,404)
 
     def test_peer_review_remains_available_to_read_only_roles(self):
         result = self.request('read',{'route':['session','review'],'name':'parent','lines':5},identity='peer')
@@ -72,12 +106,16 @@ class SessionControlTests(unittest.TestCase):
 
     def test_private_integration_content_is_redacted_in_every_peer_view(self):
         with self.db.connect() as db:
-            db.execute("UPDATE sessions SET execution_kind='integration-plan',initial_task='PRIVATE-TASK',attention_note='PRIVATE-NOTE',exit_reason='PRIVATE-EXIT',archived_transcript='PRIVATE-PATH' WHERE id='child'")
+            db.execute("UPDATE sessions SET execution_kind='integration-plan',initial_task='PRIVATE-TASK',attention_note='PRIVATE-NOTE',exit_reason='PRIVATE-EXIT',archived_transcript='PRIVATE-PATH' WHERE id IN ('child','other')")
             db.execute("INSERT INTO delegations(id,parent_session_id,child_session_id,profile,task,status,created_at) VALUES('d','parent','child','coder','PRIVATE-DELEGATION','running','2026-10-03')")
+            db.execute("INSERT INTO delegations(id,parent_session_id,child_session_id,profile,task,status,created_at) VALUES('outside','other','peer','reviewer','PRIVATE-DELEGATION','running','2026-10-03')")
         for command,payload in [('read',{'route':['session','list']}),
                 ('read',{'route':['session','tree']}),('read',{'route':['session','inspect'],'name':'child'}),
                 ('read',{'route':['session','context'],'name':'child'}),
-                ('read',{'route':['session','review'],'name':'child'}),('children',{})]:
+                ('read',{'route':['session','review'],'name':'child'}),('children',{}),
+                ('read',{'route':['session','inspect'],'name':'other'}),
+                ('read',{'route':['session','context'],'name':'other'}),
+                ('read',{'route':['session','review'],'session_id':'other'})]:
             result = self.request(command,payload)
             self.assertEqual(result.status_code,200,result.text)
             self.assertNotIn('PRIVATE-',result.text)
@@ -122,8 +160,67 @@ class SessionControlTests(unittest.TestCase):
         self.assertEqual(self.request('interrupt',{'name':'child'}).status_code,200)
         self.manager.interrupt.assert_called_once_with('child', session_id='child')
         self.assertEqual(self.request('interrupt',{'name':'peer'}).status_code,403)
-        self.assertEqual(self.request('interrupt',{'name':'parent'},identity='child').status_code,403)
+        self.assertEqual(self.request('interrupt',{'name':'parent'},identity='child').status_code,200)
         self.assertEqual(self.request('attention',{'name':'parent','state':'ready_for_review'},identity='peer').status_code,403)
+
+    def test_writable_children_control_ancestors_by_durable_identity(self):
+        with self.db.connect() as db:
+            db.execute("UPDATE sessions SET tmux_name='parent-renamed',parent_session_id='other' WHERE id='parent'")
+            # A name equal to another session's ID must not redirect an ID target.
+            db.execute("UPDATE sessions SET tmux_name='parent' WHERE id='peer'")
+        for target, name in [('parent','parent-renamed'), ('other','other')]:
+            for command, method in [('attention','set_attention'), ('interrupt','interrupt'),
+                                    ('restart-agent','restart'), ('kill','kill')]:
+                with self.subTest(target=target, command=command):
+                    mock = getattr(self.manager, method)
+                    mock.reset_mock()
+                    response = self.request(command, {'name':target, 'state':'ready_for_review'}, identity='child')
+                    self.assertEqual(response.status_code,200,response.text)
+                    self.assertEqual(mock.call_args.args,(name,))
+                    self.assertEqual(mock.call_args.kwargs['session_id'],target)
+                    if command == 'attention':
+                        self.assertEqual(mock.call_args.kwargs['actor'],'session:child')
+                    if command == 'kill':
+                        self.assertFalse(mock.call_args.kwargs['allow_unmanaged'])
+
+    def test_mutation_boundaries_remain_enforced_with_global_visibility(self):
+        for profile, mode in [('reviewer',None), ('coder','plan'), ('coder','auto')]:
+            with self.db.connect() as db:
+                db.execute("UPDATE sessions SET profile=?,agent_mode=? WHERE id='child'", (profile,mode))
+                db.execute("UPDATE sessions SET parent_session_id='parent' WHERE id='peer'")
+            targets = ['peer','other'] + (['parent'] if profile == 'reviewer' or mode == 'plan' else [])
+            for target in targets:
+                for command in ('attention','interrupt','restart-agent','kill'):
+                    with self.subTest(profile=profile, mode=mode, target=target, command=command):
+                        response = self.request(command, {'name':target,'state':'ready_for_review'}, identity='child')
+                        self.assertEqual(response.status_code,403,response.text)
+            for command in ('interrupt','restart-agent','kill'):
+                self.assertEqual(self.request(command, {'name':'child'}, identity='child').status_code,403)
+        for method in ('set_attention','interrupt','restart','kill'):
+            getattr(self.manager,method).assert_not_called()
+
+    def test_ancestor_controls_reject_noninteractive_unmanaged_and_cycles(self):
+        for update, status in [("managed=0",403), ("managed=1,execution_kind='integration-plan'",403),
+                               ("execution_kind='interactive',parent_session_id='child'",400)]:
+            with self.db.connect() as db:
+                db.execute('UPDATE sessions SET ' + update + " WHERE id='parent'")
+            for command in ('attention','interrupt','restart-agent','kill'):
+                response = self.request(command, {'name':'parent','state':'ready_for_review'}, identity='child')
+                self.assertEqual(response.status_code,status,response.text)
+        for method in ('set_attention','interrupt','restart','kill'):
+            getattr(self.manager,method).assert_not_called()
+
+    def test_child_waits_are_readable_across_projects_and_read_only_roles(self):
+        for identity, profile, mode in [('peer','reviewer',None), ('other','coder','plan')]:
+            with self.db.connect() as db:
+                db.execute('UPDATE sessions SET profile=?,agent_mode=? WHERE id=?', (profile,mode,identity))
+            for selection in ({}, {'child_selectors':['child']}, {'child_ids':['child']}):
+                response = self.request('children', {'name':'parent',**selection}, identity=identity)
+                self.assertEqual(response.status_code,200,response.text)
+                self.assertEqual(response.json()['parent_id'],'parent')
+                self.assertEqual([child['id'] for child in response.json()['children']],['child'])
+            response = self.request('children', {'name':'parent','child_ids':['other']}, identity=identity)
+            self.assertEqual(response.status_code,403,response.text)
 
     def test_delegate_cannot_impersonate_parent(self):
         self.assertEqual(self.request('delegate',{'name':'peer','profile':'coder','task':'x'}).status_code,403)
@@ -169,7 +266,7 @@ class SessionControlTests(unittest.TestCase):
     def test_child_wait_does_not_treat_unknown_observation_as_completion(self):
         from agent_console.session_client import run
         args=SimpleNamespace(command='session',session_command='wait-for-children',name='parent',timeout=1,poll_interval=1)
-        with patch('agent_console.session_client.request', return_value={'children':[{'running':None,'attention_state':'normal'}]}), \
+        with patch('agent_console.session_client.request', return_value={'parent_id':'parent','children':[{'running':None,'attention_state':'normal'}]}), \
              patch('agent_console.session_client.time.monotonic',side_effect=[0,2]):
             result=run(args)
         self.assertEqual(result['outcome'],'timeout')

@@ -1,3 +1,28 @@
+## 0.30.0 — local integration candidate, 2026-10-10 (#181)
+
+- Impact: add durable compute jobs and attempt receipts, atomic physical-host reservations, conservative capacity admission and a bounded resource-report adapter. Authenticated `/compute` status/API and guarded local owner CLI expose blocked/offline/unknown work without launching laptop jobs or changing existing sessions.
+- Integration provenance: apply the public-main compute feature from `338942af427d682ed86cd3f1ef87371af9ca4819` to the selected private 0.29.2 base `6efbe6dc86d44f6b73b5efd555e453b365c68309`. Preserve its native conversation history/recovery, host launch admission, terminal responsiveness, Codex/Pi compatibility, recorded-session inspection, ancestor-control permissions and durable child-wait identity. Public feature CI does not certify this combined tree.
+- Configuration/migration: additive version-gated `compute_*` tables in `connected-work.sqlite3`; interactive session schema unchanged. `AGENT_CONSOLE_COMPUTE_ENABLED` defaults off; the durable operator hold defaults on. Initial deployment keeps both gates in that state; report dispatch requires a separate headroom/host-maintenance acceptance check. Only fixed `maintenance.report` executes in process. Laptop descriptors/profiles remain disabled; no install, service rebudgeting, heavy subprocess adapter or timer migration.
+- Host coordination: require the root-owned resource snapshot (default `/run/agent-console-host-resources.json`, configurable with `AGENT_CONSOLE_RESOURCE_SNAPSHOT`) before compute probing/admission. Its maintenance, freshness and capacity vetoes reset warm-up and cannot be bypassed by the detailed SSH probe. The existing snapshot producer is unchanged.
+- Verification: focused temporary-fixture tests cover concurrent reservation, durable restart, stale completion, retained unknown capacity, OOM/backoff, actual CPU/RAM admission, pressure/storage limits, Wednesday–Sunday schedule, sanitized probes and operator authentication. A bounded read-only live telemetry probe checks the verified n100/CT115 topology. No heavy build/browser or production execution; normal exact-source integration checks remain a release gate.
+- CI repair (2026-10-10): align the UI brand and desktop/mobile asset version queries with package 0.30.0. The previous PR head failed only the UI/package version assertion: Python 3.12 CI passed 1,290 tests and 1,221 subtests, with 10 skips. After alignment, all three focused version tests passed. The earlier CI result is historical; exact-head CI remains required. The private 0.29.2 base is retained in this candidate; exact-source integration tests and release review remain required before deployment.
+- Rollback: hold admission, disable the feature flag and select the retained 0.29.2 release through the normal release guard, preserving matching client/server versions for the child-wait protocol. Preserve the companion store and unresolved reservations; prior code ignores additive compute tables. Do not replay uncertain work. See `docs/COMPUTE_SCHEDULING.md`.
+
+## 0.29.2 — local integration, 2026-10-10 (#186)
+
+- Impact: managed agents can inspect all recorded Console sessions by name or durable ID across projects and trees. Writable non-Plan children can update attention, interrupt, restart, and stop ancestors as well as descendants within the authorized task. Sibling/unrelated mutations, read-only/Plan mutations of others, private integration content, and delegation inheritance remain restricted.
+- Fixes: child waits use inspection permission and pin the parent ID in both scoped and unscoped modes, preserving the target across rename and name reuse. Known session API failures display fixed CLI reasons; arbitrary error bodies are never echoed.
+- Configuration/migration: no database migration or new flags. Inspection scope broadens for every authenticated managed session. Deploy client and server together: new wait clients require `parent_id` in every children response. Bundled role text and new session guidance reflect the policy; customized installed roles and existing snapshots require their normal explicit refresh. Package and displayed version advance beyond the installed 0.29.1 release. This local integration applies PR #188 to the manifest-verified deployed 4160548 artifact, whose original Git history was unavailable; all other deployed source is preserved.
+- Verification: baseline live inspection and isolated API/CLI fixtures reproduced the denials, stable-ID review failure, and rename/wait failure before edits. The session-control, inspection, managed-context, session-client, scoped-wait, child-capacity, lifecycle/identity, profile, core, and version suites passed through `scripts/test-isolated.py`: 342 tests and 735 subtests. Whitespace checks passed. Live rollout and external CI remain pending.
+- Rollback: select the retained prior release through its schema guard and restart web only, preserving databases and live sessions. Restore the matching CLI to avoid wait protocol mismatch; previous project/tree inspection and descendant-only control restrictions return.
+
+## 0.28.26 — unreleased, 2026-10-07 (#185)
+
+- Impact: Codex 0.160.1 automatic review launches and writable workflows omit the conflicting explicit sandbox flag. Explicit restart migrates redundant workspace-write flags in pinned launchers while preserving resume identity; other sandbox policies fail closed. Pi 1.0.4 skill delivery is admitted after native discovery verification.
+- Configuration/migration: update installed CLIs; no credential, database or default-provider changes. Running terminals retain their current processes.
+- Verification: focused provider/skill/CommandCode tests, native Pi and Codex skill fixtures, managed live creation, inference and restart canaries.
+- Rollback: restore retained CLI packages and backed-up Console source together; preserve sessions, credentials and history.
+
 ## 0.28.25 — unreleased, 2026-10-05 (#182)
 
 - Impact: full-history secret scanning recognizes six proven synthetic logging-redaction fixture findings from two July commits. Exceptions identify exact commit/file/rule/line fingerprints; no token, path or rule is globally excluded. Product behavior remains the reviewed 0.28.24 batch.
@@ -691,3 +716,17 @@ Changes:
 - **Rollback**: Unavailable (historic unpublished baseline)
 
 Initial capabilities: multi-tool orchestration, web terminal, session delegation, auth contexts, plan management, audit logging, SSH client installer, canary/staging deployment mode.
+
+
+## 0.29.0 — issue #187 — 2026-10-10
+
+Durable Codex history now survives overlay refresh and rename. Managed stopped sessions can resume a verified native conversation through CLI and authenticated HTTP/UI; ambiguity fails safely. Optional root-owned host snapshots gate new launches and recovery, returning retryable HTTP503 reason codes. Terminal/database work runs outside the event loop, and attachment cleanup preserves agents.
+
+Configuration: AGENT_CONSOLE_RESOURCE_SNAPSHOT selects a root-owned metrics JSON file; configured unavailable or older-than-60-second snapshots block launches. Provider homes for new sessions use immutable Console IDs; existing homes remain in place. No provider database migration.
+
+Verify recovery after rename, stopped-terminal recreation, concurrent resume, resource thresholds, SQLite contention and websocket disconnect. Rollback by selecting the previous release and removing only the new resource snapshot setting; keep progressed native histories, bindings and worktrees.
+
+
+### 0.29.1 — issue #187 — 2026-10-10
+
+Recovery refreshes the Console bootstrap/interpreter when a historic release runtime has been retired, while preserving the native command, snapshot, UUID and permission settings. Configuration/migration: none. Verify recovery with a missing original Python path. Rollback: select the preceding release; keep native histories and immutable-ID bindings.

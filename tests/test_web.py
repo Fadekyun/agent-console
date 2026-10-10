@@ -32,6 +32,47 @@ from agent_console.web import create_app
     "tmux required",
 )
 class WebTests(unittest.TestCase):
+    def test_compute_integration_preserves_launch_resource_refusal(self):
+        from agent_console.resources import ResourceUnavailable
+        with patch.object(self.manager, 'resume', side_effect=ResourceUnavailable(['host_memory_low'])):
+            response = self.client.post('/api/sessions/resource-fixture/resume',
+                                        json={}, headers=self.headers)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.headers['Retry-After'], '30')
+        self.assertEqual(response.json()['reason_codes'], ['host_memory_low'])
+        with patch.dict(os.environ, {'AGENT_CONSOLE_COMPUTE_ENABLED': ''}):
+            status = self.client.get('/api/compute', headers=self.headers)
+        self.assertEqual(status.status_code, 200)
+        self.assertFalse(status.json()['enabled'])
+        self.assertTrue(status.json()['held'])
+
+    def test_compute_routes_are_lazy_disabled_and_owner_authenticated(self):
+        with patch.dict(os.environ, {'AGENT_CONSOLE_COMPUTE_ENABLED': ''}), \
+                patch('agent_console.compute_sampler.subprocess.Popen') as probe:
+            self.assertEqual(self.client.get('/api/compute').status_code, 403)
+            response = self.client.get('/api/compute', headers=self.headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertFalse(response.json()['enabled'])
+            self.assertTrue(response.json()['held'])
+            self.assertEqual(response.json()['jobs'], [])
+            self.assertEqual(self.client.get('/compute', headers=self.headers).status_code, 200)
+            self.assertIs(self.client.app.state.compute_engine(), self.client.app.state.compute_engine())
+        probe.assert_not_called()
+
+    def test_compute_lifespan_runs_only_enabled_and_skips_canary(self):
+        for enabled, canary, expected in (('', '', False), ('1', '', True), ('1', '1', False)):
+            with self.subTest(enabled=enabled, canary=canary), \
+                    patch.dict(os.environ, {'AGENT_CONSOLE_COMPUTE_ENABLED': enabled, 'AGENT_CONSOLE_CANARY': canary}), \
+                    patch('agent_console.web.Settings.from_env', return_value=self.manager.settings), \
+                    patch('agent_console.workflow_engine.WorkflowEngine.tick'), \
+                    patch('agent_console.compute_engine.ComputeEngine.tick') as tick:
+                called = threading.Event()
+                tick.side_effect = called.set
+                with TestClient(create_app(self.manager), client=('127.0.0.1', 50000)):
+                    if expected:
+                        self.assertTrue(called.wait(2))
+                self.assertEqual(tick.called, expected)
+
     def test_git_skill_import_requires_identity_and_preserves_selected_revision(self):
         path = '/api/skill-registry/imports'
         payload = {'source':'https://example.invalid/skills.git', 'revision':'main', 'subdirectory':'guides/fixture'}

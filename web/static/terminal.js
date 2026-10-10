@@ -341,9 +341,10 @@ async function connect() {
         if (name !== connectedName) { autoReconnectEnabled = true; connect(); }
         else { setStatus('Original session is not running'); reconnect.disabled = false; }
       }).catch(error => { if (generation === connectionGeneration && viewVisible) { setStatus(error.message); reconnect.disabled = false; } });
-    } else if (event.code === 4001) {
-      autoReconnectEnabled = false; setStatus(event.reason || 'Session unavailable; reconnect to retry');
-      reconnect.disabled = false;
+    } else if (event.code === 4001 || event.code === 1011) {
+      setStatus('Terminal connection lost; agent state is unchanged');
+      reconnect.disabled = true;
+      scheduleReconnect();
     } else if (event.code === 4000) {
       autoReconnectEnabled = false; setStatus('Detached by user; tmux is still running');
       reconnect.disabled = false;

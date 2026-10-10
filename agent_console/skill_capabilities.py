@@ -107,7 +107,7 @@ SKILL_TOOL_CAPABILITIES: dict[str, SkillToolCapability] = {
             SkillDiscoverySource("native-project", "project", ".codex/skills", True, None, False),
             SkillDiscoverySource("project-agents", "project", ".agents/skills", True, None, False),
         ),
-        verified_versions=frozenset({"0.159.2"}),
+        verified_versions=frozenset({"0.159.2", "0.160.1"}),
     ),
     "codex-pro": SkillToolCapability(
         tool="codex-pro",
@@ -124,7 +124,7 @@ SKILL_TOOL_CAPABILITIES: dict[str, SkillToolCapability] = {
             SkillDiscoverySource("native-project", "project", ".codex/skills", True, None, False),
             SkillDiscoverySource("project-agents", "project", ".agents/skills", True, None, False),
         ),
-        verified_versions=frozenset({"0.159.2"}),
+        verified_versions=frozenset({"0.159.2", "0.160.1"}),
     ),
     "claude": SkillToolCapability(
         tool="claude",
@@ -175,7 +175,7 @@ SKILL_TOOL_CAPABILITIES: dict[str, SkillToolCapability] = {
         # Package/settings/ancestor sources are also possible. Do not claim the
         # static inventory is exhaustive or that it suppresses native sources.
         configured_sources_inspected=False,
-        verified_versions=frozenset({"0.99.2", "1.0.2"}),
+        verified_versions=frozenset({"0.99.2", "1.0.2", "1.0.4"}),
         unverified_version_policy="skip",
     ),
     "opencode": SkillToolCapability(

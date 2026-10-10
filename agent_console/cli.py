@@ -134,6 +134,8 @@ def parser() -> argparse.ArgumentParser:
     interrupt.add_argument("name")
     restart = session_commands.add_parser("restart-agent")
     restart.add_argument("name")
+    resume = session_commands.add_parser('resume')
+    resume.add_argument('name')
     rename = session_commands.add_parser("rename")
     rename.add_argument("name")
     rename.add_argument("new_name")
@@ -315,6 +317,8 @@ def parser() -> argparse.ArgumentParser:
     add_workflow_commands(commands)
     from .owner_cli import add_commands as add_owner_commands
     add_owner_commands(commands)
+    from .compute_cli import add_commands as add_compute_commands
+    add_compute_commands(commands)
     commands.add_parser("doctor")
     return root
 
@@ -322,6 +326,10 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
+        if args.command == 'compute':
+            from .compute_cli import run as run_compute
+            emit(run_compute(args))
+            return 0
         route = inspection_route(args)
         context = managed_context() if args.command in {"session", "delegate"} else None
         if args.command in {"project", "environment"}:
@@ -582,6 +590,8 @@ def main(argv: list[str] | None = None) -> int:
                 emit(manager.interrupt(args.name))
             elif args.session_command == "restart-agent":
                 emit(manager.restart(args.name))
+            elif args.session_command == 'resume':
+                emit(manager.resume(args.name))
             elif args.session_command == "rename":
                 emit(manager.rename(args.name, args.new_name))
             elif args.session_command == "kill":

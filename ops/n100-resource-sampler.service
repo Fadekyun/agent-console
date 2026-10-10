@@ -1,0 +1,15 @@
+[Unit]
+Description=Agent Console host resource snapshot
+After=pve-container@115.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/n100-resource-sampler
+Nice=19
+IOSchedulingClass=idle
+CPUQuota=10%
+MemoryMax=64M
+MemorySwapMax=0
+TasksMax=16
+TimeoutStartSec=10
+OOMScoreAdjust=500

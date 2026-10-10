@@ -1,3 +1,21 @@
+## Durable compute queue and physical-host admission — 2026-10-10 (#181)
+
+- Implement the first source slice: companion-store compute receipts, immutable job keys, atomic physical-host reservations, lease/generation fencing, conservative n100/CT115 telemetry admission, and a bounded in-process report adapter.
+- Add authenticated operator API/local CLI and read-only status. Dispatch defaults disabled with a separate persistent hold; preserve unknown reservations and reject unchanged-budget OOM retry.
+- Integrate public feature `338942af427d682ed86cd3f1ef87371af9ca4819` onto private 0.29.2 `6efbe6dc86d44f6b73b5efd555e453b365c68309`. Honor the root-owned host resource snapshot before compute probes; retain native-history recovery, host launch admission, terminal responsiveness, harness compatibility and the latest session permissions/wait protocol. Keep package/UI versions at 0.30.0 and initial deployment compute-disabled with its persistent hold on.
+- Keep the verified AGC laptop descriptor disabled, with provisional reclaimable 16 GB ceiling and Wednesday–Sunday availability. Worker enrollment, cgroup subprocess adapters, staff-priority throttling, timer migration and interruption-safe production publication follow after root review; no laptop/runtime deployment is part of this source change. See `COMPUTE_SCHEDULING.md` for acceptance and rollback.
+
+## Session inspection and ancestor-control corrections — 2026-10-10 (#186)
+
+- [x] Allow bounded inspection of all recorded Console sessions, including cross-project peers by name or durable ID; keep relative selectors tree-scoped and private integration content redacted.
+- [x] Permit task-authorized ancestor and descendant controls for writable non-Plan sessions; retain unrelated/sibling mutation denials and delegation inheritance checks.
+- [x] Make child waits read-only, pin durable parent IDs across renames, and expose only fixed safe CLI failure explanations. Add API/CLI regressions for permissions, identity, and retained restrictions.
+
+## Harness update compatibility — 2026-10-07 (#185)
+
+- Support Codex 0.160.1 automatic review without conflicting sandbox flags, including explicit restarts of existing pinned launchers. Preserve resume identity, role strings, Plan and read-only workflow narrowing.
+- Verify Pi 1.0.4 native selected-snapshot loading before admitting the version, and verify Codex native skills discovery. Run managed-session inference smoke checks.
+
 ## Exact historical secret-scan fixture exceptions — 2026-10-05 (#182)
 
 - Scope six synthetic logging-redaction findings to their original commit, file, rule and line. Preserve all scan rules and future findings; no workflow or product behavior change.
@@ -402,3 +420,17 @@ This document tracks the planned and completed development work for Agent Consol
 - Fixed direct terminal paste being silently rerouted to a draft and Select-mode dragging being blocked by TUI mouse reporting. Preserve bracketed paste, terminal interrupts, and explicit toolbar draft review.
 - Simplified repeated Workbench branding and restored consistent responsive navigation, active destinations, skip-link focus, and full-control navigation reachability.
 - Further audit findings to address: context-keyed New session draft recovery, stable identity for Workbench output/skill reads, and stale project-detail response guards.
+
+
+## 0.29.0 — issue #187 — 2026-10-10
+
+Durable Codex history now survives overlay refresh and rename. Managed stopped sessions can resume a verified native conversation through CLI and authenticated HTTP/UI; ambiguity fails safely. Optional root-owned host snapshots gate new launches and recovery, returning retryable HTTP503 reason codes. Terminal/database work runs outside the event loop, and attachment cleanup preserves agents.
+
+Configuration: AGENT_CONSOLE_RESOURCE_SNAPSHOT selects a root-owned metrics JSON file; configured unavailable or older-than-60-second snapshots block launches. Provider homes for new sessions use immutable Console IDs; existing homes remain in place. No provider database migration.
+
+Verify recovery after rename, stopped-terminal recreation, concurrent resume, resource thresholds, SQLite contention and websocket disconnect. Rollback by selecting the previous release and removing only the new resource snapshot setting; keep progressed native histories, bindings and worktrees.
+
+
+### 0.29.1 — issue #187 — 2026-10-10
+
+Recovery refreshes the Console bootstrap/interpreter when a historic release runtime has been retired, while preserving the native command, snapshot, UUID and permission settings. Configuration/migration: none. Verify recovery with a missing original Python path. Rollback: select the preceding release; keep native histories and immutable-ID bindings.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import shlex
 import subprocess
 from functools import lru_cache
 from dataclasses import dataclass
@@ -177,6 +178,41 @@ class ProviderAdapter:
         return {"ok": context["status"] == "ready", "context": context}
 
 
+def normalize_codex_automatic_review_argv(argv: list[str]) -> list[str]:
+    """Native automatic review owns workspace-write; reject broader/narrower overrides."""
+    if "--approve-for-me" not in argv:
+        return list(argv)
+    result = []
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg in {"--sandbox", "-s"}:
+            if index + 1 >= len(argv) or argv[index + 1] != "workspace-write":
+                raise ValueError("automatic review requires workspace-write sandbox semantics")
+            index += 2
+            continue
+        if arg.startswith("--sandbox="):
+            if arg != "--sandbox=workspace-write":
+                raise ValueError("automatic review requires workspace-write sandbox semantics")
+            index += 1
+            continue
+        result.append(arg)
+        index += 1
+    return result
+
+
+def normalize_codex_automatic_review_launcher(text: str) -> str:
+    """Migrate only the pinned exec argv; preserve environment, resume and prompt values."""
+    prefix, separator, command = text.rpartition("\nexec ")
+    if not separator:
+        return text
+    argv = shlex.split(command)
+    normalized = normalize_codex_automatic_review_argv(argv)
+    if normalized == argv:
+        return text
+    return prefix + separator + shlex.join(normalized) + "\n"
+
+
 def _codex_pin_args(
     *,
     model: str | None,
@@ -227,7 +263,12 @@ class CodexAdapter(ProviderAdapter):
                 argv[argv.index('--ask-for-approval')+1]='never'
             else:
                 argv += ['--ask-for-approval', 'never']
-        argv[argv.index('--sandbox')+1]='read-only' if read_only else 'workspace-write'
+        sandbox = 'read-only' if read_only else 'workspace-write'
+        if '--sandbox' in argv:
+            argv[argv.index('--sandbox') + 1] = sandbox
+        else:
+            argv += ['--sandbox', sandbox]
+        argv = normalize_codex_automatic_review_argv(argv)
         for index in range(len(argv)-2,-1,-1):
             if argv[index:index+2]==['-c','sandbox_workspace_write.network_access=true']:
                 del argv[index:index+2]
@@ -337,6 +378,7 @@ class CodexProAdapter(CodexAdapter):
             approval_index = argv.index("--ask-for-approval")
             del argv[approval_index:approval_index + 2]
             argv.append("--approve-for-me")
+            argv = normalize_codex_automatic_review_argv(argv)
         return argv
 
 

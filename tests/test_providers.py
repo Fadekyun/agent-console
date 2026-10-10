@@ -8,7 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_console.auth import AuthRegistry
-from agent_console.providers import CodexAdapter, CodexProAdapter, TOOL_BINARIES
+from agent_console.providers import (CodexAdapter, CodexProAdapter, TOOL_BINARIES,
+    normalize_codex_automatic_review_argv, normalize_codex_automatic_review_launcher)
 
 
 class CodexProApprovalTests(unittest.TestCase):
@@ -47,11 +48,29 @@ class CodexProApprovalTests(unittest.TestCase):
 
     def test_writable_default_uses_native_automatic_review(self) -> None:
         argv = self._argv("auto")
-        self.assertIn("--sandbox", argv)
-        self.assertIn("workspace-write", argv)
+        self.assertNotIn("--sandbox", argv)
         self.assertIn("--approve-for-me", argv)
         self.assertNotIn("--ask-for-approval", argv)
         self.assertNotIn("danger-full-access", argv)
+
+    def test_legacy_resume_migration_preserves_quoted_role_and_environment(self):
+        import shlex
+        argv = ["/bin/codex", "--sandbox", "workspace-write", "--approve-for-me",
+                "-c", 'developer_instructions=two lines\n--sandbox workspace-write',
+                "resume", "native-thread-id"]
+        text = "#!/bin/sh\nexport CODEX_HOME=/private/context\nexec " + shlex.join(argv) + "\n"
+        migrated = normalize_codex_automatic_review_launcher(text)
+        self.assertTrue(migrated.startswith("#!/bin/sh\nexport CODEX_HOME=/private/context\n"))
+        self.assertEqual(shlex.split(migrated.split("\nexec ", 1)[1]),
+                         [argv[0]] + argv[3:])
+        self.assertEqual(normalize_codex_automatic_review_launcher(migrated), migrated)
+
+    def test_automatic_review_never_replaces_other_sandbox_policies(self):
+        for value in ["read-only", "danger-full-access"]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                normalize_codex_automatic_review_argv(["codex", "--sandbox", value, "--approve-for-me"])
+        argv = ["codex", "--sandbox", "read-only", "--ask-for-approval", "never"]
+        self.assertEqual(normalize_codex_automatic_review_argv(argv), argv)
 
     def test_plan_remains_read_only_and_never_approves(self) -> None:
         argv = self._argv("plan")
@@ -139,7 +158,7 @@ class CodexProApprovalTests(unittest.TestCase):
         )
         self.assertIn("--approve-for-me", writable)
         self.assertNotIn("--ask-for-approval", writable)
-        self.assertIn("workspace-write", writable)
+        self.assertNotIn("--sandbox", writable)
 
         plan = self.adapter.workflow_argv(
             self._argv("plan"), schema=Path("schema.json"), output=Path("final.json"), read_only=True

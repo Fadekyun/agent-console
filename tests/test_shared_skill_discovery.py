@@ -231,7 +231,7 @@ class SharedSkillSessionTests(unittest.TestCase):
         _write_skill(self.skills_root, "unrelated-skill")
         self.bin_dir = root / "bin"
         self.bin_dir.mkdir()
-        self.fake_agent = self.bin_dir / "fake-agent"
+        self.fake_agent = self.bin_dir / "codex"
         self.fake_agent.write_text("#!/bin/sh\nsleep 120\n", encoding="utf-8")
         self.fake_agent.chmod(0o755)
         self.socket = f"agent-console-shared-{os.getpid()}-{id(self)}"
@@ -318,6 +318,8 @@ class SharedSkillSessionTests(unittest.TestCase):
         )
         isolated = self.isolated_root("codex-restart")
         shutil.rmtree(isolated / "typesafe-ai")
+        from native_fixture import seed_native
+        seed_native(self.manager.inspect("codex-restart"))
         self.manager.restart("codex-restart")
         self.assertTrue((isolated / "typesafe-ai").is_dir())
 

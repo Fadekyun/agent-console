@@ -11,7 +11,11 @@ class RestartAuthReadinessTests(unittest.TestCase):
     configure_commandcode = test_shared_skill_discovery.SharedSkillSessionTests.configure_commandcode
 
     def create(self, tool='codex'):
-        return self.manager.create(tool=tool, profile='general', name='auth-restart-fixture', repository=str(self.workspace))
+        session = self.manager.create(tool=tool, profile='general', name='auth-restart-fixture', repository=str(self.workspace))
+        if tool == 'codex':
+            from native_fixture import seed_native
+            seed_native(session)
+        return session
 
     def assert_rejected_without_mutation(self, session, status):
         paths = [Path(session['launcher_path']),
@@ -48,3 +52,20 @@ class RestartAuthReadinessTests(unittest.TestCase):
             restart.assert_called_once()
         self.assertTrue(result['running'])
         self.assertEqual(result['id'], session['id'])
+
+    def test_restart_migrates_legacy_automatic_review_without_losing_resume(self):
+        import shlex
+        session = self.create()
+        launcher = Path(session['launcher_path'])
+        text = launcher.read_text()
+        prefix, separator, command = text.rpartition("\nexec ")
+        args = shlex.split(command)
+        index = args.index('--ask-for-approval')
+        del args[index:index + 2]
+        args += ['--approve-for-me', 'resume', '01a106f0-0efb-7892-b871-e7e8b167bd78']
+        launcher.write_text(prefix + separator + shlex.join(args) + '\n')
+        result = self.manager.restart(session['tmux_name'])
+        migrated = shlex.split(launcher.read_text().rpartition('\nexec ')[2])
+        self.assertEqual(migrated, [a for i,a in enumerate(args) if i not in (args.index('--sandbox'), args.index('--sandbox') + 1)])
+        self.assertEqual(result['id'], session['id'])
+        self.assertTrue(result['running'])

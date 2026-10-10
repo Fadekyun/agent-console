@@ -9,7 +9,7 @@ const state = { sessions: [], me: null, selected: null, work: null, selectedNode
 const names = { normal: 'Working', needs_input: 'Needs input', blocked: 'Blocked', ready_for_review: 'Ready for review' };
 const pendingSessionActions = new Set();
 function renderPendingActions() {
-  for (const [selector, action] of [['#interrupt-session','interrupt'],['#stop-session','kill'],['#stop-terminal-session','kill'],['#attention-form button[type=submit]','attention'],['#mark-reviewed','attention'],['#session-visibility','visibility']]) {
+  for (const [selector, action] of [['#resume-session','resume'],['#interrupt-session','interrupt'],['#stop-session','kill'],['#stop-terminal-session','kill'],['#attention-form button[type=submit]','attention'],['#mark-reviewed','attention'],['#session-visibility','visibility']]) {
     const button=$(selector),pending=pendingSessionActions.has(`${state.selected?.id}:${action}`);
     button.disabled=pending;button.setAttribute('aria-busy',String(pending));
   }
@@ -36,6 +36,7 @@ function renderWork(){overview.renderWork();}
 function renderSession() {
   const s = state.selected;
   if (!s) return;
+  $('#resume-session').hidden = !s.actions?.includes('resume');
   $('#session-title').textContent = s.tmux_name;
   $('#session-title').title = s.tmux_name;
   $('#session-state').textContent = status(s);
@@ -551,3 +552,5 @@ window.addEventListener('message', event => {
     if (id === state.selected?.id) setTerminalStatus(`${state.selected.tmux_name} · ${event.data.status}`);
   }
 });
+
+$('#resume-session').onclick = () => sessionAction('resume', {});

@@ -7,15 +7,22 @@ The caller does not need database write permission. The service authenticates th
 capability against the stored session ID, including after a rename. Browser
 operator endpoints retain their existing authentication.
 
-All roles can read bounded terminal output, metadata, and saved context within
-their project. Sessions without a project can inspect their own tree. Unknown
+All roles can read bounded terminal output, metadata, and saved context for all
+recorded Console sessions, including other projects and unrelated trees. Explicit
+names and stable IDs select any recorded session; relative selectors and
+`tree --current` remain scoped to the caller's tree. Private integration content
+remains redacted, and unrecorded tmux sessions are excluded. Unknown
 socket status is reported as `running: null`, `live_state: unknown`; it never
 counts as successful completion. Saved transcripts and metadata remain readable.
 The Linux guarded offline reader remains available outside managed sessions.
 Service-backed file reads use descriptor containment checks on Linux and macOS.
 
-Writable roles can control descendants and delegate any compatible role within
-the current authorization. Read-only or Plan parents can delegate read-only roles,
+Writable, non-Plan roles can update attention, interrupt, restart, or stop their
+ancestors and descendants within the current task authorization. Mutations of
+siblings and unrelated sessions remain denied; a role cannot interrupt, restart,
+or stop itself. Targets and callers must be managed interactive sessions.
+Writable roles can delegate any compatible role within the current authorization.
+Read-only or Plan parents can delegate read-only roles,
 including verifier, but cannot upgrade to writable modes. Read-only callers can
 signal their own attention state. Children inherit the project and repository;
 coding delegates and writable delegates into Git repositories get isolated worktrees.
@@ -25,6 +32,14 @@ calls cannot use them to escalate. Creation checks depth (eight),
 configured positive per-parent child limits (default `0`, unlimited), and global capacity under the existing admission lock. Only active/reserved children count toward child capacity; stopped and archived history does not.
 A child that disappears without `ready_for_review` is a failure; `blocked` or
 `needs_input` requires intervention. Ordinary single sessions need no extra stages.
+
+Child waits observe metadata and are available to read-only/Plan callers for any
+recorded managed interactive parent. Both scoped and unscoped waits pin the
+parent's durable ID on the first response, so renames and reused names cannot
+change the target. Every `children` response includes `parent_id`; a new client
+rejects an older server that cannot confirm it. No database migration is needed.
+Known authorization failures have fixed CLI explanations; unknown response bodies
+are never echoed. A failed request never falls back to local state access.
 
 CLI examples:
 

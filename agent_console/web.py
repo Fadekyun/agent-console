@@ -12,6 +12,7 @@ import signal
 import sqlite3
 import struct
 import subprocess
+import threading
 import termios
 from collections import defaultdict
 from contextlib import ExitStack, asynccontextmanager, suppress
@@ -32,6 +33,8 @@ from .database import Database
 from .logging_config import configure_logging, configure_uvicorn_logging
 from .manager import SessionIdentityConflict, SessionManager
 from .pty_transport import PtyTransport
+from .terminal_attachment import prepare_attachment, scroll_attachment, AttachmentSessionEnded
+from .resources import resource_status, ResourceUnavailable
 from .integration_requests import IntegrationService
 from .profiles import profile_summaries
 from .skills import (
@@ -77,8 +80,21 @@ async def lifespan(app: FastAPI):
                 except Exception:log.exception('Workflow dispatch sweep failed; receipts retained for reconciliation')
                 await asyncio.sleep(2)
         worker=asyncio.create_task(dispatch_loop())
+        compute_worker = None
+        if os.getenv('AGENT_CONSOLE_COMPUTE_ENABLED') == '1':
+            async def compute_loop():
+                while True:
+                    try:
+                        await asyncio.to_thread(app.state.compute_engine().tick)
+                    except Exception:
+                        log.exception('Compute dispatch failed; reservations retained for reconciliation')
+                    await asyncio.sleep(10)
+            compute_worker = asyncio.create_task(compute_loop())
         try:yield
         finally:
+            if compute_worker is not None:
+                compute_worker.cancel()
+                with suppress(asyncio.CancelledError):await compute_worker
             worker.cancel()
             with suppress(asyncio.CancelledError):await worker
 
@@ -239,6 +255,24 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         from .maintenance import CanaryOnlyMiddleware
         app.add_middleware(CanaryOnlyMiddleware)
     app.state.session_manager=session_manager
+    @app.exception_handler(ResourceUnavailable)
+    async def resource_unavailable(request, exc):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=503, headers={'Retry-After': '30'},
+            content={'detail': str(exc), 'reason_codes': exc.reasons})
+    compute_instance = None
+    compute_lock = threading.Lock()
+
+    def compute_engine():
+        nonlocal compute_instance
+        with compute_lock:
+            if compute_instance is None:
+                from .compute_engine import ComputeEngine
+                compute_instance = ComputeEngine(session_manager.settings.state_dir,
+                    enabled=os.getenv('AGENT_CONSOLE_COMPUTE_ENABLED') == '1')
+            return compute_instance
+
+    app.state.compute_engine = compute_engine
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
     app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 
@@ -254,6 +288,11 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                 peer = request.client.host if request.client else "unknown"
                 session_manager.database.audit("authentication.denied", peer, "denied", actor=peer, surface="web")
             raise HTTPException(status_code=exc.status, detail=exc.detail) from None
+
+    @app.get('/api/resources')
+    def resources(response: Response, _: AuthContext = Depends(require_identity)):
+        response.headers['Cache-Control'] = 'no-store'
+        return resource_status()
 
     # Presence reads share policy without manager/database side effects.
     def presence_identity(request: Request):
@@ -278,12 +317,12 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         return "ok\n"
 
     @app.get("/")
-    async def dashboard(_: AuthContext = Depends(require_identity)) -> FileResponse:
+    def dashboard(_: AuthContext = Depends(require_identity)) -> FileResponse:
         page = "workbench.html" if os.getenv("AGENT_CONSOLE_UI") == "workbench" else "index.html"
         return FileResponse(STATIC_ROOT / page)
 
     @app.get("/work")
-    async def workbench(_: AuthContext = Depends(require_identity)) -> FileResponse:
+    def workbench(_: AuthContext = Depends(require_identity)) -> FileResponse:
         return FileResponse(STATIC_ROOT / "workbench.html")
 
     def interface_links() -> dict[str, str]:
@@ -302,11 +341,11 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         return links
 
     @app.get("/api/interface")
-    async def interface(_: AuthContext = Depends(require_identity)) -> dict[str, str]:
+    def interface(_: AuthContext = Depends(require_identity)) -> dict[str, str]:
         return interface_links()
 
     @app.get("/versions", response_class=HTMLResponse)
-    async def versions(_: AuthContext = Depends(require_identity)) -> str:
+    def versions(_: AuthContext = Depends(require_identity)) -> str:
         from html import escape
         links = interface_links()
         choices = "".join(
@@ -323,31 +362,31 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                 '<p>Both versions stay available. Each keeps its own sessions, files and settings.</p></html>')
 
     @app.get("/desktop")
-    async def desktop(_: AuthContext = Depends(require_identity)) -> FileResponse:
+    def desktop(_: AuthContext = Depends(require_identity)) -> FileResponse:
         return FileResponse(STATIC_ROOT / "index.html")
 
     @app.get("/mobile")
-    async def mobile(_: AuthContext = Depends(require_identity)) -> FileResponse:
+    def mobile(_: AuthContext = Depends(require_identity)) -> FileResponse:
         return FileResponse(STATIC_ROOT / "mobile.html")
 
     @app.get("/terminal")
-    async def terminal(_: AuthContext = Depends(require_identity)) -> FileResponse:
+    def terminal(_: AuthContext = Depends(require_identity)) -> FileResponse:
         return FileResponse(STATIC_ROOT / "terminal.html")
 
     @app.get("/vendor/xterm.mjs")
-    async def xterm_module(_: AuthContext = Depends(require_identity)) -> FileResponse:
+    def xterm_module(_: AuthContext = Depends(require_identity)) -> FileResponse:
         return FileResponse(XTERM_ROOT / "xterm" / "lib" / "xterm.mjs")
 
     @app.get("/vendor/xterm.css")
-    async def xterm_css(_: AuthContext = Depends(require_identity)) -> FileResponse:
+    def xterm_css(_: AuthContext = Depends(require_identity)) -> FileResponse:
         return FileResponse(XTERM_ROOT / "xterm" / "css" / "xterm.css")
 
     @app.get("/vendor/addon-fit.mjs")
-    async def fit_module(_: AuthContext = Depends(require_identity)) -> FileResponse:
+    def fit_module(_: AuthContext = Depends(require_identity)) -> FileResponse:
         return FileResponse(XTERM_ROOT / "addon-fit" / "lib" / "addon-fit.mjs")
 
     @app.get("/api/me")
-    async def me(auth: AuthContext = Depends(require_identity)) -> dict[str, Any]:
+    def me(auth: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         catalog = session_manager.tool_catalog()
         return {
             "login": auth.actor,
@@ -362,7 +401,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         }
 
     @app.get("/api/sessions")
-    async def sessions(
+    def sessions(
         state: str = "all", _: AuthContext = Depends(require_identity)
     ) -> list[dict[str, Any]]:
         if state not in {"active", "history", "all"}:
@@ -375,11 +414,11 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         return rows
 
     @app.get("/api/profiles")
-    async def profiles(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
+    def profiles(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
         return session_manager.list_profiles()
 
     @app.get("/api/profiles/{name}")
-    async def inspect_profile_api(
+    def inspect_profile_api(
         name: str, _: AuthContext = Depends(require_identity)
     ) -> dict[str, Any]:
         return session_manager.inspect_profile(name)
@@ -388,7 +427,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         content: str = Field(min_length=1)
 
     @app.put("/api/profiles/{name}")
-    async def write_profile_api(
+    def write_profile_api(
         name: str,
         payload: ProfileUpdateRequest,
         _: AuthContext = Depends(require_identity),
@@ -396,19 +435,19 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         return session_manager.write_profile(name, payload.content)
 
     @app.get("/api/plans")
-    async def plans(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
+    def plans(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
         return session_manager.list_plans()
 
     @app.get("/api/delegations")
-    async def delegations(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
+    def delegations(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         return session_manager.session_tree()
 
     @app.get("/api/session-groups")
-    async def session_groups(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
+    def session_groups(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
         return session_manager.list_groups()
 
     @app.post("/api/session-groups")
-    async def create_session_group(
+    def create_session_group(
         payload: GroupCreateRequest,
         auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
@@ -418,13 +457,13 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.get("/api/session-groups/{group_id}")
-    async def get_session_group(
+    def get_session_group(
         group_id: str, _: AuthContext = Depends(require_identity)
     ) -> dict[str, Any]:
         return session_manager.get_group(group_id)
 
     @app.post("/api/session-groups/{group_id}/members")
-    async def add_group_member(
+    def add_group_member(
         group_id: str,
         payload: GroupMemberRequest,
         auth: AuthContext = Depends(require_identity),
@@ -435,7 +474,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.delete("/api/session-groups/{group_id}/members/{session_name}")
-    async def remove_group_member(
+    def remove_group_member(
         group_id: str,
         session_name: str,
         auth: AuthContext = Depends(require_identity),
@@ -446,17 +485,17 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.post("/api/session-groups/{group_id}/open")
-    async def open_session_group(
+    def open_session_group(
         group_id: str, _: AuthContext = Depends(require_identity)
     ) -> dict[str, Any]:
         return session_manager.open_group(group_id)
 
     @app.get("/api/projects")
-    async def projects_list(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
+    def projects_list(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
         return session_manager.list_projects()
 
     @app.post("/api/projects")
-    async def projects_create(
+    def projects_create(
         payload: ProjectCreateRequest,
         auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
@@ -466,13 +505,13 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.get("/api/projects/{project_id}")
-    async def projects_get(
+    def projects_get(
         project_id: str, _: AuthContext = Depends(require_identity)
     ) -> dict[str, Any]:
         return session_manager.get_project(project_id)
 
     @app.put("/api/projects/{project_id}")
-    async def projects_update(
+    def projects_update(
         project_id: str,
         payload: ProjectUpdateRequest,
         auth: AuthContext = Depends(require_identity),
@@ -487,7 +526,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.delete("/api/projects/{project_id}")
-    async def projects_delete(
+    def projects_delete(
         project_id: str,
         auth: AuthContext = Depends(require_identity),
     ) -> dict[str, str]:
@@ -497,7 +536,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         return {"status": "deleted"}
 
     @app.post("/api/projects/{project_id}/assign")
-    async def projects_assign(
+    def projects_assign(
         project_id: str,
         payload: AssignSessionRequest,
         auth: AuthContext = Depends(require_identity),
@@ -508,7 +547,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.post("/api/projects/{project_id}/unassign")
-    async def projects_unassign(
+    def projects_unassign(
         project_id: str,
         payload: AssignSessionRequest,
         auth: AuthContext = Depends(require_identity),
@@ -519,13 +558,13 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.get("/api/sessions/{name}/wait-status")
-    async def wait_status(
+    def wait_status(
         name: str, _: AuthContext = Depends(require_identity)
     ) -> dict[str, Any] | None:
         return session_manager.wait_status(name)
 
     @app.post("/api/sessions/{name}/wait-for-children")
-    async def wait_for_children(
+    def wait_for_children(
         name: str,
         payload: WaitForChildrenRequest,
         _: AuthContext = Depends(require_identity),
@@ -546,7 +585,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail="session identity changed")
 
     @app.get("/api/sessions/{name}/review")
-    async def review_session(
+    def review_session(
         name: str,
         response: Response,
         lines: int = Query(default=200, ge=1, le=1000),
@@ -561,7 +600,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         return result
 
     @app.get("/api/sessions/{name}/brief")
-    async def session_brief(
+    def session_brief(
         name: str, response: Response, session_id: str | None = Query(default=None),
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
@@ -573,7 +612,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         return result
 
     @app.get("/api/integration/plan-requests/{request_id}/result")
-    async def integration_plan_result(
+    def integration_plan_result(
         request_id: str,
         response: Response,
         identity: AuthContext = Depends(require_identity),
@@ -584,7 +623,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         return IntegrationService(session_manager).result(request_id)
 
     @app.patch("/api/sessions/{name}/attention")
-    async def update_attention(
+    def update_attention(
         name: str,
         payload: AttentionRequest,
         auth: AuthContext = Depends(require_identity),
@@ -599,21 +638,21 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.get("/api/models")
-    async def models(
+    def models(
         provider: str = Query(pattern="^[a-z0-9-]+$"),
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
         return session_manager.model_catalogue(provider)
 
     @app.post("/api/models/refresh")
-    async def refresh_models(
+    def refresh_models(
         provider: str = Query(pattern="^[a-z0-9-]+$"),
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
         return session_manager.model_catalogue(provider, refresh=True)
 
     @app.post("/api/models/estimate")
-    async def estimate_models_api(
+    def estimate_models_api(
         payload: ModelEstimateRequest, _: AuthContext = Depends(require_identity)
     ) -> dict[str, Any]:
         return session_manager.estimate_models(
@@ -625,7 +664,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.get("/api/plans/{plan_id}")
-    async def inspect_plan(
+    def inspect_plan(
         plan_id: str,
         response: Response,
         _: AuthContext = Depends(require_identity),
@@ -634,7 +673,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         return session_manager.inspect_plan(plan_id)
 
     @app.post("/api/sessions")
-    async def create_session(
+    def create_session(
         payload: CreateSessionRequest,
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
@@ -656,7 +695,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.post("/api/sessions/{parent}/children")
-    async def add_child_session(
+    def add_child_session(
         parent: str,
         payload: CreateSessionRequest,
         auth: AuthContext = Depends(require_identity),
@@ -680,7 +719,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         return result
 
     @app.post("/api/sessions/{parent}/delegations")
-    async def create_delegation(
+    def create_delegation(
         parent: str,
         payload: DelegationRequest,
         _: AuthContext = Depends(require_identity),
@@ -701,7 +740,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.post("/api/plans/{plan_id}/execute")
-    async def execute_plan(
+    def execute_plan(
         plan_id: str,
         payload: PlanExecuteRequest,
         _: AuthContext = Depends(require_identity),
@@ -718,7 +757,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.post("/api/plans/{plan_id}/evidence")
-    async def record_evidence(
+    def record_evidence(
         plan_id: str,
         payload: RecordEvidenceRequest,
         auth: AuthContext = Depends(require_identity),
@@ -733,14 +772,14 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.get("/api/plans/{plan_id}/gate")
-    async def release_gate(
+    def release_gate(
         plan_id: str,
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
         return session_manager.check_release_gate(plan_id)
 
     @app.post("/api/plans/{plan_id}/promote")
-    async def promote_plan_api(
+    def promote_plan_api(
         plan_id: str,
         payload: PromoteRequest,
         auth: AuthContext = Depends(require_identity),
@@ -755,7 +794,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.post("/api/sessions/{name}/interrupt")
-    async def interrupt(
+    def interrupt(
         name: str, payload: SessionMutationRequest | None = None,
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
@@ -764,7 +803,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.post("/api/sessions/{name}/restart")
-    async def restart(
+    def restart(
         name: str, payload: SessionMutationRequest | None = None,
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
@@ -772,8 +811,16 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             validate_session_name(name), session_id=payload.session_id if payload else None,
         )
 
+    @app.post('/api/sessions/{name}/resume')
+    def resume(name: str, payload: SessionMutationRequest | None = None,
+               _: AuthContext = Depends(require_identity)):
+        return session_manager.resume(validate_session_name(name),
+            session_id=payload.session_id if payload else None)
+
     from .workflow_dispatch_api import dispatch_routes
     app.include_router(dispatch_routes(session_manager, require_identity))
+    from .compute_api import compute_routes
+    app.include_router(compute_routes(compute_engine, require_identity, permitted_origins=ALLOWED_ORIGINS))
     from .workflow_release_api import release_routes
     app.include_router(release_routes(session_manager, require_identity))
     from .workbench_state import workbench_routes
@@ -792,7 +839,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     app.include_router(environment_routes(session_manager, require_identity, STATIC_ROOT))
 
     @app.get("/api/skills")
-    async def skills_api(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
+    def skills_api(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         catalog = skill_catalog()
         assignments = list_assignments(session_manager.database)
         return enrich_catalog_with_assignments(catalog, assignments)
@@ -801,31 +848,31 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         pass
 
     @app.post("/api/skills/sync")
-    async def skills_sync(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
+    def skills_sync(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         return sync_skills()
 
     @app.post("/api/skills/doctor")
-    async def skills_doctor(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
+    def skills_doctor(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         return doctor_skills()
 
     @app.get("/api/deploy/releases")
-    async def deploy_releases(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
+    def deploy_releases(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
         return session_manager.list_releases()
 
     @app.get("/api/deploy/current")
-    async def deploy_current(_: AuthContext = Depends(require_identity)) -> dict[str, Any] | None:
+    def deploy_current(_: AuthContext = Depends(require_identity)) -> dict[str, Any] | None:
         return session_manager.current_release()
 
     @app.get("/api/deploy/canary")
-    async def deploy_canary(_: AuthContext = Depends(require_identity)) -> dict[str, Any] | None:
+    def deploy_canary(_: AuthContext = Depends(require_identity)) -> dict[str, Any] | None:
         return session_manager.canary_release()
 
     @app.get("/api/skills/assignments")
-    async def skills_assignments(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
+    def skills_assignments(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
         return list_assignments(session_manager.database)
 
     @app.post("/api/skills/assign")
-    async def skills_assign(
+    def skills_assign(
         payload: SkillAssignRequest,
         auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
@@ -838,7 +885,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.post("/api/skills/unassign")
-    async def skills_unassign(
+    def skills_unassign(
         payload: SkillAssignRequest,
         auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
@@ -851,21 +898,21 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.post("/api/skills/effective")
-    async def skills_effective(
+    def skills_effective(
         payload: SkillEffectiveRequest,
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
         return get_effective_skills(session_manager.database, payload.profile)
 
     @app.post("/api/skills/validate")
-    async def skills_validate(
+    def skills_validate(
         payload: SkillEffectiveRequest,
         _: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
         return validate_profile_skills(session_manager.database, payload.profile)
 
     @app.post("/api/skills/approve")
-    async def skills_approve(
+    def skills_approve(
         payload: SkillApprovalRequest,
         auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
@@ -878,7 +925,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.post("/api/skills/revoke")
-    async def skills_revoke(
+    def skills_revoke(
         payload: SkillApprovalRequest,
         auth: AuthContext = Depends(require_identity),
     ) -> dict[str, Any]:
@@ -891,13 +938,13 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         )
 
     @app.get("/api/skills/approvals")
-    async def skills_approvals_list(
+    def skills_approvals_list(
         _: AuthContext = Depends(require_identity),
     ) -> list[dict[str, Any]]:
         return list_superpower_approvals(session_manager.database)
 
     @app.post("/api/sessions/{name}/kill")
-    async def kill(
+    def kill(
         name: str,
         payload: ConfirmRequest,
         _: AuthContext = Depends(require_identity),
@@ -949,10 +996,10 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
             await websocket.close(code=4400, reason="invalid session name")
             return
         try:
-            tmux = session_manager.tmux_for_name(name)
-            inspected = session_manager.inspect(name)
+            tmux = await asyncio.to_thread(session_manager.tmux_for_name, name)
+            inspected = await asyncio.to_thread(session_manager.inspect, name)
             session_id = inspected["id"]
-            running = tmux.exists(name)
+            running = await asyncio.to_thread(tmux.exists, name)
         except KeyError:
             await websocket.close(code=4404, reason="session is not running")
             return
@@ -984,38 +1031,23 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         process = None
         transport = None
         try:
-            # Pin a tmux runtime identity while rename holds the same writer
-            # lock. The attach subprocess then remains safe after lock release,
-            # even if a rename immediately makes this URL's old name reusable.
-            with session_manager.database.connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                current = conn.execute(
-                    "SELECT tmux_name, socket_scope, execution_kind FROM sessions WHERE id=?",
-                    (session_id,),
-                ).fetchone()
-                if current is None or current["socket_scope"] != tmux.scope:
-                    raise RuntimeError("connected session identity is unavailable")
-                current_name = validate_session_name(current["tmux_name"])
-                runtime_id = tmux.run(
-                    "display-message", "-p", "-t", tmux.pane_target(current_name),
-                    "#{session_id}", timeout=2,
-                ).stdout.strip()
-                if not re.fullmatch(r"\$[0-9]+", runtime_id):
-                    raise RuntimeError("invalid tmux session identity")
-                view_only = current["execution_kind"] == "integration-plan"
-                master_fd, slave_fd = pty.openpty()
-                fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-                process = subprocess.Popen(
-                    tmux.command("attach-session", "-t", runtime_id),
-                    stdin=slave_fd,
-                    stdout=slave_fd,
-                    stderr=slave_fd,
-                    close_fds=True,
-                    start_new_session=True,
-                    env={**os.environ, "TERM": "xterm-256color"},
-                )
-            os.close(slave_fd)
-            slave_fd = None
+            attach_task = asyncio.create_task(asyncio.to_thread(prepare_attachment, session_manager, session_id, tmux))
+            try:
+                master_fd, process, view_only = await asyncio.shield(attach_task)
+            except asyncio.CancelledError:
+                # A worker cannot be cancelled. Retrieve and release its exact
+                # attachment before propagating cancellation.
+                try:
+                    master_fd, process, view_only = await attach_task
+                except Exception:
+                    pass
+                if process is not None and process.poll() is None:
+                    process.terminate()
+                    await asyncio.to_thread(process.wait, 3)
+                if master_fd is not None:
+                    os.close(master_fd)
+                pty_clients[client_key] = max(0, pty_clients[client_key] - 1)
+                raise
             transport = PtyTransport(master_fd)
         except (OSError, RuntimeError, sqlite3.Error, ValueError) as exc:
             if process is not None and process.poll() is None:
@@ -1026,8 +1058,20 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                         os.close(fd)
             pty_clients[client_key] = max(0, pty_clients[client_key] - 1)
             log.warning("ws session=%s attach error=%s", name, exc)
-            await websocket.close(code=4001, reason="session unavailable")
+            await websocket.close(code=4001 if isinstance(exc, AttachmentSessionEnded) else 1011,
+                                  reason="terminal attachment unavailable; retry")
             return
+        closed = False
+        close_lock = asyncio.Lock()
+        async def close_attachment(code=4001, reason='Terminal connection lost; retry'):
+            nonlocal closed
+            async with close_lock:
+                if closed:
+                    return
+                closed = True
+                with suppress(OSError, RuntimeError, WebSocketDisconnect):
+                    await websocket.close(code=code, reason=reason)
+
         async def read_pty() -> None:
             try:
                 while True:
@@ -1035,32 +1079,17 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                     if not data:
                         break
                     await websocket.send_bytes(data)
-            except (OSError, RuntimeError, WebSocketDisconnect) as pty_exc:
-                log.warning("ws session=%s pty error=%s", name, pty_exc, exc_info=True)
-                return
+            except (OSError, RuntimeError, WebSocketDisconnect):
+                log.debug('ws session=%s terminal attachment disconnected', name)
             finally:
-                # Any reader exit ends this attachment; do not leave input
-                # connected to a terminal whose output pump has failed.
-                with suppress(RuntimeError, WebSocketDisconnect):
-                    await websocket.close(code=4001, reason="session ended")
+                await close_attachment()
 
-        def scroll_connected_session(lines: int) -> None:
-            # Rename holds the same database writer lock while changing tmux.
-            # Resolve the identity inside that lock so an old name can never
-            # redirect this open socket's history control to a replacement.
-            with session_manager.database.connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                current = conn.execute(
-                    "SELECT tmux_name, socket_scope FROM sessions WHERE id=?",
-                    (session_id,),
-                ).fetchone()
-                if current is None or current["socket_scope"] != tmux.scope:
-                    raise RuntimeError("connected session identity is unavailable")
-                tmux.scroll_history(validate_session_name(current["tmux_name"]), lines)
+        def scroll_connected_session(lines):
+            scroll_attachment(session_manager, session_id, tmux, lines)
 
         reader = asyncio.create_task(read_pty())
         try:
-            session_manager.database.audit(
+            await asyncio.to_thread(session_manager.database.audit,
                 "session.attached",
                 name,
                 "success",
@@ -1075,7 +1104,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                     break
                 if message.get("bytes") is not None:
                     if view_only:
-                        await websocket.close(code=4403, reason="integration session is view-only")
+                        await close_attachment(code=4403, reason="integration session is view-only")
                         break
                     await transport.write(message["bytes"])
                 elif message.get("text"):
@@ -1089,12 +1118,11 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                         if type(lines) is int and -50 <= lines <= 50:
                             await asyncio.to_thread(scroll_connected_session, lines)
                     elif control.get("type") == "detach":
-                        await websocket.close(code=4000, reason="detached by user")
+                        await close_attachment(code=4000, reason="detached by user")
                         break
         except (json.JSONDecodeError, OSError, RuntimeError, sqlite3.Error, ValueError, WebSocketDisconnect) as ws_exc:
-            log.warning("ws session=%s error=%s", name, ws_exc, exc_info=True)
-            with suppress(RuntimeError):
-                await websocket.close(code=4001, reason="session unavailable")
+            log.debug("ws session=%s attachment ended: %s", name, type(ws_exc).__name__)
+            await close_attachment()
         finally:
             reader.cancel()
             # Release local resources before awaiting process exit. A closing

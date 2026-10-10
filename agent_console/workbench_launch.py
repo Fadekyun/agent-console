@@ -12,6 +12,7 @@ import time
 
 from .database import utc_now
 from .providers import provider_adapter
+from .resources import ResourceUnavailable, require_launch_resources
 from .skill_registry import SkillRegistry
 from .skills import _resolve_canonical_root
 from .validation import contained_path
@@ -244,7 +245,9 @@ class LaunchCatalog:
         if old:
             if old['request_hash'] != request_hash:
                 raise ValueError('Request key was already used for a different launch')
-            return self.launch_status(request_key)
+            if old['state'] != 'deferred':
+                return self.launch_status(request_key)
+        require_launch_resources()
         view = self.preview(request, source_id=source_id)
         if view['hash'] != expected_hash:
             raise ValueError('Launch configuration changed; review the current preview before launching')
@@ -252,6 +255,9 @@ class LaunchCatalog:
         with self.store.connect(write=True) as db:
             inserted = db.execute('INSERT OR IGNORE INTO work_launch_requests VALUES(?,?,?,?,?,NULL,?,?,?,?)',
                                   (request_key, request_hash, name, source_id, 'creating', '', actor, utc_now(), utc_now())).rowcount
+            if not inserted:
+                inserted = db.execute("UPDATE work_launch_requests SET state='creating',error='',updated_at=? WHERE request_key=? AND state='deferred'",
+                                      (utc_now(), request_key)).rowcount
         if not inserted:
             return self.launch(request, expected_hash=expected_hash, request_key=request_key, actor=actor, source_id=source_id)
         try:
@@ -266,6 +272,11 @@ class LaunchCatalog:
                 db.execute("UPDATE work_launch_requests SET state='created',session_id=?,updated_at=? WHERE request_key=?",
                            (session['id'], utc_now(), request_key))
                 self.store.event(db, 'launch.created', session['id'], {'request_key': request_key, 'source': source_id}, actor)
+        except ResourceUnavailable as error:
+            with self.store.connect(write=True) as db:
+                db.execute("UPDATE work_launch_requests SET state='deferred',error=?,updated_at=? WHERE request_key=?",
+                           (str(error), utc_now(), request_key))
+            raise
         except Exception:
             with self.store.connect(write=True) as db:
                 db.execute("UPDATE work_launch_requests SET state='unknown',error=?,updated_at=? WHERE request_key=?",

@@ -28,8 +28,8 @@ def write_skill(root: Path, name: str = "fixture", tools: str = "opencode") -> P
 class SkillCapabilityTests(unittest.TestCase):
     def test_native_verified_matrix_and_unknown_versions_are_explicit(self):
         from agent_console.skills import _version_diagnostics
-        versions = {'codex': '0.159.2', 'codex-pro': '0.159.2', 'claude': '2.1.287',
-                    'hermes': '0.21.4', 'pi': '0.99.2', 'opencode': '1.18.31'}
+        versions = {'codex': '0.160.1', 'codex-pro': '0.160.1', 'claude': '2.1.287',
+                    'hermes': '0.21.4', 'pi': '1.0.4', 'opencode': '1.18.31'}
         for tool, version in versions.items():
             diagnostic = _version_diagnostics({tool}, lambda _tool, _binary: version)[tool]
             self.assertEqual(diagnostic['version_state'], 'verified')
