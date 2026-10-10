@@ -114,9 +114,10 @@ def default_registry() -> dict[str, Any]:
 
 
 class AuthRegistry:
-    def __init__(self, config_dir: Path, *, home: Path | None = None):
+    def __init__(self, config_dir: Path, *, home: Path | None = None, broker=None):
         self.config_dir = config_dir.expanduser()
         self.home = (home or Path.home()).expanduser()
+        self.broker = broker
         self.registry_path = self.config_dir / "auth-contexts.json"
         self.secrets_dir = self.config_dir / "secrets.d"
         self.config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -267,7 +268,7 @@ class AuthRegistry:
                 f"run agentctl auth login {tool} --context {name}",
             )
         secret_ref = context.get("secret_ref")
-        if secret_ref:
+        if secret_ref and not (self.broker and context.get("provider") in {"commandcode", "openrouter"}):
             secret = self.secret_path(secret_ref)
             if not secret.is_file():
                 return "setup-required", f"credential {secret_ref} is not configured"

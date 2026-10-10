@@ -1,306 +1,143 @@
 # Agent Console
 
-CLI session inspection (`session list`, `inspect`, `tree`, `review`, `context`,
-`group list`, `group show`) and `profile list`/`inspect` do not initialize state,
-migrate the database or reconcile lifecycle records. Session status and attention
-remain stored values; `running`, `live_state`, `observed_status`, `observed_at`,
-`observation_source` and `state_disagreement` describe a separate tmux observation.
-An unavailable observation fails instead of declaring sessions stopped.
+Agent Console lets you run AI coding tools in a browser and keep related work together. Each session has its own conversation and terminal. You can use one session for a small task, or add a coder, reviewer or other helper when the work needs it.
 
-The trusted SQL reader uses an isolated Python process and a native Linux x86_64
-libseccomp write guard. It reads supported schema10/11 and current committed WAL
-data without a write fallback. Missing state, unsupported schema, unavailable
-enforcement or unusable WAL sidecars returns an unavailable diagnostic; it does
-not create sidecars or use immutable mode on a live database. The long-running
-service holds one writer connection for its lifetime so live WAL sidecars stay
-materialized for these routes; inspection still fails closed when no writer holds
-the database. This guard is not a general sandbox for hostile code. Profile-only
-reads do not require the database or guard. Generic inspection does not expose
-frozen integration requests or their artifacts; use the existing owner-authorized
-request view.
+It supports Codex, Codex Pro, Claude, OpenCode, Pi, Hermes and a plain shell, depending on what is installed and configured on your host. The tools run in tmux, so closing a browser tab does not stop them.
 
-Other commands retain their existing behavior: in particular `integration
-plan-status` reconciles request state, and `session wait-for-children` records its
-wait. This change does not make all CLI commands read-only.
+![Work overview with two example tasks and a session needing review](docs/media/work-overview.png)
 
-A unified tmux session manager for AI coding agent orchestration. Manage multiple AI coding tools (Codex, Claude, OpenCode, Hermes) through a web terminal, CLI, and SSH with session isolation, delegation trees, and audit logging.
+*All screenshots and animations use demo data. No real conversations or credentials are shown.*
 
-## Features
+## Install and open
 
-- **Multi-tool orchestration** — Codex, Claude, OpenCode, Hermes, and Shell sessions
-- **Web terminal** — Browser-based xterm.js PTY attached to tmux sessions
-- **Session delegation** — Parent/child trees with read-only peer review
-- **Auth contexts** — Per-tool credential isolation with `secrets.d` storage (legacy context key `opencode-go-default` is preserved for compatibility)
-- **Model catalogue** — OpenRouter and OpenCode model browsing with cost estimation
-- **Plan management** — Discord-integrated planning with execution handoff
-- **Audit logging** — SQLite-backed audit trail for all operations
-- **SSH client installer** — Cross-platform SSH config for remote access
-
-## Prerequisites
-
-- Python 3.11+
-- Node.js 18+ and npm
-- tmux
-- git
-- At least one AI coding tool installed (codex, claude, opencode, or hermes)
-
-## Quick Start
+For the Linux user-service installation, you need Python 3.11 or newer, Node.js 18 or newer, npm, Git, tmux and a working systemd user service manager. Install and sign in to the AI tools you want to use on that host.
 
 ```bash
 git clone https://github.com/Fadekyun/agent-console.git
 cd agent-console
-# Set required variables before install
 export AGENT_CONSOLE_TAILSCALE_LOGIN=your-email@example.com
-export AGENT_CONSOLE_LAN_CIDR=10.0.0.0/8
-export AGENT_CONSOLE_TRUSTED_HOSTS=localhost,127.0.0.1,your-lan-ip
 ./scripts/install.sh
-```
-
-The installer creates a Python venv, installs dependencies, symlinks CLI wrappers, resolves AI CLI tool paths to absolute paths (so systemd --user can find them), validates configuration, generates systemd user units, and starts the web service.
-
-Verify the installation:
-
-```bash
 agentctl doctor
 ```
 
-## Configuration
-
-All settings are controlled via environment variables. The installer uses sensible defaults; override as needed.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AGENT_CONSOLE_WORKSPACE_ROOT` | checkout root | Root directory for repos and handoffs |
-| `AGENT_CONSOLE_STATE_DIR` | `~/.local/share/agent-console` | SQLite DB, launchers, transcripts (note: does not relocate the installer venv, which stays under the original default path) |
-| `AGENT_CONSOLE_DB` | `<state_dir>/agent-console.sqlite3` | Database path |
-| `AGENT_CONSOLE_PROFILE_DIR` | `<checkout>/agent-profiles` | Agent profile directory (always relative to checkout, not workspace) |
-| `AGENT_CONSOLE_PORT` | `3210` | Web service listen port |
-| `AGENT_CONSOLE_BIND_HOST` | `127.0.0.1` | Web service bind address |
-| `AGENT_CONSOLE_SOURCE_ROOT` | checkout root | Source root for deployment releases |
-| `AGENT_CONSOLE_CANARY_BIND` | `127.0.0.1` | Canary server bind address |
-| `AGENT_CONSOLE_CANARY_PORT` | `33100` | Canary server listen port |
-| `AGENT_CONSOLE_DEPLOYMENT_MODE` | `disabled` | Deployment mode (`disabled` or `staging`) |
-| `AGENT_CONSOLE_TUNNEL_PORT` | `13210` | Reverse tunnel remote port |
-| `AGENT_CONSOLE_TUNNEL_HOST` | `localhost` | SSH tunnel jump host |
-| `AGENT_CONSOLE_TMUX_SOCKET` | (system default) | tmux socket name |
-| `AGENT_CONSOLE_TMUX_SOCKET_PATH` | `/run/user/<uid>/agent-console/tmux.sock` | Canonical tmux socket path |
-| `AGENT_CONSOLE_TAILSCALE_LOGIN` | (empty) | Expected Tailscale identity email |
-| `AGENT_CONSOLE_LAN_CIDR` | `127.0.0.1/32` | Trusted LAN network (set to your LAN CIDR) |
-| `AGENT_CONSOLE_TRUSTED_HOSTS` | `localhost,127.0.0.1` | TrustedHostMiddleware allowlist |
-| `AGENT_CONSOLE_MAX_PTY_CLIENTS` | `2` | Max WebSocket PTY clients per session |
-| `AGENT_CONSOLE_MAX_SESSIONS` | `12` | Max managed sessions |
-| `AGENT_CONSOLE_MAX_CHILDREN` | `0` | Max active children per parent; `0` disables only this per-parent limit. Positive values enforce a limit; stopped/archived children do not count. |
-| `AGCONSOLE_CODEX_BIN` | (auto-detected) | Absolute path to Codex CLI binary |
-| `AGCONSOLE_CLAUDE_BIN` | (auto-detected) | Absolute path to Claude CLI binary |
-| `AGCONSOLE_OPENCODE_BIN` | (auto-detected) | Absolute path to OpenCode CLI binary |
-| `AGCONSOLE_HERMES_BIN` | (auto-detected) | Absolute path to Hermes CLI binary |
-| `AGCONSOLE_SKILLS_ROOT` | `~/codex/skills` | Canonical skills root directory |
-| `AGCONSOLE_RETAINED_SKILLS` | (empty) | Comma-separated skill names to retain |
-
-Manual Add session and agent delegation use the same admission lock and active-child capacity. Reserved, attached and detached children count; historical children do not. The default has no per-parent child limit, while the global `AGENT_CONSOLE_MAX_SESSIONS` budget and eight-level descendant-depth guard still apply. Existing explicit nonzero `AGENT_CONSOLE_MAX_CHILDREN` values remain enforced; set that value to `0` (or remove it) to opt out. Blank, malformed and negative environment values use the default `0`.
-
-## Docker
+Open **http://127.0.0.1:3210/work** on that machine. From another machine, forward the port with SSH:
 
 ```bash
-# 1. Copy and edit environment config
-cp .env.example .env
-# Edit .env — at minimum set AGENT_CONSOLE_TAILSCALE_LOGIN
-
-# 2. Start
-docker compose up -d
-
-# 3. Verify
-curl -f http://localhost:3210/healthz
+ssh -L 3210:127.0.0.1:3210 your-user@your-server
 ```
 
-The container binds to `127.0.0.1:3210` (loopback only). Set `AGENT_CONSOLE_TAILSCALE_LOGIN` in `.env` — without it, all protected UI and API requests return 503.
+Then open the same URL in your local browser. The default service listens on localhost. Configure the trusted host and network settings before enabling direct LAN or proxy access; see [security and access](docs/security.md) and [operations](docs/operations.md).
 
-### Hosts with AppArmor restrictions
+The installer sets up the Python environment, browser assets, CLI wrappers and web service. It does not install or authenticate every AI tool for you. Check **Settings → Tools & accounts** if a tool is unavailable.
 
-Some hosts (e.g., Proxmox LXC containers) have an AppArmor profile that blocks `socketpair()`, preventing the container from starting. If `docker compose up` fails with `PermissionError: [Errno 13] Permission denied` on socketpair, use the AppArmor override:
+## Start your first task
+
+1. Open **Work** and choose **New session**.
+2. Write what the session should accomplish. Choose a tool, role and account.
+3. Enter the repository path on the server. For code changes, keep **Create an isolated worktree** selected so the session has a separate working copy.
+4. Choose **Create session**. The terminal opens with your task saved as a draft.
+5. Open **Input · draft**, review the text, then choose **Send + Enter** to start the task.
+
+![New session form with a task, tool, role and repository](docs/media/new-session.png)
+
+![Animation: create a session, review its task draft, then explicitly send it](docs/media/create-and-send.gif)
+
+*Static alternative: the [new session form](docs/media/new-session.png) shows the settings. After creation, open Input and choose Send + Enter.*
+
+**Send** pastes text into the terminal; **Send + Enter** also submits it. Closing the terminal view leaves the session running. Use its session controls when you want to interrupt, restart or stop it.
+
+The Work page keeps terminal state, attention and results separate. A running terminal does not prove that the task is finished. **Needs review** means the session has asked you to check its work.
+
+## Work with more than one session
+
+Open a session and choose **+ Add session** to put a helper beneath it. Give the helper a focused task, such as reviewing the changed files or checking keyboard navigation. Each helper gets its own terminal and conversation.
+
+![Related sessions in the tree beside the selected session terminal](docs/media/session-tree.png)
+
+The tree groups related work. A tree link does not send a task, share conversation memory or make one session wait for another. A manually added session starts immediately; review and send its task draft when ready. Scheduling is optional and has its own controls.
+
+Managed sessions can inspect and control related interactive sessions in the same tree, including parents and siblings. Repository editing permissions still come from their role and mode. Other trees cannot be controlled through a session credential. See [session capabilities](docs/SESSION_CAPABILITIES.md) for command details and restrictions.
+
+Choose a role that matches the task:
+
+| Role | Use it for |
+| --- | --- |
+| General | Ordinary interactive work |
+| Coder / Bugfix | Implementing a change or fixing a reproducible problem |
+| Planner / Scout / Researcher | Planning, tracing the repository or researching before changes |
+| Reviewer / Verifier | Reading changes and checking the requested result |
+| Orchestrator | Dividing useful work between sessions and checking their reports |
+| Release | Preparing and carrying out an explicitly authorized release |
+
+A role supplies instructions and permissions. A **skill** supplies reusable guidance for a particular task. Open **Skills** to manage the library, or expand **Skills for this session** before creating a session to check what will be selected. Changes to skill assignments apply to future launches or explicit restarts; they do not rewrite an active conversation's copy. See [skill management](docs/SKILL_REGISTRY.md) and [delivery details](docs/skill-delivery-audit.md).
+
+## Add environment variables and keys
+
+Open **Settings → Manage environment variables**. Choose **Global defaults** or a project, enter the variable name and value, then choose **Save variable**. Saved values cannot be displayed; use **Replace** to enter a new one.
+
+![Environment form and configured variables, including a protected CMD_API_KEY](docs/media/environment.png)
+
+Project values apply to sessions assigned to that project. Use the Project field in **Settings → More controls → Open full control panel** when creating one; choosing a repository alone does not assign a project. Children inherit their parent's project.
+
+Project values override global values, which override selected-account defaults and inherited host values. **Disable** or **Delete** removes that override and restores any inherited value. **Suppress inherited variable** removes access to that variable for the chosen project. Ordinary variables take effect when you create a session or explicitly restart it.
+
+After the host operator enables the broker, these five names use protected storage:
+
+| Name | Used for |
+| --- | --- |
+| `N8N_MCP_TOKEN` | n8n tools |
+| `DIRECTUS_MCP_TOKEN` | Directus tools |
+| `BUSHI_MCP_TOKEN` | Bushi tools |
+| `OPENROUTER_API_KEY` | OpenRouter tools and models |
+| `CMD_API_KEY` | CommandCode models, including configured Pi and Hermes sessions |
+
+The form stays the same. A separate local broker stores these keys and adds them to requests to the configured service. Connected agents receive a broker credential instead of the upstream key. Updates apply on the next request in sessions using the broker; you do not need to restart those sessions for a key replacement.
+
+![Animation: enter a demo CMD_API_KEY and save it using the existing Environment form](docs/media/save-protected-variable.gif)
+
+*Static alternative: the [Environment screenshot](docs/media/environment.png) shows the saved protected variable. The value clears after saving.*
+
+The broker is optional and must be configured by the host operator before protected connections work. Until it is enabled, the existing environment behavior stays in place. A fresh Pi or Hermes account also needs the [one-time model catalogue setup](docs/CREDENTIAL_BROKER.md#set-up-a-fresh-pi-or-hermes-account). A broker outage is reported as a connection failure. Existing credentials and running sessions are not migrated automatically. See [broker setup](docs/CREDENTIAL_BROKER.md) and [Environment behavior](docs/ENVIRONMENT.md) for setup, scope rules and deployment details.
+
+## Common problems
+
+| What you see | What to check |
+| --- | --- |
+| A tool is unavailable | Open Settings → Tools & accounts, then run `agentctl doctor` on the host. Check that the tool is installed and its selected account is ready. |
+| The session opened but has not started the task | Open Input and send the draft with **Send + Enter**. |
+| The terminal disconnected | Reopen or reconnect the terminal. Check the session state before restarting it. |
+| A normal environment change has not appeared | Explicitly restart the affected session when you are ready. |
+| A protected connection fails | Check the broker service, its fixed upstream configuration and the key's scope. |
+| A session cannot control another session | Check that both belong to the same tree and that the target is a managed interactive session. |
+
+Useful host commands:
 
 ```bash
-docker compose -f docker-compose.yml -f compose.n100-apparmor.yaml up -d
-```
-
-This disables AppArmor confinement for the container only. Do **not** use `privileged: true`. Confirm the AppArmor denial first:
-
-```bash
-sudo journalctl -k --since "5 minutes ago" | grep -i apparmor
-```
-
-### AI CLI Tools in Docker
-
-The Docker image provides the web orchestration UI but does **not** bundle AI coding CLIs (Codex, Claude, OpenCode, Hermes). This is intentional — each tool has its own authentication flow and API keys.
-
-To use AI tools inside the container, either:
-
-1. **Install CLIs in a custom Dockerfile**:
-   ```dockerfile
-   FROM agent-console:latest
-   RUN npm install -g @openai/codex
-   ENV AGCONSOLE_CODEX_BIN=/usr/local/bin/codex
-   ```
-
-2. **Mount CLI binaries** (provider-specific, not all of ~/.config):
-   ```yaml
-   volumes:
-     - /path/to/your/.local/bin/codex:/usr/local/bin/codex:ro
-   ```
-
-3. **Use the web UI for orchestration only** and run AI CLIs on the host, connecting via SSH aliases.
-
-Without AI CLIs installed, the web UI shows tools as "launcher missing" in the provider health panel. The Shell tool is always available.
-
-## Multi-Instance Setup
-
-Agent Console uses fixed systemd user unit names, `~/bin` symlink targets, and a uid-based tmux socket path, so two instances **under the same Unix user** are not isolated even with different ports and state directories. The supported multi-instance approach uses **separate Unix users**:
-
-```bash
-# Create a dedicated system user for the secondary instance
-sudo useradd --system --create-home --home-dir /opt/agent-console-secondary agent-console-2
-sudo -u agent-console-2 bash
-cd /opt/agent-console-secondary
-git clone https://github.com/Fadekyun/agent-console.git .
-export AGENT_CONSOLE_PORT=3211
-export AGENT_CONSOLE_TUNNEL_PORT=13211
-export AGENT_CONSOLE_TAILSCALE_LOGIN=your-email@example.com
-export AGENT_CONSOLE_LAN_CIDR=10.0.0.0/8
-export AGENT_CONSOLE_TRUSTED_HOSTS=localhost,127.0.0.1,your-lan-ip
-./scripts/install.sh
-```
-
-Each Unix user gets its own systemd user bus, `~/.config/systemd/user/` unit directory, tmux sockets, and `~/bin` namespace, providing full isolation.
-
-## Skills Setup
-
-Agent skills provide reusable instructions (SKILL.md files) under a canonical root directory. The installer persists `AGCONSOLE_SKILLS_ROOT` and `AGCONSOLE_RETAINED_SKILLS` into `runtime.env` but does not auto-sync — run these steps after install:
-
-```bash
-# Sync retained skills into tool-specific roots
-agentctl skills sync
-
-# Verify skill links
+agentctl doctor
+agentctl session list
+agentctl session inspect SESSION_NAME
+agentctl session review SESSION_NAME
+agentctl profile list
 agentctl skills doctor
 ```
 
-The catalogue, sync command, and doctor use one provider capability table. Native
-materialization roots are `~/.codex/skills` (Codex and Codex Pro),
-`~/.claude/skills` (Claude), `~/.hermes/skills/homelab` (Hermes), and
-`${XDG_CONFIG_HOME:-~/.config}/opencode/skills` (OpenCode). An explicit `home`
-used by tests or embedding always resolves OpenCode beneath that home and ignores
-ambient XDG variables.
+Session inspection reads stored metadata and available live observations. An unavailable observation is reported as unknown; it is not proof that a session stopped. Stopping a session does not delete its worktree or branch.
 
-Sync creates canonical-target directory symlinks only. It preserves unrelated
-files, directories, and user symlinks; a canonical-name collision or wrong target
-is reported instead of replaced. If a skill's explicit `tools` allowlist removes a
-provider, sync removes the old link only when it can prove that link still targets
-the same canonical skill. OpenCode mutation is currently verified for version
-`1.18.30`; missing or unknown versions are diagnosed and skipped conservatively.
-Discovery diagnostics scan confirmed global and project roots with a fixed bound,
-report duplicates and shadowing by the frontmatter skill ID, and mark unverified
-ordering or configuration-dependent sources as uncertain. Repeated isolated
-OpenCode 1.18.30 runs selected different winners for identical cross-root duplicate
-fixtures, so OpenCode duplicate precedence remains unverified and no winner is
-claimed. No remote skills are
-downloaded.
+## Administration and development
 
-Configure which skills to retain:
+The web service, CLI and SSH selector use the same application layer. tmux holds live terminals; SQLite stores session metadata. Use separate Unix users for separate installations: changing only the port does not isolate service units, CLI links or tmux sockets.
 
-```bash
-export AGCONSOLE_RETAINED_SKILLS="skill-a,skill-b,skill-c"
-./scripts/install.sh   # re-run to persist new value
-```
+For an existing Git installation, the guarded update command is `scripts/update.sh <approved-main-sha>`. It checks the selected revision, takes backups and validates health and session inventory. The installer preserves existing runtime settings when merging its defaults. Read the [maintenance guide](docs/platform-maintenance.md) before updating or rolling back.
 
-## Upgrade Compatibility
+- [Documentation index](docs/README.md)
+- [Operations and recovery](docs/operations.md) · [Recovery guide](docs/recovery.md)
+- [Optional compute queue and host admission](docs/COMPUTE_SCHEDULING.md)
+- [Security and authentication](docs/security.md) · [Accounts](docs/auth-contexts.md)
+- [Pi and Hermes model setup](docs/PI_HERMES_COMMANDCODE.md)
+- [CLI entrypoints](docs/selected-release-entrypoints.md) · [Architecture](docs/architecture.md)
+- [Roadmap](docs/DEVELOPMENT_ROADMAP.md) · [Release notes](docs/RELEASE_NOTES.md)
+- [Contribution rules](AGENTS.md) · [Recreate the README media](docs/media/README.md)
 
-The installer preserves the following existing state across reinstalls — it does not delete or replace them:
+The source includes Docker Compose support. The image does not bundle AI coding tools; install the tools and their authentication inside the container if you use that path. The native installation above is the direct route for tools already configured on the host.
 
-- tmux sockets (canonical and legacy)
-- SQLite database
-- Launcher scripts under `$AGENT_CONSOLE_STATE_DIR/launchers`
-- Auth contexts and secrets
-- Session transcripts
-- Worktrees and handoffs
-
-The venv, npm dependencies, and state directories are prepared **before** profile validation occurs, so a validation failure will have already created those directories and installed dependencies. This is intentional: validation gates unit writes and systemctl calls, not earlier preparation steps.
-
-Existing systemd units are **replaced** on reinstall. Running sessions survive because `KillMode=process` (preserved in generated units) kills only the agent process on stop, leaving tmux sessions intact.
-
-The installer generates a stable runner at `$AGENT_CONSOLE_STATE_DIR/runner.sh` (mode 0700). The systemd unit executes this runner instead of referencing the checkout directly. The runner selects a contained release from `$AGENT_CONSOLE_STATE_DIR/releases/current` only when all required `@xterm` assets are present, otherwise it falls back to the bootstrap checkout root. Promotion still restarts the web service; tmux sessions remain running and browser terminals use bounded reconnect.
-
-When upgrading an existing installation:
-
-1. The installer runs `systemctl daemon-reload`, `enable`, then `restart` — this picks up changed code and unit settings even when the service is already active.
-2. Existing canonical and legacy tmux sessions are reconciled on next `SessionManager` startup.
-3. Agent CLIs that have been removed or whose provider IDs have changed remain attachable while running but may not restart after a CLI upgrade. To replace a launcher for a still-running legacy session: first stop the agent gracefully (or let it complete), back up the launcher script, then recreate after the session has exited. Do not delete a launcher while its session is still running — preserve and recreate after stopping.
-4. The `runtime.env` file is rewritten — any customizations added after the last install are lost. Keep a backup or re-apply overrides on reinstall.
-5. Profile directory is validated **early** in the install flow (before unit writes and systemctl calls) but after directory/venv/dependency preparation. If `AGENT_CONSOLE_PROFILE_DIR` points to a nonexistent or empty directory, the installer fails before modifying units or calling systemctl, preventing silent zero-profile deployments.
-
-For a Git-based installation, `scripts/update.sh <approved-main-sha>` provides the guarded update path. It accepts only the exact current `origin/main` SHA, creates a clean detached checkout, takes an online database and runtime/unit/runner/launcher backup, runs the installer, checks service health and session inventory parity, and restores the prior unit/runtime/runner on failure. It does not bypass protected-branch review and does not copy credentials.
-
-## CLI Usage
-
-```bash
-# Check system health
-agentctl doctor
-
-# List sessions
-agentctl session list
-
-# Review a session's recent output
-agentctl session review <name>
-
-# Sync agent skills
-agentctl skills sync
-
-# Manage auth contexts
-agentctl auth list
-```
-
-## Architecture
-
-The `SessionManager` is the authoritative application layer. tmux owns live terminal state; SQLite stores metadata. The web backend, CLI, and SSH selector all call the same library.
-
-See [docs/architecture.md](docs/architecture.md) for details.
-
-## Development
-
-See [docs/DEVELOPMENT_ROADMAP.md](docs/DEVELOPMENT_ROADMAP.md) for planned and completed work.
-See [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md) for version history.
-See [AGENTS.md](AGENTS.md) for contribution and PR governance rules.
-
-## Security
-
-- Tailscale identity or trusted LAN required for access
-- Tool credentials stored as mode-0600 files under a mode-0700 directory
-- Input validation on all session names, paths, and tool parameters
-- Audit logging for all operations
-
-See [docs/security.md](docs/security.md) for details.
-
-## Project Structure
-
-```
-agent_console/     Core Python package
-app/               Legacy standalone job-queue FastAPI app
-client/            SSH config installers (Python + Zsh)
-deploy/systemd/    Systemd user service templates
-docs/              Architecture, security, operations, recovery docs
-scripts/           Install, uninstall, verify, backup, CLI wrappers
-tests/             Python unit tests + Playwright UI tests
-web/static/        Frontend HTML, JS, CSS
-```
-
-## License
-
-MIT — see [LICENSE](LICENSE).
-
-### Combined release preparation
-
-The combined candidate is tracked in [issue96](https://github.com/Fadekyun/agent-console/issues/96). See [actual skills and prepared delivery](docs/skill-delivery-audit.md) for the distinction between engine support, existing content, prepared helpers and installed/assigned state. The [schema11 rollback contract](docs/schema-rollback.md) permits a return to schema10 only with disabled planning and no retained request/noninteractive state. Native planning remains disabled/unverified; skill discovery and guarded SQL reads do not establish native provider containment.
-
-Local owner project and write-only environment commands are documented in
-[Selected-release entrypoints](docs/selected-release-entrypoints.md#local-owner-projects-and-environment).
-Secret environment values use stdin or a hidden terminal prompt; managed agent
-sessions cannot use these owner administration commands.
+MIT licensed. See [LICENSE](LICENSE).

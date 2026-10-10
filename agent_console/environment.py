@@ -14,6 +14,8 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
+from .broker_client import PROTECTED_NAMES, strip_protected
+
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 RESERVED = frozenset({
     "HOME", "PATH", "SHELL", "USER", "LOGNAME", "PWD", "OLDPWD", "IFS", "ENV",
@@ -116,9 +118,10 @@ def credential_values(paths):
 
 
 class EnvironmentStore:
-    def __init__(self, config_dir):
+    def __init__(self, config_dir, *, broker=None):
         self.root = Path(config_dir) / "environment"
         self.path = self.root / "variables.json"
+        self.broker = broker
 
     def _read(self):
         data = read_private(self.path)
@@ -147,6 +150,9 @@ class EnvironmentStore:
     def put(self, name, *, value=None, state="enabled", project_id=None):
         validate_name(name)
         scope = self.scope(project_id)
+        if self.broker and name in PROTECTED_NAMES:
+            self.broker.put(name, value=value, state=state, project_id=project_id)
+            return self.describe(project_id)
         if state not in {"enabled", "disabled", "suppressed"} or (state == "suppressed" and project_id is None):
             raise ValueError("Environment state is invalid for this scope")
         if value is not None:
@@ -177,6 +183,10 @@ class EnvironmentStore:
 
     def delete(self, name, *, project_id=None):
         validate_name(name)
+        self.scope(project_id)
+        if self.broker and name in PROTECTED_NAMES:
+            self.broker.delete(name, project_id=project_id)
+            return self.describe(project_id)
         with self._lock():
             data = self._read()
             entries = data["scopes"].get(self.scope(project_id), {})
@@ -197,6 +207,8 @@ class EnvironmentStore:
         if project_id is None:
             raise ValueError("A project identity is required")
         scope = self.scope(project_id)
+        if self.broker:
+            self.broker.clear_project(project_id)
         with self._lock():
             data = self._read()
             if scope not in data["scopes"]:
@@ -224,9 +236,12 @@ class EnvironmentStore:
                     values[name], sources[name] = value, scope
         return values, sources
 
-    def resolve(self, project_id=None, *, baseline=None, secret_files=()):
+    def resolve(self, project_id=None, *, baseline=None, secret_files=(), account_ref=None):
         data = self._read()
         values, _ = self._resolve(data, project_id, dict(os.environ) if baseline is None else baseline, credential_values(secret_files))
+        if self.broker:
+            values = strip_protected(values)
+            values.update(self.broker.environment(project_id, account_ref))
         try:
             total_bytes = sum(len(k.encode()) + len(v.encode()) + 2 for k, v in values.items())
         except (UnicodeError, AttributeError):
@@ -250,6 +265,17 @@ class EnvironmentStore:
                     "overrides_global": project_id is not None and name in data["scopes"].get("global", {})}
                    for name, entry in sorted(data["scopes"].get(scope, {}).items())]
         managed = set(data["scopes"].get("global", {})) | set(data["scopes"].get(scope, {}))
-        return {"scope": scope, "revision": self.revision(project_id, data=data), "entries": entries,
+        result = {"scope": scope, "revision": self.revision(project_id, data=data), "entries": entries,
                 "effective": [{"name": key, "source": sources[key]} for key in sorted(sources) if key in managed],
                 "host_names": sorted(k for k in baseline if NAME.fullmatch(k) and k not in RESERVED and not k.startswith(PREFIXES))}
+        if self.broker:
+            status = self.broker.describe(project_id)
+            result["entries"] = [e for e in entries if e["name"] not in PROTECTED_NAMES]
+            result["entries"] += [{**e, "scope": scope, "protected": True, "immediate": True}
+                                  for e in status["entries"]]
+            result["entries"].sort(key=lambda e: e["name"])
+            result["effective"] = [e for e in result["effective"] if e["name"] not in PROTECTED_NAMES]
+            result["effective"] += [{**e, "protected": True, "immediate": True} for e in status["effective"] if e.get("available")]
+            result["host_names"] = sorted([n for n in result["host_names"] if n not in PROTECTED_NAMES] + status.get("host_names", []))
+            result.update(broker_enabled=True, protected_names=sorted(PROTECTED_NAMES), broker_revision=status["revision"])
+        return result

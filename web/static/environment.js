@@ -2,6 +2,7 @@ const $ = id => document.getElementById(id);
 let generation = 0;
 let saving = false;
 let renderedScope = null;
+let protectedNames = new Set();
 const selectedScope = () => $('environment-scope').value;
 const current = (scope, token) => scope === selectedScope() && token === generation;
 const editable = (scope = renderedScope, token = generation) => !saving && scope !== null && scope === renderedScope && current(scope, token);
@@ -39,11 +40,15 @@ async function api(path, options) {
 function text(tag, value) { const node = document.createElement(tag); node.textContent = value; return node; }
 function render(data, scope, token) {
   renderedScope = scope;
+  protectedNames = new Set(data.protected_names || []);
+  $('environment-protection').textContent = data.broker_enabled
+    ? 'Protected keys: ' + [...protectedNames].join(', ') + '. Save them here as usual. Agents use the broker; changes apply on their next request. Protected keys cannot be blank.'
+    : 'Protected key routing is not configured. Variables are passed to sessions when they start or restart.';
   const entries = $('environment-entries'); entries.replaceChildren();
   if (!data.entries.length) entries.append(text('p', 'No variables configured in this scope.'));
   for (const item of data.entries) {
     const row = document.createElement('p');
-    row.append(text('strong', item.name), text('span', ` · ${item.state}${item.overrides_host ? ' · overrides host value' : ''}${item.overrides_global ? ' · overrides global value' : ''} `));
+    row.append(text('strong', item.name), text('span', ` · ${item.state}${item.protected ? ' · protected · applies on next request' : ''}${item.overrides_host ? ' · overrides host value' : ''}${item.overrides_global ? ' · overrides global value' : ''} `));
     for (const [label, action] of [
       ['Replace', () => { if (!editable(scope, token)) return; $('environment-name').value = item.name; valueInput().focus(); }],
       ...(item.state === 'suppressed' ? [] : [[item.state === 'enabled' ? 'Disable' : 'Enable', () => change(item.name, {state: item.state === 'enabled' ? 'disabled' : 'enabled'}, scope, token)]]),
@@ -75,7 +80,7 @@ async function refresh() {
   } catch (error) {
     if (!current(scope, token)) return;
     $('environment-message').textContent = error.message;
-    const retry = text('button', 'Retry loading variables'); retry.type = 'button'; retry.onclick = refresh;
+    const retry = text('button', 'Retry loading variables'); retry.type = 'button'; retry.onclick = () => { $('environment-message').textContent = ''; refresh(); };
     $('environment-entries').replaceChildren(retry);
   } finally { if (current(scope, token)) controls(); }
 }
@@ -89,7 +94,9 @@ async function change(name, payload, scope = renderedScope, token = generation, 
       $('environment-value').value = '';
       $('environment-multiline-value').value = '';
     }
-    $('environment-message').textContent = 'Environment saved. New sessions and explicit restarts use the latest values.';
+    $('environment-message').textContent = protectedNames.has(name)
+      ? 'Protected key saved. The change applies on the next broker request.'
+      : 'Environment saved. New sessions and explicit restarts use the latest values.';
     await refresh();
   } catch (error) { if (current(scope, token)) $('environment-message').textContent = error.message; }
   finally { saving = false; controls(); }

@@ -246,6 +246,9 @@ def session_mcp_servers(environ: dict[str, str] | None = None) -> list[dict[str,
     Values are never read into the result.
     """
     env = os.environ if environ is None else environ
+    from .broker_launch import active, mcp_servers
+    if active(env):
+        return mcp_servers(env)
     servers: list[dict[str, Any]] = []
     for server in MCP_SERVERS:
         if not env.get(server["token_env"]):
@@ -289,7 +292,7 @@ def hermes_mcp_servers(servers: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def ensure_pi_auth_env_reference(path: Path) -> None:
+def ensure_pi_auth_env_reference(path: Path, *, variable: str = COMMANDCODE_ENV_VAR) -> None:
     """Keep pi's native `auth.json` pointed at the env var, never a literal key.
 
     pi >= 0.74 resolves an `api_key` entry through `resolveConfigValue`, which
@@ -305,7 +308,7 @@ def ensure_pi_auth_env_reference(path: Path) -> None:
             existing = None
         if isinstance(existing, dict):
             data = existing
-    data["commandcode"] = {"type": "api_key", "key": PI_API_KEY_REFERENCE}
+    data["commandcode"] = {"type": "api_key", "key": "$" + variable}
     write_private_json(path, data)
 
 
@@ -403,6 +406,41 @@ def _pi_model_entry(model_id: str, name: str, context_window: int, max_tokens: i
     return entry
 
 
+def provision_broker(config_dir: Path, broker, *, project_id=None) -> dict:
+    """Verify model metadata using the saved key through the broker only."""
+    import httpx
+    from .broker_client import BrokerUnavailable
+    context = broker.context(project_id, "commandcode-main")
+    if "model/commandcode" not in context["routes"]:
+        raise ValueError("Save CMD_API_KEY in Environment before provisioning CommandCode")
+    try:
+        with httpx.Client(timeout=30, trust_env=False, follow_redirects=False) as client:
+            response = client.get(broker.url + "/model/commandcode/v1/models",
+                                  headers={"Authorization": "Bearer " + context["token"]})
+        if not response.is_success:
+            raise BrokerUnavailable()
+        payload = response.json()
+        models = [_catalogue_entry(m) for m in payload.get("data", []) if isinstance(m, dict) and m.get("id")]
+    except (httpx.HTTPError, ValueError, AttributeError, TypeError):
+        raise BrokerUnavailable() from None
+    if DEFAULT_MODEL not in {m["id"] for m in models}:
+        raise ValueError("CommandCode catalogue does not contain the configured default model")
+    from .auth import AuthRegistry
+    registry = AuthRegistry(config_dir, broker=broker)
+    data = registry._read()
+    stamp = datetime.now(timezone.utc).isoformat()
+    for tool in ("pi", "hermes"):
+        data.setdefault("contexts", {}).setdefault(tool, {})["commandcode-main"] = {
+            "provider": "commandcode", "kind": "api-key", "secret_ref": "commandcode-main",
+            "base_url": BASE_URL, "model": DEFAULT_MODEL,
+            "models": [model["id"] for model in models], "model_catalogue": models,
+            "enabled": True, "verified": True, "catalogue_verified_at": stamp,
+        }
+        data["defaults"][tool] = "commandcode-main"
+    registry._write(data)
+    return {"model": DEFAULT_MODEL, "catalogue_models": len(models), "credential_storage": "broker"}
+
+
 def provision(config_dir: Path, key: str) -> dict:
     # The availability gate runs before creating a registry or touching credentials.
     models = catalogue(key)
@@ -441,9 +479,22 @@ def provision(config_dir: Path, key: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Provision Pi/Hermes from a CommandCode key on stdin; never logs its value")
     parser.add_argument("--config-dir", type=Path, default=Path.home() / ".config/agent-console")
+    parser.add_argument("--broker", action="store_true", help="Use CMD_API_KEY already saved through Environment; never read stdin or credential files")
+    parser.add_argument("--project-id", help="Project containing the protected CommandCode key (with --broker)")
     args = parser.parse_args()
     try:
-        result = provision(args.config_dir, sys.stdin.read().strip())
+        from .broker_client import BrokerClient
+        broker = BrokerClient.configured()
+        if args.broker:
+            if broker is None:
+                raise ValueError("Configure the credential broker before provisioning")
+            result = provision_broker(args.config_dir, broker, project_id=args.project_id)
+        elif broker is not None:
+            raise ValueError("Broker mode is enabled; save the key in Environment and use --broker")
+        else:
+            if args.project_id:
+                raise ValueError("--project-id requires --broker")
+            result = provision(args.config_dir, sys.stdin.read().strip())
     except (ValueError, RuntimeError) as exc:
         raise SystemExit(str(exc)) from None
     print(json.dumps(result))
