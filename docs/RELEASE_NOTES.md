@@ -1,3 +1,11 @@
+## 0.30.1 — unreleased, 2026-10-10 (#191)
+
+- Impact: fix false low-memory launch blocks when CT115 holds reclaimable inactive file cache. Each finite parent/namespace memory limit is evaluated against its own usage and cache counters; the tightest adjusted headroom wins. Anonymous, active-file and kernel memory stay charged.
+- Safety: retain raw usage, limit, inactive-file cache, raw margin and container full PSI in the snapshot. Container full PSI avg10 above 5 forces headroom to zero. Missing, malformed or inconsistent readings also publish zero headroom immediately. The existing host pressure, disk, freshness and maintenance checks remain in force.
+- Configuration/migration: none. Preserve `ct115_memory_headroom_bytes` for the currently installed consumer. The host sampler can be updated independently; no application/session restart, cache flush, budget change or database migration is required.
+- Verification: six small filesystem-fixture tests cover cache versus noncache usage, nested finite limits, pressure vetoes and missing/negative/oversized/malformed readings. Version consistency and whitespace checks pass. Tests run without host probes, provider launches or full suites; deployment verification is separate.
+- Rollback: restore the retained `/usr/local/sbin/n100-resource-sampler` backup on n100. The next scheduled sample returns to raw cache-inclusive headroom; keep snapshots root-owned. No state rollback is required.
+
 ## 0.30.0 — local integration candidate, 2026-10-10 (#181)
 
 - Impact: add durable compute jobs and attempt receipts, atomic physical-host reservations, conservative capacity admission and a bounded resource-report adapter. Authenticated `/compute` status/API and guarded local owner CLI expose blocked/offline/unknown work without launching laptop jobs or changing existing sessions.
