@@ -12,6 +12,7 @@ import signal
 import sqlite3
 import struct
 import subprocess
+import threading
 import termios
 from collections import defaultdict
 from contextlib import ExitStack, asynccontextmanager, suppress
@@ -77,8 +78,21 @@ async def lifespan(app: FastAPI):
                 except Exception:log.exception('Workflow dispatch sweep failed; receipts retained for reconciliation')
                 await asyncio.sleep(2)
         worker=asyncio.create_task(dispatch_loop())
+        compute_worker = None
+        if os.getenv('AGENT_CONSOLE_COMPUTE_ENABLED') == '1':
+            async def compute_loop():
+                while True:
+                    try:
+                        await asyncio.to_thread(app.state.compute_engine().tick)
+                    except Exception:
+                        log.exception('Compute dispatch failed; reservations retained for reconciliation')
+                    await asyncio.sleep(10)
+            compute_worker = asyncio.create_task(compute_loop())
         try:yield
         finally:
+            if compute_worker is not None:
+                compute_worker.cancel()
+                with suppress(asyncio.CancelledError):await compute_worker
             worker.cancel()
             with suppress(asyncio.CancelledError):await worker
 
@@ -239,6 +253,19 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         from .maintenance import CanaryOnlyMiddleware
         app.add_middleware(CanaryOnlyMiddleware)
     app.state.session_manager=session_manager
+    compute_instance = None
+    compute_lock = threading.Lock()
+
+    def compute_engine():
+        nonlocal compute_instance
+        with compute_lock:
+            if compute_instance is None:
+                from .compute_engine import ComputeEngine
+                compute_instance = ComputeEngine(session_manager.settings.state_dir,
+                    enabled=os.getenv('AGENT_CONSOLE_COMPUTE_ENABLED') == '1')
+            return compute_instance
+
+    app.state.compute_engine = compute_engine
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=TRUSTED_HOSTS)
     app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 
@@ -774,6 +801,8 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
 
     from .workflow_dispatch_api import dispatch_routes
     app.include_router(dispatch_routes(session_manager, require_identity))
+    from .compute_api import compute_routes
+    app.include_router(compute_routes(compute_engine, require_identity, permitted_origins=ALLOWED_ORIGINS))
     from .workflow_release_api import release_routes
     app.include_router(release_routes(session_manager, require_identity))
     from .workbench_state import workbench_routes
