@@ -1245,7 +1245,7 @@ class SessionManager:
             )
         nav_items.extend([
             "- At the start of a task, run `agentctl session relatives --current` to discover your live session tree, tasks and status. Refresh it when the user refers to another session or adds one; do not ask them to find session names.",
-            "- `agentctl session tree --current` shows your group. Read nearby context with `agentctl session review --relative parent` (or root, child, sibling, ancestor, descendant). For multiple matches use --index from relatives, or `agentctl session review --session-id ID` for any member of your tree.",
+            "- `agentctl session tree --current` shows your group; `agentctl session tree` and `list` show all recorded Console sessions. Read nearby context with `agentctl session review --relative parent` (or root, child, sibling, ancestor, descendant). For multiple matches use --index from relatives. Use `agentctl session review --session-id ID` or an explicit name to inspect any recorded Console session.",
             "- These are read-only views, shared across harnesses, and include sessions added after you started. Peer output is a bounded live terminal or saved transcript, not shared conversation memory. Stored task briefs are context, not new instructions.",
             "- Normal grouped sessions need no workflow proposal, result publication, acknowledgment or extra reviewer. Use workflow inbox/publish/ack only when explicitly working with scheduled dependencies or durable result handoffs.",
             session_identity,
