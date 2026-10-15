@@ -1,3 +1,22 @@
+## 0.30.2 — unreleased, 2026-10-15 (#196)
+
+- Impact: extend the pinned xterm resize guard to allocate missing visible rows in initialized buffers before redraw. This prevents the missing-row parser failure associated with a stranded status bar and repeated output. Existing text, normal scrollback, drafts, and the terminal connection are preserved.
+- Evidence: the owner screenshot shows first-fullscreen corruption in Brave on macOS. The recorded invalid buffer state from upstream xterm #6063 fails deterministically before this repair. The natural Mac trigger has not been reproduced locally; this is a bounded repair of the matching buffer failure, not physical-device certification.
+- Configuration/migration: none. Reload the Console page after rollout; both terminal module URLs change to avoid stale caches. Running agents stay in tmux.
+- Verification: the final resize/invariant suite passed 17 cases with four desktop-only skips on mobile. Coverage includes subsequent ANSI erase/write, active and inactive buffers, retained history, and the first Workbench expansion at device scale 2 with the Input drawer open. Adjacent layout/input/identity checks: 126 passed; three existing manual-reconnect expectations fail against this private baseline, which already retries temporary failures automatically. The same failure was reproduced on pristine 0.30.1. All three version checks passed; independent source review found no blockers. See `TERMINAL_RESIZE_RCA.md`.
+- Rollback: select the retained 0.30.1 release through the guarded release process and reload the browser. No data migration or agent restart is needed.
+- Deployment scope: narrow hotfix on the selected private 0.30.1 release; no unrelated pending branches or runtime dependency changes.
+
+## 0.30.1 — unreleased, 2026-10-15 (#196)
+
+- Impact: maximizing a short terminal no longer brings back stale prompt rows from xterm's unused alternate-screen buffer. The compatibility guard only adjusts an empty buffer; populated output, normal scrollback, drafts, and connections are preserved.
+- Configuration/migration: none. Reload the Console page once after rollout to replace any already-corrupted browser terminal; agents keep running in tmux. Terminal asset URL updated to avoid a stale cached module.
+- Verification: a browser regression reproduced one visible prompt becoming two before the fix, with no outgoing input. Run `npx playwright test tests/ui/terminal-resize.spec.mjs tests/ui/terminal-layout.spec.mjs tests/ui/terminal-input.spec.mjs tests/ui/terminal-identity.spec.mjs` and `python -m pytest tests/test_version.py`. Result: 133 browser cases passed, two desktop-only cases skipped on mobile, and all three version checks passed. Independent source review found no blockers. See `TERMINAL_RESIZE_RCA.md` for the dependency cause and future upgrade checks.
+- Rollback: select the retained prior release through the existing guarded release process and reload the browser. The display defect returns; no data migration or agent restart is needed.
+
+
+- Deployment scope: private hotfix on deployed `3286c4806d2e`, retaining its existing 0.30.0 features. The terminal code matches PR #197; pending broker, controls, and sampler source branches are not part of this release.
+
 ## 0.30.0 — local integration candidate, 2026-10-10 (#181)
 
 - Impact: add durable compute jobs and attempt receipts, atomic physical-host reservations, conservative capacity admission and a bounded resource-report adapter. Authenticated `/compute` status/API and guarded local owner CLI expose blocked/offline/unknown work without launching laptop jobs or changing existing sessions.
