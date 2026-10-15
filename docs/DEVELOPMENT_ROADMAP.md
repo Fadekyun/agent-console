@@ -2,7 +2,9 @@
 
 - [x] Reproduce stale prompt rows after a short terminal grows; distinguish browser redraw corruption from resubmitted input.
 - [x] Guard the pinned xterm empty alternate-buffer capacity without clearing real history or replacing connections.
-- [x] Add browser regressions for repeated maximize/restore, alternate-screen reentry, normal history, drafts, and exact typing. Record the cause in `TERMINAL_RESIZE_RCA.md`.
+- [x] Reproduce upstream's missing-row fault with an explicit invalid-length fixture and backfill only missing viewport rows before renderer listeners run. Keep capacity checks bounded and existing lines intact.
+- [x] Cover first Workbench expansion with an open Input drawer at device scale 2, styled text, status-row position, retained iframe/socket, drafts, and no outgoing input. Keep the existing maximize/restore, history, and typing regressions.
+- [ ] Confirm the follow-up on the owner's Brave/macOS browser. The natural first-expansion trigger has not been reproduced locally; `TERMINAL_RESIZE_RCA.md` records this evidence limit.
 
 ## Session inspection and ancestor-control corrections — 2026-10-10 (#186)
 
