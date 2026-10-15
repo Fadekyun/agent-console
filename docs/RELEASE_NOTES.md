@@ -1,3 +1,13 @@
+## 0.30.1 — unreleased, 2026-10-15 (#196)
+
+- Impact: maximizing a short terminal no longer brings back stale prompt rows from xterm's unused alternate-screen buffer. The compatibility guard only adjusts an empty buffer; populated output, normal scrollback, drafts, and connections are preserved.
+- Configuration/migration: none. Reload the Console page once after rollout to replace any already-corrupted browser terminal; agents keep running in tmux. Terminal asset URL updated to avoid a stale cached module.
+- Verification: a browser regression reproduced one visible prompt becoming two before the fix, with no outgoing input. Run `npx playwright test tests/ui/terminal-resize.spec.mjs tests/ui/terminal-layout.spec.mjs tests/ui/terminal-input.spec.mjs tests/ui/terminal-identity.spec.mjs` and `python -m pytest tests/test_version.py`. Result: 133 browser cases passed, two desktop-only cases skipped on mobile, and all three version checks passed. Independent source review found no blockers. See `TERMINAL_RESIZE_RCA.md` for the dependency cause and future upgrade checks.
+- Rollback: select the retained prior release through the existing guarded release process and reload the browser. The display defect returns; no data migration or agent restart is needed.
+
+
+- Deployment scope: private hotfix on deployed `3286c4806d2e`, retaining its existing 0.30.0 features. The terminal code matches PR #197; pending broker, controls, and sampler source branches are not part of this release.
+
 ## 0.30.0 — local integration candidate, 2026-10-10 (#181)
 
 - Impact: add durable compute jobs and attempt receipts, atomic physical-host reservations, conservative capacity admission and a bounded resource-report adapter. Authenticated `/compute` status/API and guarded local owner CLI expose blocked/offline/unknown work without launching laptop jobs or changing existing sessions.

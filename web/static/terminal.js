@@ -1,6 +1,7 @@
 import { Terminal } from '/vendor/xterm.mjs';
 import { FitAddon } from '/vendor/addon-fit.mjs';
 import { guardTerminalInput } from '/static/terminal-input.js?v=0.28.18';
+import { guardTerminalResize } from '/static/terminal-resize.js?v=0.28.28';
 import { initTheme, xtermTheme } from '/static/theme.js?v=10';
 
 // Clipboard controls keep their accessible text if icon enhancement is unavailable.
@@ -25,6 +26,7 @@ let viewVisible = !managedVisibility;
 const coarsePointer = matchMedia('(pointer: coarse)').matches;
 if (isEmbedded) document.body.classList.add('terminal-embedded');
 const terminal = new Terminal({ cursorBlink: true, scrollback: 10000, fontSize: coarsePointer ? 13 : 14, macOptionClickForcesSelection: true, theme: xtermTheme() });
+guardTerminalResize(terminal);
 const fit = new FitAddon();
 terminal.loadAddon(fit); terminal.open($('#terminal'));
 guardTerminalInput(terminal);

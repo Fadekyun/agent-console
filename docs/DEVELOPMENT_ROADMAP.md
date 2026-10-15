@@ -1,3 +1,10 @@
+## Terminal maximize redraw correction — 2026-10-15 (#196)
+
+- [x] Reproduce stale prompt rows after a short terminal grows; distinguish browser redraw corruption from resubmitted input.
+- [x] Guard the pinned xterm empty alternate-buffer capacity without clearing real history or replacing connections.
+- [x] Add browser regressions for repeated maximize/restore, alternate-screen reentry, normal history, drafts, and exact typing. Record the cause in `TERMINAL_RESIZE_RCA.md`.
+
+
 ## Durable compute queue and physical-host admission — 2026-10-10 (#181)
 
 - Implement the first source slice: companion-store compute receipts, immutable job keys, atomic physical-host reservations, lease/generation fencing, conservative n100/CT115 telemetry admission, and a bounded in-process report adapter.
