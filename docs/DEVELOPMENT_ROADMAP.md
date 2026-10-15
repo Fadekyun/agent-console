@@ -1,3 +1,9 @@
+## Terminal maximize redraw correction — 2026-10-15 (#196)
+
+- [x] Reproduce stale prompt rows after a short terminal grows; distinguish browser redraw corruption from resubmitted input.
+- [x] Guard the pinned xterm empty alternate-buffer capacity without clearing real history or replacing connections.
+- [x] Add browser regressions for repeated maximize/restore, alternate-screen reentry, normal history, drafts, and exact typing. Record the cause in `TERMINAL_RESIZE_RCA.md`.
+
 ## Session inspection and ancestor-control corrections — 2026-10-10 (#186)
 
 - [x] Allow bounded inspection of all recorded Console sessions, including cross-project peers by name or durable ID; keep relative selectors tree-scoped and private integration content redacted.

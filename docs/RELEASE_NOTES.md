@@ -1,3 +1,10 @@
+## 0.28.28 — unreleased, 2026-10-15 (#196)
+
+- Impact: maximizing a short terminal no longer brings back stale prompt rows from xterm's unused alternate-screen buffer. The compatibility guard only adjusts an empty buffer; populated output, normal scrollback, drafts, and connections are preserved.
+- Configuration/migration: none. Reload the Console page once after rollout to replace any already-corrupted browser terminal; agents keep running in tmux. Terminal asset URL updated to avoid a stale cached module.
+- Verification: a browser regression reproduced one visible prompt becoming two before the fix, with no outgoing input. Run `npx playwright test tests/ui/terminal-resize.spec.mjs tests/ui/terminal-layout.spec.mjs tests/ui/terminal-input.spec.mjs tests/ui/terminal-identity.spec.mjs` and `python -m pytest tests/test_version.py`. Result: 133 browser cases passed, two desktop-only cases skipped on mobile, and all three version checks passed. Independent source review found no blockers. See `TERMINAL_RESIZE_RCA.md` for the dependency cause and future upgrade checks.
+- Rollback: select the retained prior release through the existing guarded release process and reload the browser. The display defect returns; no data migration or agent restart is needed.
+
 ## 0.28.27 — unreleased, 2026-10-10 (#186)
 
 - Impact: managed agents can inspect all recorded Console sessions by name or durable ID across projects and trees. Writable non-Plan children can update attention, interrupt, restart, and stop ancestors as well as descendants within the authorized task. Sibling/unrelated mutations, read-only/Plan mutations of others, private integration content, and delegation inheritance remain restricted.
