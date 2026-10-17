@@ -610,6 +610,9 @@ test('collapsible branches and full-screen tree navigate every layer without los
   sessions.push({...sessions[0],id:'child',tmux_name:'session-child',parent_session_id:'root'});
   sessions.push({...sessions[0],id:'leaf',tmux_name:'session-leaf',parent_session_id:'child'});
   await page.goto('/work#session/session-one');
+  // Desktop opens the terminal automatically; let its initial iframe focus settle
+  // before checking that the branch toggle retains the user's later focus.
+  if(info.project.name==='desktop')await expect(page.frameLocator('iframe:not([hidden])').locator('.xterm-helper-textarea')).toBeFocused();
   const branch=page.getByRole('button',{name:'Toggle children of session-one',exact:true});
   await branch.click();await expect(page.locator('#session-tree')).not.toContainText('session-child');
   await expect(branch).toBeFocused();
