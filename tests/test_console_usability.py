@@ -53,7 +53,7 @@ class OverviewTests(unittest.TestCase):
                     'waiting': False, 'needs_attention': index in (0, 80), 'attempts': [],
                     'profile': 'general', 'tool': 'codex', 'project_id': None, 'project_name': None}
             nodes.append(node)
-            sessions.append({'id': identity, 'tmux_name': identity})
+            sessions.append({'id': identity, 'tmux_name': identity, 'running': index == 0})
             groups.append({'root_id': identity})
         return {'nodes': nodes, 'sessions': sessions, 'groups': groups, 'aliases': {}, 'readiness': {}}
 
@@ -79,4 +79,5 @@ class OverviewTests(unittest.TestCase):
         view = overview(self.snapshot(), query='needle', history_limit=20)
         self.assertEqual([n['id'] for n in view['nodes']], ['session-80'])
         self.assertIn('session-80', view['page']['matched_ids'])
+        self.assertEqual(view['page']['running_session_ids'], ['session-0'])
         self.assertEqual(overview(self.snapshot(), include_hidden=True)['page']['history_total'], 80)
