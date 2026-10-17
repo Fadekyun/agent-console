@@ -268,6 +268,10 @@ Match User agc-worker
     $sourceHashes = @{}
     Get-ChildItem -LiteralPath $Code -File | ForEach-Object {$sourceHashes[$_.Name]=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
     Save-Json (Join-Path $Control 'account-ready.json') @{sid=$WorkerSid.Value;profile=$profile;ram_bytes=$ram;logical_processors=$logical;disk_quota=300000000000;state='held';wsl_limits='14305 MiB, 12 CPUs, zero swap';source_sha256=$sourceHashes;sshd_before_sha256=(Get-FileHash (Join-Path $Control 'sshd_config.before') -Algorithm SHA256).Hash.ToLowerInvariant()}
+    # A previous shutdown receipt ceases to prove current state once the
+    # enrolled identity is deliberately enabled for another runtime cycle.
+    $disabledReceipt = Join-Path $Control 'disabled.json'
+    if (Test-Path $disabledReceipt) { Remove-Item -LiteralPath $disabledReceipt }
     Enable-LocalUser -Name $WorkerName
     if ($updated -ne $original) { Restart-Service sshd }
     [pscustomobject]@{phase=$Phase;state='held';sid=$WorkerSid.Value;profile=$profile;quota_bytes=300000000000} | ConvertTo-Json -Compress
