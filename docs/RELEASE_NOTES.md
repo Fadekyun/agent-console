@@ -1,3 +1,10 @@
+## 0.32.2 — unreleased, 2026-10-17 (#203)
+
+- Impact: an authenticated owner can move an urgent paid Bushi job from the laptop queue to the bounded N100 runner only before any attempt exists. The same job, producer request, source, input and business claim survive the atomic transition; a durable receipt lets the producer validate the effective binding and retry lost acknowledgements. Running/unknown work cannot transfer. The fixed emergency SSH destination is verified CT102 `192.168.1.67`, separate from the source database.
+- Configuration/migration: additive compute schema5 adds immutable transfer receipts. Producer consumers must validate these receipts before enabling transfers; emergency execution still requires its existing fixed source qualification, worker enrollment, deadline and headroom gates. Tuesday routine browser work stays queued for the laptop. No new producer authority or automatic fallback.
+- Verification: bounded queue/API tests cover transfer/admission races, exact original request retries, crash rollback, deadline bounds, retained organizer locks after uncertain writes, strict owner-only payloads and managed-session denial. The owner page test now permits only its existing same-origin hold control.
+- Rollback: hold dispatch and retain schema5-compatible queue modules and producer receipt validation. Never restore an older database over a transfer, attempt or business claim. Reconcile active/unknown work before disabling the emergency worker; restoring the previous route or creating a replacement key is not an automatic rollback.
+
 ## 0.32.1 — unreleased, 2026-10-17 (#203 / #204)
 
 - Impact: temporarily full central artifact storage now defers transfers without abandoning the job or its reservation. Authenticated owners can pause/resume dispatch from the compute page. Managed sessions and producers retain no owner-control authority.

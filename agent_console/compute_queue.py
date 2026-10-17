@@ -27,7 +27,7 @@ class ComputeQueue:
         with self.store.connect(write=True) as db:
             db.execute('CREATE TABLE IF NOT EXISTS compute_schema(version INTEGER NOT NULL)')
             row = db.execute('SELECT version FROM compute_schema').fetchone()
-            if row and row[0] not in (1, 2, 3, 4):
+            if row and row[0] not in (1, 2, 3, 4, 5):
                 raise ValueError('unsupported compute schema; preserve state')
             if not row:
                 db.execute('INSERT INTO compute_schema VALUES(1)')
@@ -75,6 +75,11 @@ class ComputeQueue:
             db.execute('CREATE TABLE IF NOT EXISTS compute_resource_reservations(resource TEXT PRIMARY KEY, attempt_id TEXT NOT NULL REFERENCES compute_attempts(id))')
             db.execute('CREATE TABLE IF NOT EXISTS compute_remote_acks(attempt_id TEXT PRIMARY KEY REFERENCES compute_attempts(id), inventory_digest TEXT NOT NULL, acknowledged_at REAL)')
             db.execute('CREATE TABLE IF NOT EXISTS compute_business_claims(business_key TEXT PRIMARY KEY, job_id TEXT UNIQUE NOT NULL REFERENCES compute_jobs(id))')
+            db.execute('''CREATE TABLE IF NOT EXISTS compute_transfers(
+                id TEXT PRIMARY KEY, job_id TEXT UNIQUE NOT NULL REFERENCES compute_jobs(id),
+                request_key TEXT UNIQUE NOT NULL, request_hash TEXT NOT NULL,
+                original_spec_json TEXT NOT NULL, effective_spec_json TEXT NOT NULL,
+                original_manifest_json TEXT NOT NULL, receipt_json TEXT NOT NULL)''')
             if not row or row[0] < 4:
                 # Claims survive completion/cancellation and migration. Never let
                 # an older laptop request acquire a second business identity on N100.
@@ -85,7 +90,7 @@ class ComputeQueue:
                         if previous and previous['job_id'] != job['id']:
                             raise ValueError('historical paid business claims conflict; owner reconciliation required')
                         db.execute('INSERT OR IGNORE INTO compute_business_claims VALUES(?,?)', (claim, job['id']))
-            db.execute('UPDATE compute_schema SET version=4')
+            db.execute('UPDATE compute_schema SET version=5')
             db.execute('INSERT OR IGNORE INTO compute_control VALUES(1,1)')
 
     def held(self):
@@ -155,7 +160,7 @@ class ComputeQueue:
                     raise PermissionError('request key belongs to a different actor')
                 if prior['spec_hash'] != spec_hash:
                     raise ValueError('request key already identifies a different immutable job')
-                return dict(prior)
+                return {**dict(prior), 'transfers': self._transfers(db, prior['id'])}
             from .compute_bushi_series import action as series_action, accepted_claim
             if manifest is not None and series_action(manifest):
                 from .compute_artifacts import ComputeArtifacts
@@ -187,9 +192,19 @@ class ComputeQueue:
             if row is None:
                 raise ValueError('unknown compute job')
             result = dict(row)
+            result['transfers'] = self._transfers(db, job_id)
             result['attempts'] = [dict(a) for a in db.execute(
                 'SELECT * FROM compute_attempts WHERE job_id=? ORDER BY generation', (job_id,))]
             return result
+
+    @staticmethod
+    def _transfers(db, job_id):
+        return [json.loads(row['receipt_json']) for row in db.execute(
+            'SELECT receipt_json FROM compute_transfers WHERE job_id=?', (job_id,))]
+
+    def transfer_emergency(self, job_id, **request):
+        from .compute_transfer import transfer_emergency
+        return transfer_emergency(self, job_id, **request)
 
     def status(self):
         with self.store.connect() as db:

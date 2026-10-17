@@ -32,6 +32,13 @@ class HoldRequest(ComputeRequest):
     held: bool
 
 
+class EmergencyTransferRequest(ComputeRequest):
+    request_key: str = Field(min_length=1, max_length=100)
+    expected_manifest_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    deadline: int = Field(gt=0)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class ReconcileRequest(ComputeRequest):
     evidence: str = Field(min_length=1, max_length=4000)
 
@@ -120,6 +127,10 @@ def compute_routes(engine_callable, require_identity, *, permitted_origins=froze
     @router.post('/api/compute/jobs/{job_id}/cancel')
     def cancel(job_id: str, payload: ComputeRequest, auth=Depends(operator)):
         return engine_callable().queue.cancel(job_id, actor=auth.actor)
+
+    @router.post('/api/compute/jobs/{job_id}/transfer-emergency')
+    def transfer_emergency(job_id: str, payload: EmergencyTransferRequest, auth=Depends(operator)):
+        return engine_callable().queue.transfer_emergency(job_id, **payload.model_dump(), actor=auth.actor)
 
     @router.post('/api/compute/attempts/{attempt_id}/reconcile')
     def reconcile(attempt_id: str, payload: ReconcileRequest, auth=Depends(operator)):

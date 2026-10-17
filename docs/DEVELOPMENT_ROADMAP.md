@@ -7,6 +7,7 @@ Provisioning now includes fixed per-workload SSH identities, independently check
 - [x] Add scoped producers, immutable transfers, dependencies/deadlines and central publication fencing to the existing durable queue.
 - [x] Implement independent Windows account/WSL provisioning, constrained headless runtime, staff-priority admission/throttling and durable lease receipts.
 - [x] Reserve the Bushi organizer account across physical hosts; leave emergency execution disabled pending qualification.
+- [x] Add owner-only atomic emergency transfer for zero-attempt paid laptop jobs, preserving the job/request/business identity and durable producer-verifiable routing receipt. Keep Tuesday routine work durable without inventing emergency deadlines.
 - [ ] Qualify the installed worker, pinned toolchains, interruption/resource behavior and all five workload adapters.
 - [ ] Cut over each old heavy timer after accepted artifacts and publisher rollback; preserve central databases, payment APIs and serving processes.
 

@@ -158,7 +158,7 @@ transaction/idempotency contract and does not make a multi-system write atomic.
 
 Set the durable owner hold first. Existing remote work is stopped/inspected; no
 new job starts. Disable the worker configuration only after termination receipts
-are confirmed. Preserve unknown reservations and the database. Schema version 4
+are confirmed. Preserve unknown reservations and the database. Schema version 5
 is additive but older queue code rejects it intentionally, so a code rollback
 must keep the compatible queue modules or restore a pre-migration database only
 when no post-migration receipts would be lost. Never blindly replay old timers.
@@ -318,7 +318,7 @@ Root must independently qualify CT102 before setting
 ```json
 {
   "enabled": true,
-  "host": "192.168.1.69",
+  "host": "192.168.1.67",
   "user": "bushi-compute",
   "identity_file": "/etc/agent-console-compute/emergency_ed25519",
   "known_hosts_file": "/etc/agent-console-compute/emergency_known_hosts"
@@ -389,17 +389,54 @@ external-write-unknown receipt that retains `bushi-organizer` across both hosts.
 Use a non-writing harness for lifecycle faults; do not synthesize a paid action
 against production. Pure compute regressions are in `test_compute_emergency.py`.
 
-Remaining case: a laptop job already queued with zero attempts cannot be moved
-by this version. For example, an urgent paid order may be waiting behind a build
-when Sunday draining begins. Preserve its job/key and surface the deadline for
-owner review. A later explicit atomic transfer must preserve the business claim
-and append an audit receipt; changing the manifest or enqueueing a new key is
-forbidden. There is no automatic emergency routing and no emergency support for
-series application or other browser families in this initial qualification.
+An authenticated owner may transfer a queued or blocked paid laptop job using
+`POST /api/compute/jobs/<id>/transfer-emergency` or local human-owner
+`agentctl compute transfer-emergency <id> --json-file <request.json>`. The body is:
+
+```json
+{
+  "request_key": "owner:urgent-order-transfer-1",
+  "expected_manifest_sha256": "<exact original 64-character SHA-256>",
+  "deadline": 1792462500,
+  "reason": "Laptop unavailable before this paid action cutoff"
+}
+```
+
+The deadline must be an integer within the next twenty minutes, no later than
+the original deadline, and after the original not-before time. No attempt may
+ever have existed, including an expired reservation or a failed/cancelled
+attempt. Completed, cancelled, running, unknown and noneligible jobs refuse the
+operation. Any publication evidence also prevents transfer. This uses the same
+SQLite write lock as admission, so a competing laptop reservation either wins
+first (transfer refuses) or observes the job only on N100.
+
+Schema 5 adds an append-only `compute_transfers` receipt containing both specs,
+the original manifest and the owner request hash. Job ID, producer request key,
+original `spec_hash`, owner, source, inputs, not-before time, dependencies and
+business claim remain unchanged. The effective kind/target become
+`bushi.emergency`/`n100`, priority is at least 90, and only `kind` and the explicit
+`emergency` envelope change in the manifest. N100 still requires the exact
+qualified source artifact and normal headroom gates; routing does not assert
+capacity or waive an organizer reservation held by any other job.
+
+GET job and exact original producer enqueue retries expose `transfers:[receipt]`.
+The receipt has `version,id,request_key,job_id,original_kind,effective_kind,
+from_execution_target,to_execution_target,from_manifest_sha256,to_manifest_sha256,
+original_deadline,deadline,reason,at,operator`. Here `request_key` is the owner's
+transfer key. Producers must derive the effective manifest from their original
+envelope plus the recorded deadline and verify all unchanged fields and the
+result binding. A producer without that support must remain held. Repeating the
+same owner transfer request returns the same receipt even after execution; a
+changed key/body cannot repeat or reverse the transfer. Producers cannot invoke
+the owner route or use the managed-agent CLI to bypass it.
+
+There is no automatic emergency routing or series/application write expansion.
+Tuesday scheduling alone does not authorize a paid or browser action. Retain
+normal durable laptop queues and deadline warnings for unsupported families.
 
 Rollback: hold new admission, stop/reconcile the exact active attempt using its
 fixed worker binding, then revoke the emergency key/config. Retain receipts,
-artifacts, business claims and uncertain organizer reservations. Keep a schema-4
+artifacts, business claims and uncertain organizer reservations. Keep a schema-5
 capable Console binary; never roll back to a state snapshot that loses a new
 claim or unknown external action. Existing laptop/DB services stay in place.
 

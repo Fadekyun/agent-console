@@ -1,5 +1,6 @@
 """Small isolated API tests: no server singleton, subprocesses or live queue."""
 import ipaddress
+import re
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -25,7 +26,7 @@ JOB = {
 class ComputeApiTests(unittest.TestCase):
     def setUp(self):
         self.queue = Mock()
-        for name in ('enqueue', 'inspect', 'retry', 'cancel', 'reconcile_terminated', 'reconcile_external'):
+        for name in ('enqueue', 'inspect', 'retry', 'cancel', 'reconcile_terminated', 'reconcile_external', 'transfer_emergency'):
             getattr(self.queue, name).return_value = {'id': 'job-one', 'state': 'queued'}
         self.queue.set_hold.return_value = {'held': True}
         self.engine = SimpleNamespace(queue=self.queue, status=Mock(return_value={
@@ -54,6 +55,9 @@ class ComputeApiTests(unittest.TestCase):
             ('POST', '/api/compute/hold', {'held': True}),
             ('POST', '/api/compute/jobs/job-one/retry', {}),
             ('POST', '/api/compute/jobs/job-one/cancel', {}),
+            ('POST', '/api/compute/jobs/job-one/transfer-emergency',
+             {'request_key':'owner:one','expected_manifest_sha256':'a'*64,
+              'deadline':1792462500,'reason':'Explicit urgent job'}),
             ('POST', '/api/compute/attempts/attempt-one/reconcile', {'evidence': 'Verified process exit'}),
             ('POST', '/api/compute/attempts/attempt-one/reconcile-external',
              {'generation': 1, 'outcome': 'applied', 'evidence': 'Exact external event/player readback'}),
@@ -231,7 +235,7 @@ class ComputeApiTests(unittest.TestCase):
             self.assertEqual(self.client.post(path, json={}, headers=self.auth).status_code, 404)
         self.engine_factory.assert_not_called()
 
-    def test_status_page_is_protected_read_only_and_uses_text_nodes(self):
+    def test_status_page_has_only_protected_hold_control_and_uses_text_nodes(self):
         response = self.client.get('/compute', headers=self.auth)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers['x-content-type-options'], 'nosniff')
@@ -242,10 +246,23 @@ class ComputeApiTests(unittest.TestCase):
         for unsafe_sink in ('innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write'):
             self.assertNotIn(unsafe_sink, html)
         self.assertNotIn('<form', html)
-        self.assertNotIn("method: 'POST'", html)
+        self.assertEqual(html.count("method: 'POST'"), 1)
+        self.assertEqual(re.findall(r"fetch\('([^']+)'", html), ['/api/compute', '/api/compute/hold'])
+        self.assertEqual(html.count("credentials: 'same-origin'"), 2)
         self.assertIn('stale', html)
         self.assertIn('Unknown attempts retain their reservation', html)
         self.engine_factory.assert_not_called()
+
+    def test_transfer_schema_is_strict_and_passes_only_owner_intent(self):
+        body={'request_key':'owner:one','expected_manifest_sha256':'a'*64,
+              'deadline':1792462500,'reason':'Explicit urgent job'}
+        endpoint='/api/compute/jobs/job-one/transfer-emergency'
+        for change in ({'deadline':True}, {'deadline':1792462500.5}, {'reason':''},
+                       {'manifest':{}}, {'expected_manifest_sha256':'invalid'}):
+            self.assertEqual(self.client.post(endpoint,json={**body,**change},headers=self.auth).status_code,400)
+        self.engine_factory.assert_not_called()
+        self.assertEqual(self.client.post(endpoint,json=body,headers=self.auth).status_code,200)
+        self.queue.transfer_emergency.assert_called_once_with('job-one',**body,actor='owner@example.test')
 
 
 if __name__ == '__main__':
