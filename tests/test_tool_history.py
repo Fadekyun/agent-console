@@ -109,3 +109,14 @@ class ToolHistoryTests(unittest.TestCase):
         self.assertEqual(len(output['text']), 256 * 1024)
         self.assertTrue(output['truncated'])
         self.assertEqual(self.rollout.stat().st_size, size)
+
+    def test_unicode_output_obeys_the_byte_limit_without_broken_characters(self):
+        self.record('function_call', name='exec')
+        self.record('function_call_output', output='界' * 100000)
+        self.save()
+        page = tool_calls(self.settings, self.session)
+        call = page['calls'][0]
+        output = tool_output(self.settings, self.session, offset=call['output_offset'], call_id=call['id'], thread=page['thread'])
+        self.assertLessEqual(len(output['text'].encode('utf-8')), 256 * 1024)
+        self.assertTrue(output['truncated'])
+        self.assertNotIn('\ufffd', output['text'])

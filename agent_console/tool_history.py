@@ -190,4 +190,5 @@ def tool_output(settings, session, *, offset, call_id, thread):
     if not isinstance(payload, dict) or payload.get('type') not in {'function_call_output', 'custom_tool_call_output'} or payload.get('call_id') != call_id:
         raise ValueError('Native output identity does not match')
     text = redact_secrets(_text(payload.get('output', '')))
-    return {'text': text[:MAX_OUTPUT], 'truncated': len(text) > MAX_OUTPUT}
+    encoded = text.encode('utf-8')
+    return {'text': encoded[:MAX_OUTPUT].decode('utf-8', errors='ignore'), 'truncated': len(encoded) > MAX_OUTPUT}
