@@ -266,7 +266,8 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
                     else:
                         self.assertIn('--approve-for-me',argv)
                         self.assertNotIn('--ask-for-approval',argv)
-                        self.assertEqual(argv[argv.index('--sandbox')+1],'workspace-write')
+                        from agent_console.native_permissions import native_permission_mode
+                        self.assertEqual(native_permission_mode(argv),'workspace-write')
 
     def test_read_action_uses_read_only_sandbox_even_for_general_role(self):
         step=self.propose(action='read');self.accept(step);done=self.finish(step['id'])
@@ -275,6 +276,30 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
         self.assertEqual(argv[argv.index('--sandbox')+1],'read-only')
         self.assertIn('The supervising runner owns result publication',' '.join(argv))
         self.assertNotIn('To signal completion:',' '.join(argv))
+
+    def test_pro_automatic_review_without_sandbox_records_effective_permissions(self):
+        from agent_console.providers import CodexProAdapter
+        self.fake.write_text(self.fake.read_text().replace(
+            "print('--output-schema --output-last-message --sandbox')",
+            "print('--output-schema --output-last-message --sandbox --approve-for-me')"))
+        (self.manager.auth.codex_home('default', tool='codex-pro') / 'auth.json').write_text('{}')
+        original = CodexProAdapter.workflow_argv
+
+        def automatic_argv(adapter, *args, **kwargs):
+            argv = original(adapter, *args, **kwargs)
+            if '--approve-for-me' in argv and '--sandbox' in argv:
+                position = argv.index('--sandbox')
+                del argv[position:position + 2]
+            return argv
+
+        with patch.dict(TOOL_BINARIES, {'codex-pro': self.fake}), \
+                patch.object(CodexProAdapter, 'workflow_argv', automatic_argv):
+            step = self.propose(key='pro-no-sandbox', tool='codex-pro', action='write')
+            self.accept(step)
+            done = self.finish(step['id'])
+        self.assertEqual(done['attempts'][0]['state'], 'completed', done)
+        session = self.manager.inspect(done['attempts'][0]['name'])
+        self.assertEqual(session['permission_mode'], 'workspace-write')
 
     def test_lost_prepared_terminal_cannot_silently_retry(self):
         step=self.propose();self.accept(step);prepare=self.engine._prepare

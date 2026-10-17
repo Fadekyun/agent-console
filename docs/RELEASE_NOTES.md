@@ -1,3 +1,8 @@
+# 0.28.28 — 2026-10-17 (#193)
+
+- Fix writable native automatic-review workflow launches when the prepared command omits `--sandbox`; record effective workspace-write permissions without changing launch arguments.
+- Configuration/migration: none. Verification: native permission unit tests and isolated writable/read-only workflow regressions. Rollback: select the previous immutable release; no schema change.
+
 ## 0.28.27 — unreleased, 2026-10-10 (#186)
 
 - Impact: managed agents can inspect all recorded Console sessions by name or durable ID across projects and trees. Writable non-Plan children can update attention, interrupt, restart, and stop ancestors as well as descendants within the authorized task. Sibling/unrelated mutations, read-only/Plan mutations of others, private integration content, and delegation inheritance remain restricted.
