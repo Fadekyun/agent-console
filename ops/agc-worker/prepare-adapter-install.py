@@ -17,6 +17,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     for name in ('agc-repo', 'agc-sha', 'points-repo', 'points-sha', 'output'):
         p.add_argument('--' + name, required=True)
+    p.add_argument('--previous-install-receipt', help='Exact prior installed.json for a held, drained upgrade')
     a = p.parse_args()
     if any(not re.fullmatch('[a-f0-9]{40}', sha) for sha in (a.agc_sha, a.points_sha)):
         p.error('exact reviewed commits required')
@@ -24,8 +25,10 @@ def main():
     agc_names = [
         'scripts/compute/adapter.py', 'scripts/compute/yuyutei-collect.cjs',
         'scripts/compute/bushi-run.cjs', 'scripts/compute/bushi-collect.cjs',
+        'scripts/compute/bushi-apply.cjs',
         'scripts/compute/package.json', 'scripts/compute/package-lock.json',
         'scripts/lib/compute_artifacts.py', 'scripts/lib/yuyutei_hocg_prices.py',
+        'scripts/lib/yuyutei_parsed.py',
         'scripts/tournaments/navi-bridge.cjs',
     ]
     agc_names += subprocess.check_output(['git', '-C', a.agc_repo, 'ls-tree', '-r', '--name-only',
@@ -50,14 +53,17 @@ def main():
         'points.weekly': adapter(['/usr/local/bin/node', root + '/points/scripts/compute-worker.cjs'], 2*1024**3, 1, 1800),
         'points.player_events': adapter(['/usr/local/bin/node', root + '/points/scripts/compute-worker.cjs'], 2*1024**3, 1, 1800),
         'bushi.run': adapter(['/usr/local/bin/node', agc + 'bushi-run.cjs'], 2*1024**3, 1, 1800,
-             ('action','eventId','gid','applicationNumber','teamId','organizerRowId','orderId','family','include_finished','local_date_from'), checkpoint=True, write=True),
+             ('action','eventId','gid','applicationNumber','teamId','organizerRowId','orderId','family','include_finished','local_date_from','seriesId','mode'), checkpoint=True, write=True),
     }
     # Credential material is separately provisioned host-locally. Missing material
     # fails closed; this installer never reads, bundles or transmits credentials.
     registry['bushi.run']['credential_ids'] = ['agc-bushi-organizer-state.json']
     receipt = dict(version=1, agc_source=a.agc_sha, points_source=a.points_sha,
                    files={name:hashlib.sha256(data).hexdigest() for name,data in files.items()})
-    payload = dict(files={name:base64.b64encode(data).decode() for name,data in files.items()}, registry=registry, receipt=receipt)
+    previous=json.loads(Path(a.previous_install_receipt).read_text()) if a.previous_install_receipt else None
+    if previous is not None and (previous.get('version') != 1 or not isinstance(previous.get('files'),dict)):
+        raise ValueError('invalid prior installed receipt')
+    payload = dict(previous=previous, files={name:base64.b64encode(data).decode() for name,data in files.items()}, registry=registry, receipt=receipt)
     encoded = base64.b64encode(json.dumps(payload, sort_keys=True).encode()).decode()
     script = '''#!/bin/bash
 set -euo pipefail
@@ -65,12 +71,31 @@ test "${WSL_DISTRO_NAME:-}" = AGC-Worker
 test "$(id -u)" = 0
 test -f /etc/agc-worker/hold
 python3 - <<'ADAPTER_INSTALL'
-import base64,hashlib,json,os,pathlib,shutil,tempfile
+import base64,hashlib,json,os,pathlib,shutil,socket,tempfile
 payload=json.loads(base64.b64decode(PAYLOAD))
 root=pathlib.Path('/usr/local/lib/agc-worker-adapters')
 registry=pathlib.Path('/etc/agc-worker/adapters.json')
-assert json.loads(registry.read_text()) == {}, 'Initial installer requires empty registry'
-assert not root.exists(), 'Prior adapter install must be reconciled explicitly'
+previous=payload['previous']
+with socket.socket(socket.AF_UNIX) as client:
+ client.settimeout(10);client.connect('/run/agc-worker/rpc.sock');client.sendall(b'{"protocol_version":1,"action":"status"}\\n')
+ with client.makefile('rb') as stream:status=json.loads(stream.readline(524288))
+ assert status.get('ok') and status.get('active') is None,'Worker must be drained'
+if previous is None:
+ assert json.loads(registry.read_text()) == {}, 'Initial installer requires empty registry'
+ assert not root.exists(), 'Prior adapter install must be reconciled explicitly'
+else:
+ assert root.is_dir() and not root.is_symlink() and json.loads((root/'installed.json').read_text())==previous,'Prior receipt changed'
+ actual={p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file() and not p.is_symlink()}
+ assert actual==set(previous['files'])|{'installed.json'},'Unexpected old adapter files'
+ for name,digest in previous['files'].items():
+  p=root/name;s=p.lstat()
+  assert not p.is_symlink() and s.st_uid==0 and not s.st_mode&0o022
+  assert hashlib.file_digest(p.open('rb'),'sha256').hexdigest()==digest,'Prior adapter changed'
+ for name,target in [('agc/scripts/compute/node_modules','/opt/agc-browser/node_modules'),('browsers','/opt/agc-browser/browsers')]:
+  assert (root/name).is_symlink() and os.readlink(root/name)==target,'Prior dependency link changed'
+ backup=root.with_name(root.name+'-rollback-'+previous['agc_source'][:12])
+ assert not backup.exists(),'Prior backup must be reconciled explicitly'
+
 for name in ('debian12','debian13'):
  p=pathlib.Path('/var/lib/agc-worker/toolchains')/name/'.agc-worker-toolchain.json'
  assert json.loads(p.read_text())['version']==1 and p.stat().st_uid==0
@@ -86,12 +111,18 @@ try:
   target.chmod(0o644)
  (stage/'agc/scripts/compute/node_modules').symlink_to('/opt/agc-browser/node_modules')
  (stage/'browsers').symlink_to('/opt/agc-browser/browsers')
- receipt=stage/'installed.json';receipt.write_text(json.dumps(payload['receipt'],sort_keys=True));receipt.chmod(0o644)
- for directory in [stage,*[x for x in stage.rglob('*') if x.is_dir() and not x.is_symlink()]]:directory.chmod(0o755)
+ receipt=stage/'installed.json'
+ with receipt.open('x') as stream:json.dump(payload['receipt'],stream,sort_keys=True);stream.flush();os.fsync(stream.fileno())
+ receipt.chmod(0o644)
+ for directory in [stage,*[x for x in stage.rglob('*') if x.is_dir() and not x.is_symlink()]]:
+  directory.chmod(0o755);fd=os.open(directory,os.O_DIRECTORY);os.fsync(fd);os.close(fd)
+ if previous is not None:os.rename(root,backup)
  os.rename(stage,root)
+ fd=os.open(root.parent,os.O_DIRECTORY);os.fsync(fd);os.close(fd)
  temporary=registry.with_suffix('.install')
  with temporary.open('x') as stream:json.dump(payload['registry'],stream,sort_keys=True);stream.flush();os.fsync(stream.fileno())
  temporary.chmod(0o600);os.replace(temporary,registry)
+ fd=os.open(registry.parent,os.O_DIRECTORY);os.fsync(fd);os.close(fd)
  print(json.dumps({'installed':True,'agc_source':payload['receipt']['agc_source'],'points_source':payload['receipt']['points_source'],'kinds':sorted(payload['registry']),'held':True}))
 finally:
  if stage.exists():shutil.rmtree(stage)

@@ -333,3 +333,7 @@ create the local hold, set enabled=false, stop `bushi-emergency-jobs.slice` and
 receipts, source and output objects until explicit outcome reconciliation; do
 not unmount/delete scratch with an active or uncertain job. No live CT102
 qualification is implied by the source tests.
+
+### Reviewed adapter upgrades
+
+`prepare-adapter-install.py --previous-install-receipt` validates the exact prior receipt, all installed file hashes and fixed dependency links before replacing a held, drained adapter tree. It retains the previous directory and fsyncs files/directories before success. The two directory renames and registry replacement are separate operations: an interrupted upgrade remains held and requires explicit reconciliation using the retained tree. Never unhold solely because setup stopped. `Verify-WorkerPolicy.ps1` records completed native failure/quota/isolation checks and preserves that hold.

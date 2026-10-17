@@ -26,7 +26,9 @@ assert platform.libc_ver()==('glibc',{'debian12':'2.36','debian13':'2.41'}[expec
 if expected=='debian12':
  assert subprocess.check_output(['pnpm','--version'],text=True).strip()=='11.16.0'
 else:
- import bs4
+ import bs4,soupsieve
+ assert bs4.BeautifulSoup('<div class="card-product">JPY 100</div>','html.parser').select('div.card-product')[0].get_text()=='JPY 100'
+ print(json.dumps({'bs4':bs4.__version__,'soupsieve':soupsieve.__version__,'css_selector':True}))
  subprocess.run(['node','-e',"const {chromium}=require('/usr/local/lib/agc-worker-adapters/agc/scripts/compute/node_modules/playwright');(async()=>{const browser=await chromium.launch({headless:true});try{const page=await browser.newPage();await page.goto('data:text/html,<title>worker-headless-check</title>');if(await page.title()!=='worker-headless-check')throw Error('title');console.log(JSON.stringify({headless:true,browser:browser.version()}));}finally{await browser.close();}})().catch(()=>process.exit(1));"],check=True,timeout=40)
 print(json.dumps({'toolchain':expected,'node':node,'glibc':platform.libc_ver()[1],'uid':os.getuid(),'path':os.environ['PATH'],'passed':True}))
 ''');probe.chmod(0o644)
