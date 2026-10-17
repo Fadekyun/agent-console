@@ -56,7 +56,7 @@ uvicorn.config.LOGGING_CONFIG = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    s = Settings.from_env()
+    s = app.state.session_manager.settings
     configure_logging(log_dir=s.log_dir, retention_days=s.log_retention_days, backup_count=s.log_backup_count)
     configure_uvicorn_logging()
     # Hold one writer connection for the service lifetime so live WAL sidecars
@@ -1036,7 +1036,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                         break
                     await websocket.send_bytes(data)
             except (OSError, RuntimeError, WebSocketDisconnect) as pty_exc:
-                log.warning("ws session=%s pty error=%s", name, pty_exc, exc_info=True)
+                log.warning("ws session=%s pty error=%s: %s", name, type(pty_exc).__name__, pty_exc, exc_info=True, extra={"session_id": session_id, "operation": "pty_read"})
                 return
             finally:
                 # Any reader exit ends this attachment; do not leave input
@@ -1092,7 +1092,7 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
                         await websocket.close(code=4000, reason="detached by user")
                         break
         except (json.JSONDecodeError, OSError, RuntimeError, sqlite3.Error, ValueError, WebSocketDisconnect) as ws_exc:
-            log.warning("ws session=%s error=%s", name, ws_exc, exc_info=True)
+            log.warning("ws session=%s error=%s: %s", name, type(ws_exc).__name__, ws_exc, exc_info=True, extra={"session_id": session_id, "operation": "terminal_input"})
             with suppress(RuntimeError):
                 await websocket.close(code=4001, reason="session unavailable")
         finally:

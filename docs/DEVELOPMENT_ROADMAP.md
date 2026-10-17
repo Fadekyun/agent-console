@@ -1,3 +1,8 @@
+## 2026-10-17: approved Console log-review followups (#199)
+
+- Completed: compatible command aliases/discovery, structured redacted diagnostics with isolated tests, bounded work overview and historical search/paging, distinct attention surfaces, identity-bound Codex tool history and preserved workspace operations archives.
+- Lifecycle responsibilities now have focused native-permission and audit-attribution helpers; no broad lifecycle/compute rewrite.
+
 ## 2026-10-17: durable session audit history (#198)
 
 - Completed: stable lifecycle audit attribution with conservative legacy rename intervals and unchanged pagination.

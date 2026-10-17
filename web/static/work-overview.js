@@ -36,7 +36,7 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
     for(const members of membersByRoot.values())members.sort(stableOrder);
   }
   function nodeFor(session){indexWork();return nodesById.get(state.work?.aliases?.[session.id]||session.id);}
-  let renderKey='',historyOpen=null,historyLimit=20,activeLimit=20,searchTimer;
+  let renderKey='',historyOpen=null,historyLimit=20,historyOffset=0,activeLimit=20,searchTimer;
   const pending=new Set();
   // A polling update can also change card geometry. Finish the current pointer
   // activation before applying it, then reconcile the latest response in place.
@@ -49,14 +49,25 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
   document.addEventListener('pointerup',releasePointer);
   document.addEventListener('pointercancel',releasePointer);
   window.addEventListener('blur',()=>releasePointer({}));
-  function changedFilters(){historyOpen=null;historyLimit=activeLimit=20;save();renderWork();}
+  async function reloadOverview(){if(state.loading)await state.loading;await refresh();}
+  function changedFilters(){historyOpen=null;historyOffset=0;historyLimit=activeLimit=20;save();renderWork();reloadOverview();}
+  function requestParameters(){
+    const values=new URLSearchParams({compact:'true',overview:'true',q:$('#search').value.trim(),show:$('#state-filter').value,include_hidden:String($('#include-hidden')?.checked||false)});
+    const fields={project:'project_id',profile:'profile',tool:'tool',mechanical:'mechanical',attention:'attention',result:'result_state'};
+    for(const [key,field] of Object.entries(fields)){const select=$('#filter-'+key);const value=select.dataset.initialized?select.value:preferences[key]||select.value;if(value)values.set(field,value);}
+    const filtered=values.get('q')||Object.values(fields).some(field=>values.has(field));
+    const expanded=historyOpen??($('#state-filter').value!=='active'||!!filtered);
+    values.set('history_limit',expanded?'20':'0');values.set('history_offset',String(historyOffset));
+    try{const hash=location.hash,remembered=history.state?.workbenchSession;if(hash.startsWith('#session/')||hash.startsWith('#results/'))values.set('selected',remembered?.hash===hash?remembered.id:decodeURIComponent(hash.slice(9)));else if(hash.startsWith('#step/'))values.set('selected',decodeURIComponent(hash.slice(6)));}catch{}
+    return values.toString();
+  }
   async function mutate(node,action){
     indexWork();const session=sessionsById.get(node.native_id);if(!session)return;
     const key=`${session.id}:${action}`;if(pending.has(key))return;
     pending.add(key);renderKey='';renderWork();
     try{
       if(action==='visibility')await api(`/api/workbench/sessions/${encodeURIComponent(session.id)}/visibility`,{hidden:!node.hidden},'PATCH');
-      else await api(`/api/sessions/${encodeURIComponent(session.tmux_name)}/attention`,{state:'normal',note:session.attention_note||''},'PATCH');
+      else await api(`/api/sessions/${encodeURIComponent(session.tmux_name)}/attention`,{state:'normal',note:session.attention_note||'',session_id:session.id},'PATCH');
       message(action==='visibility'?`${node.hidden?'Restored':'Hidden'} ${session.tmux_name}. History and files are kept.`:`Marked ${session.tmux_name} reviewed. Result outcomes are kept.`);
       if(state.loading)await state.loading;await refresh();
     }catch(error){message(`${session.tmux_name}: ${error.message}`);}
@@ -65,7 +76,10 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
   function link(node,results=false){return node.native_name?`#${results?'results':'session'}/${encodeURIComponent(node.native_name)}`:`#step/${encodeURIComponent(node.id)}`;}
   function statuses(node){
     const wrap=el('div',null,'work-statuses');
-    for(const text of [`Terminal: ${node.mechanical}`,`Attention: ${attentionNames[node.attention]||node.attention}`,`Result: ${node.result_state}`])wrap.append(el('span',text,'badge'));
+    const primary=node.attention!=='normal'?(attentionNames[node.attention]||node.attention):node.waiting?'Waiting':node.result_state==='failed'?'Failed':node.result_state==='completed'?'Completed':node.mechanical==='running'?'Working':'Stopped';
+    wrap.append(el('span',primary,'badge primary-status'));
+    const facts=el('details',null,'status-details');facts.append(el('summary','Process & result'));
+    facts.append(el('span',`Terminal: ${node.mechanical}`),el('span',`Result: ${node.result?node.result_state:'Not recorded'}`));wrap.append(facts);
     if(node.readiness?.stale)wrap.append(el('span','Inputs changed','badge attention'));
     if(node.release)wrap.append(el('span',`Release: ${node.release.state}`,'badge'+(node.release.state==='unknown'?' attention':'')));
     if(node.waiting)wrap.append(el('span',node.decision==='proposed'?'Proposed':'Waiting for inputs or capacity','badge'));
@@ -75,9 +89,9 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
     const nodes=state.work?.nodes||[];
     for(const [key,field] of [['project','project_id'],['profile','profile'],['tool','tool']]){
       const select=$('#filter-'+key),current=select.dataset.initialized?select.value:preferences[key]||'';
-      const values=[...new Set(nodes.map(n=>n[field]).filter(Boolean))].sort();
+      const values=state.work?.filters?.[field]?[...state.work.filters[field]]:[...new Set(nodes.map(n=>n[field]).filter(Boolean))].sort();
       if(current&&!values.includes(current))values.push(current);
-      const choices=[['','Any'],...values.map(value=>[value,key==='project'?(nodes.find(n=>n.project_id===value)?.project_name||value):value])];
+      const choices=[['','Any'],...values.map(value=>[value,key==='project'?(state.work?.project_names?.[value]||nodes.find(n=>n.project_id===value)?.project_name||value):value])];
       if(select.dataset.options!==JSON.stringify(choices)){
         select.replaceChildren(...choices.map(([value,label])=>{const o=el('option',label);o.value=value;return o;}));select.dataset.options=JSON.stringify(choices);
       }
@@ -86,7 +100,7 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
   }
   function matches(node){
     const query=$('#search').value.toLowerCase().trim();
-    if(query&&!`${node.title} ${node.task} ${node.repository} ${node.project_name||''}`.toLowerCase().includes(query))return false;
+    if(query&&!state.work?.page?.matched_ids?.includes(node.id)&&!`${node.title} ${node.task} ${node.repository} ${node.project_name||''}`.toLowerCase().includes(query))return false;
     const fields={project:'project_id',profile:'profile',tool:'tool',mechanical:'mechanical',attention:'attention',result:'result_state'};
     return Object.entries(fields).every(([key,field])=>!$('#filter-'+key).value||node[field]===$('#filter-'+key).value);
   }
@@ -110,15 +124,19 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
     const restoreFocus=keepFocus(workList);
     const visible=node=>includeHidden||!node.hidden||node.mechanical==='running'||node.waiting;
     const strip=$('#attention-strip');strip.replaceChildren();
-    const attention=nodes.filter(n=>visible(n)&&n.needs_attention);
-    if(attention.length){
-      const a=el('a',`${attention.length} session${attention.length===1?' needs':'s need'} attention`);a.href='#work';
+    const activeRoots=new Set(groups.filter(g=>(membersByRoot.get(g.root_id)||[]).some(n=>n.mechanical==='running'||n.waiting)).map(g=>g.root_id));
+    const attention=state.work.page?.active_attention??nodes.filter(n=>visible(n)&&n.needs_attention&&activeRoots.has(n.root_id)).length;
+    const historicalAttention=state.work.page?.historical_attention??nodes.filter(n=>visible(n)&&n.needs_attention&&!activeRoots.has(n.root_id)).length;
+    if(attention){
+      const a=el('a',`${attention} current session${attention===1?' needs':'s need'} attention`);a.href='#work';
       a.onclick=()=>{$('#state-filter').value='attention';changedFilters();};strip.append(a);
     }
+    if(historicalAttention){const a=el('a',`Historical reviews (${historicalAttention})`);a.href='#work';a.onclick=()=>{$('#state-filter').value='attention';historyOpen=true;historyOffset=0;save();renderKey='';renderWork();reloadOverview();};strip.append(a);}
     if(readiness.warnings.length){const a=el('a',`${readiness.warnings.length} readiness warning${readiness.warnings.length===1?'':'s'}`);a.href='#settings';strip.append(a);}
     strip.hidden=!strip.childElementCount;
     const entries=[];
     for(const group of groups){
+      if(group.context_only)continue;
       const members=membersByRoot.get(group.root_id)||[],eligible=members.filter(n=>visible(n)&&matches(n));
       if(!eligible.length)continue;
       for(const node of allNodes?eligible:[nodesById.get(group.root_id)]){
@@ -140,7 +158,7 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
       if(node.hidden)card.append(el('p','Hidden session · shown as context for its children','small muted'));
       if(node.task)card.append(el('p',node.task.slice(0,500),'brief muted'));
       card.append(el('p',`${node.project_name?node.project_name+' · ':''}${node.repository||'No repository'}`,'overview-meta'),el('p',`${node.profile||'Session'} · ${node.tool||'Terminal'}${node.tool&&node.tool!=='shell'?' / '+(node.model||'Default model (not recorded)'):''} · ${node.last_activity?new Date(node.last_activity).toLocaleString():'No activity recorded'}`,'overview-meta'));
-      if(!allNodes&&group.children_total)card.append(el('p',`${group.children_complete}/${group.children_total} children complete${members.some(n=>n.id!==node.id&&n.mechanical==='running')?' · child running':''}`,'small'));
+      if(!allNodes&&group.children_total){const awaiting=members.filter(n=>n.id!==node.id&&n.attention==='ready_for_review').length;card.append(el('p',`${group.children_total} child${group.children_total===1?'':'ren'} · ${group.children_complete} completed${awaiting?' · '+awaiting+' awaiting review':''}${members.some(n=>n.id!==node.id&&n.mechanical==='running')?' · child running':''}`,'small'));}
       const matched=!allNodes&&query?eligible.filter(n=>n.id!==node.id):[];
       if(matched.length){
         const matches=el('div',null,'matched-children');matches.append(el('small',`${matched.length} matching child session${matched.length===1?'':'s'}`));
@@ -165,13 +183,14 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
       appendCard(entry,sections.get('active'));
     }
     if(current.length>activeLimit){const more=el('button',`Show more active work (${current.length-activeLimit} remaining)`);more.onclick=()=>{activeLimit+=20;renderWork();};root.append(more);}
-    if(history.length){
+    if(history.length||state.work.page?.history_total){
       const panel=el('details',null,'work-history'),count=history.reduce((n,e)=>n+e.members.filter(m=>m.needs_attention).length,0);
       panel.id='work-history';panel.open=expanded;
-      panel.append(el('summary',`History · ${history.length} ${allNodes?'sessions':'work groups'}${count?' · '+count+' need attention':''}`));
-      panel.ontoggle=event=>{const open=event.currentTarget.open;if(open!==(historyOpen??(show!=='active'||!!filtered))){historyOpen=open;renderWork();}};
+      panel.append(el('summary',`History · ${state.work.page?.history_total??history.length} ${state.work.page?'work groups':allNodes?'sessions':'work groups'}${count?' · '+count+' need attention':''}`));
+      panel.ontoggle=event=>{const open=event.currentTarget.open;if(open!==(historyOpen??(show!=='active'||!!filtered))){historyOpen=open;renderWork();if(state.work.page)reloadOverview();}};
       if(expanded){const cards=el('div',null,'cards');for(const entry of history.slice(0,historyLimit))appendCard(entry,cards);panel.append(cards);
-        if(history.length>historyLimit){const more=el('button',`Show more history (${history.length-historyLimit} remaining)`);more.onclick=()=>{historyLimit+=20;renderWork();};panel.append(more);}}
+        if(state.work.page?.history_offset){const previous=el('button','Previous history');previous.onclick=()=>{historyOffset=Math.max(0,historyOffset-20);reloadOverview();};panel.append(previous);}
+        if(state.work.page?.has_more_history||history.length>historyLimit){const more=el('button',state.work.page?'Next history page':`Show more history (${history.length-historyLimit} remaining)`);more.onclick=()=>{if(state.work.page){historyOffset+=20;reloadOverview();}else{historyLimit+=20;renderWork();}};panel.append(more);}}
       root.append(panel);
     }
     if(!entries.length)root.append(el('p',nodes.length?'No work matches these filters. Include hidden to find sessions you have hidden.':'Your workspace is ready. Start a session to begin.','empty'));
@@ -234,5 +253,5 @@ export function setupOverview({state,el,openCreate,api,message,refresh}) {
     const targets=[...$('#session-tree').querySelectorAll('a,button,summary')].filter(n=>n.getClientRects().length),index=targets.indexOf(document.activeElement);if(index<0)return;
     event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?targets.length-1:Math.max(0,Math.min(targets.length-1,index+(event.key==='ArrowDown'?1:-1)));targets[next].focus();
   };
-  return {renderWork,renderTree,nodeFor,link,statuses};
+  return {renderWork,renderTree,nodeFor,link,statuses,requestParameters};
 }

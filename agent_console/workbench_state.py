@@ -2,7 +2,7 @@
 import json
 import shutil
 import time
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, StrictBool
 from .workflow_service import WorkflowService
 from .workbench_visibility import WorkbenchVisibility
@@ -126,9 +126,12 @@ class WorkbenchState:
             if owner:node['owner_id']=None;root=node['id']
             node['root_id']=root
         groups=[]
+        members_by_root = {}
+        for member in nodes.values():
+            members_by_root.setdefault(member['root_id'], []).append(member)
         for node in nodes.values():
             if node['owner_id']:continue
-            members=[n for n in nodes.values() if n['root_id']==node['id']]
+            members=members_by_root.get(node['id'], [])
             priority=0 if any(n['needs_attention'] for n in members) else 1 if any(n['mechanical']=='running' for n in members) else 2 if any(n['waiting'] for n in members) else 3
             children=[n for n in members if n['id']!=node['id']]
             groups.append({'root_id':node['id'],'priority':priority,'last_activity':max(n['last_activity'] for n in members),
@@ -206,10 +209,52 @@ def workbench_routes(manager,require_identity):
     router=APIRouter(dependencies=[Depends(require_identity)]);state=WorkbenchState(manager)
 
     @router.get('/api/workbench')
-    def snapshot(compact:bool=False):return state.snapshot(compact=compact)
+    def snapshot(compact:bool=False, overview:bool=False, selected:str=Query(default='', max_length=200),
+                 q:str=Query(default='', max_length=500), include_hidden:bool=False,
+                 history_limit:int=Query(default=0, ge=0, le=50),
+                 history_offset:int=Query(default=0, ge=0), show:str='active',
+                 project_id:str='', profile:str='', tool:str='', mechanical:str='',
+                 attention:str='', result_state:str=''):
+        view = state.snapshot(compact=compact or overview)
+        if not overview:
+            return view
+        from .workbench_overview import overview as bounded_overview
+        return bounded_overview(view, selected=selected, query=q, include_hidden=include_hidden,
+                                history_limit=history_limit, history_offset=history_offset, show=show,
+                                filters={'project_id': project_id, 'profile': profile, 'tool': tool,
+                                         'mechanical': mechanical, 'attention': attention, 'result_state': result_state})
 
     @router.get('/api/workbench/readiness')
     def readiness():return state.readiness(refresh=True)
+
+    def native_session(identity):
+        with manager.database.connect() as db:
+            row = db.execute('SELECT * FROM sessions WHERE id=?', (identity,)).fetchone()
+        if row is None:
+            raise KeyError('Session not found')
+        return dict(row)
+
+    @router.get('/api/workbench/sessions/{identity}/tool-calls')
+    def tool_calls(identity:str, response:Response, before:int | None=Query(default=None, ge=0),
+                   thread:str | None=Query(default=None, max_length=100),
+                   limit:int=Query(default=50, ge=1, le=50)):
+        from .tool_history import tool_calls as read_calls
+        response.headers['Cache-Control'] = 'no-store'
+        return read_calls(manager.settings, native_session(identity), before=before, thread=thread, limit=limit)
+
+    @router.get('/api/workbench/sessions/{identity}/tool-calls/output')
+    def tool_output(identity:str, response:Response, offset:int=Query(ge=0),
+                    call_id:str=Query(max_length=200), thread:str=Query(max_length=100), download:bool=False):
+        from .tool_history import tool_output as read_output, MAX_LINE, MAX_OUTPUT
+        from fastapi.responses import PlainTextResponse
+        response.headers['Cache-Control'] = 'no-store'
+        output = read_output(manager.settings, native_session(identity), offset=offset, call_id=call_id, thread=thread,
+                             max_bytes=MAX_LINE if download else MAX_OUTPUT)
+        if download:
+            text = output['text'] + ('\n[Output truncated at 4 MiB]\n' if output['truncated'] else '')
+            return PlainTextResponse(text, headers={'Cache-Control': 'no-store',
+                                                    'Content-Disposition': 'attachment; filename="tool-output.txt"'})
+        return output
 
     @router.get('/api/workbench/sessions/{identity}/history')
     def history(identity:str,before:int=2147483647,audit_before:int=2147483647):

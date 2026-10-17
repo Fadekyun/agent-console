@@ -1,7 +1,8 @@
 import { setupLaunches } from '/static/launch-workbench.js?v=0.28.9';
-import { setupOverview } from '/static/work-overview.js?v=0.28.5';
+import { setupOverview } from '/static/work-overview.js?v=0.29.0';
 import { setupResults } from '/static/results-workbench.js?v=0.28.6';
 import { setupSkills } from '/static/skill-workbench.js';
+import { setupToolHistory } from '/static/tool-history.js?v=0.29.0';
 import { initTheme } from '/static/theme.js?v=10';
 const $ = (s, root = document) => root.querySelector(s);
 const form = $('#create-form');
@@ -23,6 +24,7 @@ async function api(path, payload, method = 'POST') {
   return data;
 }
 const skillsView = setupSkills({ api, el, message, profiles: () => state.me?.profiles || [] });
+const toolHistory=setupToolHistory({api,el,session:()=>state.selected,message});
 let skillsLoaded = false;
 const resultsView = setupResults({api,el,message,sessions:()=>state.sessions,editStep:step=>openCreate(state.sessions.find(s=>s.id===step.root_id)||state.selected,step),openSession:async name=>{await refresh();location.hash=`#session/${encodeURIComponent(name)}`;}});
 let resultsSession = null, resultsReady = Promise.resolve();
@@ -62,6 +64,7 @@ function renderSession() {
   // Refresh session state without replacing a status note the user is editing.
   const attention = $('#attention-form');
   if (attention.dataset.session !== s.id) {
+    toolHistory.reset();
     $('#session-detail').open = false;
     attention.dataset.session = s.id; attention.elements.state.value = s.attention_state || 'normal'; attention.elements.note.value = s.attention_note || '';
     $('#session-output').hidden = true; $('#session-skills').hidden = true; $('#session-history').hidden=true;$('#session-configuration').hidden=true;
@@ -115,7 +118,8 @@ function route() {
   else if ($('#notice').dataset.kind === 'route') message('');
   renderWork(); renderSession();
   for (const [id, frame] of state.frames) {
-    if (!state.sessions.some(session => session.id === id && session.running)) {
+    const running=state.work?.page?.running_session_ids;
+    if (!(running ? running.includes(id) : state.sessions.some(session => session.id === id && session.running))) {
       frame.remove(); state.frames.delete(id);
     } else frame.hidden = id !== state.selected?.id;
   }
@@ -146,7 +150,9 @@ async function refresh() {
   state.loading = (async () => {
     try {
       if (!state.me) await loadSettings();
-      const work=await api('/api/workbench?compact=true');
+      const parameters = overview.requestParameters();
+      const work=await api(`/api/workbench?${parameters}`);
+      if (parameters !== overview.requestParameters()) return;
       if(!Array.isArray(work.nodes)||!Array.isArray(work.sessions))throw new Error('Work summary unavailable');
       const tasks=new Map(work.nodes.map(node=>[node.native_id,node.task]));
       for(const session of work.sessions)if(session.initial_task===undefined&&tasks.has(session.id))session.initial_task=tasks.get(session.id);
@@ -540,7 +546,7 @@ $('#close-terminal').onclick = () => { $('#terminal-panel').hidden = true; $('#t
 $('#expand-terminal').onclick = () => { const expanded = $('#terminal-panel').classList.toggle('expanded'); $('#expand-terminal').textContent = expanded ? 'Restore' : 'Full screen'; syncTerminalVisibility(); };
 $('#refresh').onclick = refresh;
 $('.skip').onclick = event => { event.preventDefault(); $('#main').focus(); };
-window.addEventListener('hashchange', route); window.addEventListener('focus', refresh);
+window.addEventListener('hashchange', async () => { route(); if(state.loading)await state.loading; await refresh(); }); window.addEventListener('focus', refresh);
 initTheme($('#theme'));
 await refresh(); setInterval(() => { if (!document.hidden && !['#settings','#skills'].includes(location.hash) && !document.activeElement?.matches('#search,.filter-grid select')) refresh(); }, 10000);
 

@@ -392,11 +392,12 @@ test('attention, results, readiness and persisted filters lead the work view',as
   await page.route('**/api/workbench?*',route=>{const data=workbenchData(sessions);data.readiness={ready:false,warnings:['Selected harness needs account setup']};return route.fulfill({json:data});});
   await page.goto('/work');
   await expect(page.locator('#work-list .card').first()).toContainText('attention-work');
-  await expect(page.locator('#attention-strip')).toContainText('2 sessions need attention');
+  await expect(page.locator('#attention-strip')).toContainText('1 current session needs attention');
   await expect(page.locator('#attention-strip')).toContainText('1 readiness warning');
-  await expect(page.getByText('1/1 children complete',{exact:true})).toBeVisible();
+  await expect(page.getByText('1 child · 1 completed',{exact:true})).toBeVisible();
   await expect(page.locator('#work-history')).not.toHaveAttribute('open','');
   await page.locator('#work-history > summary').click();
+  await page.locator('#work-history .status-details > summary').first().click();
   await expect(page.locator('#work-list').getByText('Terminal: stopped',{exact:true}).first()).toBeVisible();
   await expect(page.getByText('The targeted check failed.',{exact:true})).toBeVisible();
   await expect(page.getByRole('link',{name:'Review failure',exact:true})).toBeVisible();
@@ -617,7 +618,7 @@ test('collapsible branches and full-screen tree navigate every layer without los
   await expect(page.locator('#session-tree')).not.toContainText('session-child');
   const before=(await page.locator('.session-main').boundingBox()).width;
   await page.locator('#tree-panel > summary').click();
-  if(info.project.name==='desktop')expect((await page.locator('.session-main').boundingBox()).width-before).toBeGreaterThan(100);
+  if(info.project.name==='desktop')await expect.poll(async()=>(await page.locator('.session-main').boundingBox()).width-before).toBeGreaterThan(100);
   await ensureTerminal(page);
   const frame=page.frameLocator('iframe:not([hidden])');await openInput(frame);await frame.locator('#composer').fill('Root draft');
   await frame.locator('#toggle-composer').click();
@@ -900,7 +901,7 @@ test('mark reviewed preserves failed outcome and blocked attention has no shortc
   await expect(page.locator('#work-list').getByRole('button',{name:'Mark reviewed',exact:true})).toHaveCount(0);
   expect(sessions[0].result.outcome).toBe('fail');
   sessions[0].attention_state='blocked';await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
-  await expect(page.locator('#work-list')).toContainText('Attention: Blocked');
+  await expect(page.locator('#work-list')).toContainText('Blocked');
   await expect(page.locator('#work-list').getByRole('button',{name:'Mark reviewed',exact:true})).toHaveCount(0);
 });
 
@@ -1267,4 +1268,58 @@ test('workbench mutations pin the selected identity while its old name is reused
   await expect.poll(()=>sent.filter(r=>r.path.endsWith('/attention')).length).toBe(1);
   expect(sent.find(r=>r.path.endsWith('/attention')).body.session_id).toBe('root');
   await expect(page.locator('#session-title')).toHaveText('session-one');
+});
+
+test('tool history is read only, paged and keeps unsupported providers explicit',async({page})=>{
+  await fixture(page);const requests=[];
+  await page.route('**/api/workbench/sessions/root/tool-calls?*',route=>{
+    requests.push(route.request().method());const older=new URL(route.request().url()).searchParams.has('before');
+    return route.fulfill({json:{available:true,thread:'native-one',notice:'Read-only native records.',calls:older?[]:[{id:'call-one',tool:'exec',at:'2026-10-17T00:00:00Z',duration_seconds:1.25,status:'returned',exit_codes:[1],output_offset:200,preview:'redacted preview'}],next_cursor:older?null:100}});
+  });
+  await page.route('**/api/workbench/sessions/root/tool-calls/output?*',route=>route.fulfill({json:{text:'Verified redacted output',truncated:false}}));
+  await page.goto('/work#session/session-one');await page.locator('#session-detail > summary').click();await page.locator('#show-tool-history').click();
+  await expect(page.locator('#session-tool-history')).toContainText('exec');
+  await page.locator('#session-tool-history summary').click();await expect(page.locator('#session-tool-history pre')).toHaveText('Verified redacted output');
+  await expect(page.locator('#session-tool-history a[download]')).toHaveAttribute('href',/download=true/);
+  await page.getByRole('button',{name:'Older tool calls',exact:true}).click();await expect(page.getByRole('button',{name:'Older tool calls',exact:true})).toHaveCount(0);
+  expect(requests).toEqual(['GET','GET']);
+  await page.route('**/api/workbench/sessions/root/tool-calls?*',route=>route.fulfill({json:{available:false,calls:[],notice:'Codex tool history is unavailable for this provider.',next_cursor:null}}));
+  await page.locator('#show-tool-history').click();await expect(page.locator('#session-tool-history')).toContainText('unavailable for this provider');
+});
+
+test('bounded overview loads historical pages and fetches direct-link details',async({page})=>{
+  const {sessions}=await fixture(page);const history=Array.from({length:25},(_,i)=>({...sessions[0],id:'old-'+i,tmux_name:'historical-'+i,running:false,initial_task:'Historical task '+i}));const requests=[];
+  await page.route('**/api/workbench?*',route=>{
+    const query=new URL(route.request().url()).searchParams;requests.push(query);
+    const limit=Number(query.get('history_limit')||0),offset=Number(query.get('history_offset')||0),selected=query.get('selected');
+    const rows=[...sessions,...history.slice(offset,offset+limit)];const direct=history.find(s=>s.tmux_name===selected);if(direct&&!rows.some(s=>s.id===direct.id))rows.push(direct);
+    const data=workbenchData(rows);data.page={history_total:25,history_offset:offset,history_loaded:Math.min(limit,25-offset),has_more_history:offset+limit<25,active_attention:0,historical_attention:0,matched_ids:[]};
+    return route.fulfill({json:data});
+  });
+  await page.goto('/work');await expect(page.locator('#work-list .card')).toHaveCount(1);expect(requests[0].get('overview')).toBe('true');
+  await page.locator('#work-history > summary').click();await expect(page.locator('#work-history .card')).toHaveCount(20);
+  await page.getByRole('button',{name:'Next history page',exact:true}).click();await expect(page.locator('#work-history .card')).toHaveCount(5);
+  await page.getByRole('button',{name:'Previous history',exact:true}).click();await expect(page.locator('#work-history .card')).toHaveCount(20);
+  await page.goto('/work#session/historical-24');await expect(page.locator('#session-title')).toHaveText('historical-24');
+  expect(requests.at(-1).get('selected')).toBe('historical-24');
+});
+
+test('filtered overview preserves live terminal frames outside the loaded groups',async({page})=>{
+  const {sessions}=await fixture(page);
+  sessions.push({...sessions[0],id:'second',tmux_name:'session-two'});
+  await page.route('**/api/workbench?*',route=>{
+    const query=new URL(route.request().url()).searchParams,selected=query.get('selected');
+    const rows=sessions.filter(s=>!query.get('q')||s.tmux_name.includes(query.get('q'))||s.id===selected||s.tmux_name===selected);
+    const data=workbenchData(rows);data.page={history_total:0,history_offset:0,has_more_history:false,active_attention:0,historical_attention:0,running_session_ids:sessions.map(s=>s.id)};
+    return route.fulfill({json:data});
+  });
+  await page.goto('/work#session/session-one');await ensureTerminal(page);
+  const first=page.locator('iframe[src*="session-one"]');await expect(first).toHaveCount(1);
+  await first.evaluate(e=>e.dataset.retained='original-frame');
+  await page.evaluate(()=>location.hash='#session/session-two');await expect(page.locator('#session-title')).toHaveText('session-two');await ensureTerminal(page);
+  await page.evaluate(()=>location.hash='#work');await page.locator('#search').fill('session-two');
+  await expect(page.locator('#work-list .card')).toHaveCount(1);
+  await expect(first).toHaveAttribute('data-retained','original-frame');
+  await page.evaluate(()=>location.hash='#session/session-one');await expect(page.locator('#session-title')).toHaveText('session-one');await ensureTerminal(page);
+  await expect(first).toHaveAttribute('data-retained','original-frame');
 });

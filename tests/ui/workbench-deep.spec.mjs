@@ -76,7 +76,7 @@ test('Open work survives attention updates held across pointer activation', asyn
   await page.mouse.up();
   await expect(page).toHaveURL(/#session\/A%20normal%20session%20name$/);
   await page.evaluate(() => { location.hash = '#work'; });
-  await expect(page.locator('.card')).toContainText('Attention: Blocked');
+  await expect(page.locator('.card')).toContainText('Blocked');
   expect(await open.evaluate(element => element === window.originalWorkLink)).toBe(true);
 });
 
@@ -87,7 +87,7 @@ test('polling updates overview cards in place and filtering still removes stale 
   await open.evaluate(element => { window.originalWorkLink = element; });
   node.attention = 'needs_input'; node.needs_attention = true;
   await page.locator('#refresh').click();
-  await expect(page.locator('.card')).toContainText('Attention: Needs input');
+  await expect(page.locator('.card')).toContainText('Needs input');
   expect(await open.evaluate(element => element === window.originalWorkLink)).toBe(true);
   node.title = 'Updated session title';
   await page.locator('#refresh').click();

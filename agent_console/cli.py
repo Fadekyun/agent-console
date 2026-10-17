@@ -132,7 +132,8 @@ def parser() -> argparse.ArgumentParser:
                         help="Codex plan-mode reasoning effort (codex/codex-pro only)")
     interrupt = session_commands.add_parser("interrupt")
     interrupt.add_argument("name")
-    restart = session_commands.add_parser("restart-agent")
+    restart = session_commands.add_parser("restart-agent", aliases=['restart'],
+                                          help='restart an existing agent (alias: restart)')
     restart.add_argument("name")
     rename = session_commands.add_parser("rename")
     rename.add_argument("name")
@@ -171,7 +172,7 @@ def parser() -> argparse.ArgumentParser:
     wait_children.add_argument("--timeout", type=int, default=None)
     wait_children.add_argument("--poll-interval", type=int, default=None)
 
-    profile = commands.add_parser("profile")
+    profile = commands.add_parser("profile", aliases=['profiles'], help='list or inspect role profiles')
     profile_commands = profile.add_subparsers(dest="profile_command", required=True)
     profile_commands.add_parser("list")
     profile_inspect = profile_commands.add_parser("inspect")
@@ -321,6 +322,10 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command == 'profiles':
+        args.command = 'profile'
+    if getattr(args, 'session_command', None) == 'restart':
+        args.session_command = 'restart-agent'
     try:
         route = inspection_route(args)
         context = managed_context() if args.command in {"session", "delegate"} else None

@@ -43,6 +43,12 @@ def _find_free_port() -> int:
 class LoggingConfigTests(unittest.TestCase):
     def setUp(self) -> None:
         reset_logging()
+        from unittest.mock import patch
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.log_environment = patch.dict(os.environ, {'AGENT_CONSOLE_LOG_DIR': temporary.name})
+        self.log_environment.start()
+        self.addCleanup(self.log_environment.stop)
         self.capture = io.StringIO()
         self.handler = logging.StreamHandler(self.capture)
         self.handler.setFormatter(
