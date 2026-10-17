@@ -53,5 +53,6 @@ TimeoutStopSec=15
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
+systemctl start agc-worker-jobs.slice
 systemctl enable agc-worker.service
 systemctl restart agc-worker.service

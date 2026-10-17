@@ -18,6 +18,7 @@ import re
 import shutil
 import socket
 import socketserver
+import stat
 import subprocess
 import sys
 import tarfile
@@ -107,7 +108,7 @@ def validate_manifest(manifest, binding, adapters):
     if not adapter or adapter.get("enabled") is not True:
         raise ValueError("adapter_not_enabled")
     # Registry must independently authorize external writes; request alone never can.
-    if manifest.get("production_writes") not in (True, False):
+    if type(manifest.get("production_writes")) is not bool:
         raise ValueError("production_writes_required")
     if manifest["production_writes"] and adapter.get("production_writes") is not True:
         raise ValueError("external_writes_not_authorized")
@@ -122,6 +123,33 @@ def validate_manifest(manifest, binding, adapters):
                 or type(artifact.get("size")) is not int or not 0 < artifact["size"] <= MAX_ARTIFACT):
             raise ValueError("invalid_artifact_reference")
     return adapter
+
+
+def toolchain_properties(adapter, job):
+    """Only a locally installed root-owned toolchain, never caller root mounts."""
+    value = adapter.get("root_directory")
+    if value is None:
+        return {}
+    root = Path(value)
+    prefix = Path("/var/lib/agc-worker/toolchains")
+    if not root.is_absolute() or root.resolve() != root or root.parent != prefix:
+        raise ValueError("invalid_toolchain_path")
+    marker = root / ".agc-worker-toolchain.json"
+    for path in (prefix, root, marker):
+        info = path.stat()
+        if info.st_uid != 0 or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError("untrusted_toolchain")
+    if read_json(marker).get("version") != 1:
+        raise ValueError("unqualified_toolchain")
+    adapters = Path("/usr/local/lib/agc-worker-adapters")
+    info = adapters.stat()
+    if info.st_uid != 0 or info.st_mode & 0o022:
+        raise ValueError("untrusted_adapter_directory")
+    # Whole job is mounted read-only so atomic lease-file replacements remain
+    # visible. Only source workspace/output get writable nested bind mounts.
+    return {"RootDirectory": str(root), "MountAPIVFS": "yes", "PrivateDevices": "yes",
+            "BindReadOnlyPaths": " ".join((str(job), str(adapters), "/etc/resolv.conf")),
+            "BindPaths": str(job / "workspace") + " " + str(job / "output")}
 
 
 def extract_archive(archive, target, max_bytes=40_000_000_000):
@@ -195,6 +223,7 @@ class Worker:
         # preserve unknown receipts for central reconciliation even if now empty.
         for path in (self.state / "receipts").glob("*.json"):
             receipt = read_json(path)
+            self.fences[receipt["job_id"]] = max(self.fences.get(receipt["job_id"], 0), receipt["lease_generation"])
             if receipt["state"] not in TERMINAL or not receipt.get("termination_confirmed", False):
                 run(["systemctl", "stop", receipt["unit"]], check=False)
                 receipt.update(state="unknown", reason="supervisor_restarted",
@@ -202,6 +231,7 @@ class Worker:
                 atomic_json(path, receipt)
                 if not receipt["termination_confirmed"]:
                     self.active = receipt
+        atomic_json(self.state / "fences.json", self.fences)
 
     def key(self, binding):
         return hashlib.sha256(canonical(binding)).hexdigest()
@@ -258,7 +288,10 @@ class Worker:
         return {"worker_id": "agc-laptop", "boot_id": self.boot_id,
                 "capabilities": sorted(k for k, v in self.adapters.items() if v.get("enabled")),
                 "gpu_qualified": False, "host": self.host, "telemetry": telemetry,
-                "guest": {"memory_available_bytes": guest_memory, "disk_free_bytes": guest_disk},
+                "guest": {"memory_available_bytes": guest_memory, "disk_free_bytes": guest_disk,
+                          "memory_total_bytes": int(mem["MemTotal"].split()[0]) * 1024,
+                          "swap_total_bytes": int(mem["SwapTotal"].split()[0]) * 1024,
+                          "cpu_count": os.cpu_count(), "boot_id": self.boot_id},
                 "admission": {"ready": not holds and not self.active, "holds": holds},
                 "active": self.active}
 
@@ -301,6 +334,8 @@ class Worker:
             extract_archive(obj, work / dirname)
         output = job / "output"
         output.mkdir(mode=0o750)
+        for name in (".home", ".tmp", ".cache"):
+            (work / name).mkdir(mode=0o750)
         account = pwd.getpwnam("agcjob")
         for root in (work, output):
             shutil.chown(root, user=account.pw_uid, group=account.pw_gid)
@@ -334,9 +369,15 @@ class Worker:
                       "CPUWeight": "10", "IOWeight": "10", "Nice": "10", "TasksMax": "512",
                       "RuntimeMaxSec": str(timeout), "TimeoutStopSec": "10", "KillMode": "control-group",
                       "OOMPolicy": "kill", "MemoryOOMGroup": "yes", "NoNewPrivileges": "yes",
-                      "PrivateTmp": "yes", "ProtectSystem": "strict", "ProtectHome": "yes",
+                      "PrivateTmp": "yes", "PrivateDevices": "yes", "ProtectSystem": "strict", "ProtectHome": "yes",
                       "ReadWritePaths": str(work) + " " + str(output), "WorkingDirectory": str(work),
-                      "StandardOutput": "null", "StandardError": "null", "UMask": "0077"}
+                      "StandardOutput": "null", "StandardError": "null", "UMask": "0077",
+                      "Environment": " ".join(("HOME=" + str(work / ".home"), "TMPDIR=" + str(work / ".tmp"),
+                                                  "XDG_CACHE_HOME=" + str(work / ".cache"),
+                                                  "npm_config_cache=" + str(work / ".cache/npm"),
+                                                  "PLAYWRIGHT_BROWSERS_PATH=/usr/local/lib/agc-worker-adapters/browsers")),
+                      "UnsetEnvironment": "DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS SSH_AUTH_SOCK"}
+        properties.update(toolchain_properties(adapter, job))
         command = ["systemd-run", "--quiet", "--unit=" + unit, "--service-type=exec", "--uid=agcjob"]
         command += ["--property=" + key + "=" + value for key, value in properties.items()]
         command += ["--", *argv, "--manifest", str(manifest_path), "--workspace", str(work), "--output", str(output)]
@@ -361,6 +402,11 @@ class Worker:
         run(["systemctl", "stop", receipt["unit"]], check=False)
         receipt.update(state="unknown" if receipt["production_writes"] else "interrupted",
                        reason=reason, termination_confirmed=self.unit_empty(receipt["unit"]))
+        if receipt["termination_confirmed"]:
+            try:
+                receipt["result"] = self.collect_result(receipt)
+            except (OSError, ValueError):
+                receipt["checkpoint_unavailable"] = True
         self.persist(receipt)
         if receipt["termination_confirmed"]:
             self.active = None
@@ -493,6 +539,22 @@ class Worker:
         return {"artifact_id": digest, "offset": offset, "size": target.stat().st_size,
                 "data": base64.b64encode(data).decode(), "eof": offset + len(data) >= target.stat().st_size}
 
+    def acknowledge(self, request):
+        binding = validate_binding(request)
+        receipt = self.bound_receipt(binding)
+        inventory = receipt.get("result", {}).get("inventory_artifact", {})
+        if (receipt["state"] not in TERMINAL or receipt["state"] == "unknown"
+                or not receipt.get("termination_confirmed")
+                or not inventory.get("sha256")
+                or request.get("inventory_sha256") != inventory["sha256"]):
+            raise ValueError("archive_ack_rejected")
+        receipt.update(centrally_archived=True, archived_at=time.time())
+        self.persist(receipt)  # Archive proof is durable before scratch deletion.
+        job = self.state / "jobs" / self.key(binding)
+        if job.exists():
+            shutil.rmtree(job)
+        return {**receipt, "acknowledged": True, "workspace_pruned": True}
+
     def dispatch(self, request):
         with self.lock:
             if request.get("protocol_version") != 1:
@@ -519,6 +581,8 @@ class Worker:
                 result = self.stage(request)
             elif action == "fetch":
                 result = self.fetch(request)
+            elif action == "ack":
+                result = self.acknowledge(request)
             else:
                 raise ValueError("unsupported_action")
             if all(key in result for key in BINDING):

@@ -18,7 +18,7 @@ try {
     }
     if ($buffer.Length -gt 524288) { throw 'size' }
     $request = $buffer.ToString() | ConvertFrom-Json
-    if ($request.protocol_version -ne 1 -or $request.action -notin @('status','start','heartbeat','inspect','stop','stage','fetch')) { throw 'protocol' }
+    if ($request.protocol_version -ne 1 -or $request.action -notin @('status','start','heartbeat','inspect','stop','stage','fetch','ack')) { throw 'protocol' }
     $running = ((& wsl.exe --list --running --quiet) -replace "`0",'') | ForEach-Object {$_.Trim()}
     if ($running -notcontains 'AGC-Worker') { throw 'worker_offline' }
     $buffer.ToString() | & wsl.exe -d AGC-Worker -u root --exec /usr/local/bin/agc-worker rpc

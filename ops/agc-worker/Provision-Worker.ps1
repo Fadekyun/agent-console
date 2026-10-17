@@ -174,7 +174,7 @@ public static class AgcAccountRights {
     [AgcAccountRights]::Add($WorkerSid.Value,'SeDenyInteractiveLogonRight')
     [AgcAccountRights]::Add($WorkerSid.Value,'SeDenyRemoteInteractiveLogonRight')
     $loginTiles = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList'
-    New-Item -Path $loginTiles -Force | Out-Null
+    if (-not (Test-Path $loginTiles)) { New-Item -Path $loginTiles -Force | Out-Null }
     New-ItemProperty -Path $loginTiles -Name $WorkerName -Value 0 -PropertyType DWord -Force | Out-Null
     Protect-Directory $Code 'ReadAndExecute'
     Protect-Directory $Data 'Modify'
