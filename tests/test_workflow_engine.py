@@ -161,6 +161,7 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
             manifest=json.loads((self.settings.state_dir/'workflow-attempts'/attempt['id']/'launch.json').read_text())
             self.assertEqual(manifest['argv'][manifest['argv'].index('--sandbox')+1],'read-only')
             self.assertEqual(receipt['permission_mode'],'read-only')
+            self.assertEqual(self.manager.inspect(attempt['name'])['permission_mode'],'read-only')
 
     def test_changed_role_requires_review_before_dispatch(self):
         step=self.propose();self.accept(step)
@@ -268,6 +269,12 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
                         self.assertNotIn('--ask-for-approval',argv)
                         from agent_console.native_permissions import native_permission_mode
                         self.assertEqual(native_permission_mode(argv),'workspace-write')
+                    from agent_console.workbench_launch import LaunchCatalog
+                    permission = 'read-only' if action == 'read' else 'workspace-write'
+                    attempt = done['attempts'][0]
+                    receipt = LaunchCatalog(self.manager).configuration(attempt['session_id'])['latest']
+                    self.assertEqual(receipt['permission_mode'],permission)
+                    self.assertEqual(self.manager.inspect(attempt['name'])['permission_mode'],permission)
 
     def test_read_action_uses_read_only_sandbox_even_for_general_role(self):
         step=self.propose(action='read');self.accept(step);done=self.finish(step['id'])
