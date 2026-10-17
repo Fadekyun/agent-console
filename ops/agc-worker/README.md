@@ -218,6 +218,21 @@ cutovers. GPU execution remains unqualified. Automatic bulk cache retention is
 not yet implemented; full disks hold new work rather than discard unacknowledged
 output. Acknowledged build scratch is reclaimed immediately.
 
+`qualify-native.sh` is an operator-only qualification script for the installed
+worker core. Run it through `Setup-Worker.ps1` with a reviewed SHA and a 360-second
+timeout after toolchain work finishes. It requires the production worker held
+and drained, creates its own registry/state and cgroup slice, and runs four jobs
+sequentially: success/duplicate, real 64 MiB OOM, timeout with a child process,
+and real 90-second lease loss with checkpoint and unknown-write classification.
+The adapter is local and harmless; the write flag only exercises classification.
+Jobs use at most 128 MiB/one CPU and the test slice 256 MiB/one CPU. It permits
+only the missing policy-verification marker and skips the isolated instance's
+warmup; actual Windows telemetry, AC, schedule and headroom checks stay active.
+This is **not** proof of production queue admission or real application behavior.
+JSON evidence is retained in `/var/lib/agc-worker-qualification-results/`.
+It stops only its recorded test units and slice; successful scratch is removed,
+and failed scratch/receipts remain for investigation. No policy marker is set.
+
 ## Operator setup and per-adapter credentials
 
 `Setup-Worker.ps1 -ScriptFile <reviewed-linux-script> -Sha256 <exact-hash>
