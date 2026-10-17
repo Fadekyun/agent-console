@@ -323,6 +323,35 @@ class InventoryRetentionTests(unittest.TestCase):
 
 
 class LaptopSamplerTests(unittest.TestCase):
+    def test_small_clock_skew_never_shortens_local_warmup(self):
+        from agent_console.compute_sampler import LaptopSampler
+        worker = Mock()
+        current = NOW
+        future = 5
+        def status(*args, **kwargs):
+            return {'worker_id':'agc-laptop','boot_id':'same-boot',
+                'telemetry':laptop(current + future), 'capabilities':['agc.build'],
+                'admission':{'ready':True}}
+        worker.call.side_effect = status
+        sampler = LaptopSampler(worker)
+        for elapsed in range(0, 300, 30):
+            current = NOW + elapsed
+            result = sampler.sample(enabled=True, operator_hold=False, now=current)
+            self.assertTrue(result['online'])
+            self.assertEqual(result['sampled_at'], current)
+            self.assertEqual(result['readiness'], 'warming_up')
+        current = NOW + 300
+        self.assertEqual(sampler.sample(enabled=True, operator_hold=False, now=current)['readiness'], 'ready')
+        future = 5.001
+        self.assertFalse(sampler.sample(enabled=True, operator_hold=False, now=current)['online'])
+        future = 3
+        self.assertEqual(sampler.sample(enabled=True, operator_hold=False, now=current)['readiness'], 'warming_up')
+        future = -30.001
+        self.assertFalse(sampler.sample(enabled=True, operator_hold=False, now=current)['online'])
+        self.assertIsNone(admission('agc.build', laptop(NOW, sampled_at=NOW+5), [], NOW))
+        self.assertEqual(admission('agc.build', laptop(NOW, sampled_at=NOW+5.001), [], NOW), 'telemetry_from_future')
+        self.assertEqual(admission('agc.build', laptop(NOW, sampled_at=NOW+5, healthy_since=NOW-295), [], NOW), 'warming_up')
+
     def test_central_warmup_resets_after_offline_stale_boot_or_pressure(self):
         from agent_console.compute_sampler import LaptopSampler
         now=NOW

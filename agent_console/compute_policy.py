@@ -300,11 +300,11 @@ def laptop_admission(profile, telemetry, reservations, now):
         if not _number(telemetry.get(key)):
             return 'invalid_telemetry:' + key
     sampled = telemetry['sampled_at']
-    if sampled > now:
+    if sampled > now + 5:
         return 'telemetry_from_future'
     if now - sampled > TELEMETRY_MAX_AGE_SECONDS:
         return 'telemetry_stale'
-    if telemetry['healthy_since'] > sampled:
+    if telemetry['healthy_since'] > min(sampled, now):
         return 'invalid_telemetry:healthy_since'
     cpus = telemetry['host_cpu_count']
     if cpus < 1 or cpus % 1:
@@ -348,6 +348,6 @@ def laptop_admission(profile, telemetry, reservations, now):
         return 'staff_disk_reserve'
     if telemetry['guest_disk_free_bytes'] - profile.scratch_bytes < GUEST_DISK_RESERVE_BYTES:
         return 'guest_disk_reserve'
-    if sampled - telemetry['healthy_since'] < HEALTHY_WINDOW_SECONDS:
+    if min(sampled, now) - telemetry['healthy_since'] < HEALTHY_WINDOW_SECONDS:
         return 'warming_up'
     return None
