@@ -400,3 +400,50 @@ fixed worker binding, then revoke the emergency key/config. Retain receipts,
 artifacts, business claims and uncertain organizer reservations. Keep a schema-4
 capable Console binary; never roll back to a state snapshot that loses a new
 claim or unknown external action. Existing laptop/DB services stay in place.
+
+
+## Series application and modification proof
+
+The fixed laptop `bushi.run` adapter also recognizes `apply_series`,
+`apply_manual` and `modify_criteria`, with exactly three parameters:
+`action`, canonical positive-decimal `seriesId` and `mode` (`dry-run` or
+`execute`). Execution needs separate producer namespace permission:
+`agc:bushi-series-apply` for either application path or
+`agc:bushi-series-modify` for criteria changes. Existing paid-only producer
+permission does not grant these writes. No emergency series execution or new
+automatic-application policy is introduced. Existing approved templates,
+manual-only rules and owner approval remain authoritative.
+
+Both modes require an immutable `inputs_artifact` containing exactly one regular
+`request.json`, at most 128 KiB. Only plain tar or one gzip tar is supported,
+with at most 256 KiB compressed and expanded bytes; no links, extra entries,
+PAX extensions, duplicate JSON keys or filesystem extraction. Its envelope is
+`{version:1,action,series_id,request,dry_run?}`. The approved adapter validates
+the action-specific request schema. Central hashes the canonical UTF-8 JSON
+`{action,series_id,request}` itself; callers cannot choose a replacement digest.
+
+The dry job must have `production_writes:false`, no business claim or proof, and
+finish centrally with a bound output inventory containing `response.json`.
+That response must report `ok:true`, matching `worker_binding` and a result with
+`action`, `series_id`, `mode:"dry-run"`, `ready:true`, `verified:false`,
+`request_sha256`, `semantic_sha256`, and the exact `semantic` confirmation object.
+
+An execution job needs `production_writes:true`, top-level `dry_run_job_id`, and
+`request.json.dry_run` containing the accepted dry job's `job_id`, `source_sha`,
+`manifest_sha256`, `input_sha256`, `request_sha256`, `semantic_sha256`, `semantic`,
+`ready:true`, `action` and `series_id`. The queue verifies that proof against its
+own completed same-producer receipt and hash-verified inventory/response, checks
+the exact source commit/archive and original request, then creates the job and
+business claim atomically. A missing, consumed, mismatched, unsuccessful or
+unknown dry-run result cannot authorize execution. The browser independently
+compares the live confirmation details with the accepted semantic object before
+its final submission.
+
+Required business keys are derived from the immutable request:
+`agc:bushi-series-apply:<seriesId>` is shared across routine/manual producers;
+`agc:bushi-series-modify:<seriesId>:<request_sha256>` identifies one exact change.
+Changing producer, request key or source cannot repeat the same business claim.
+Different reviewed criteria changes require their own accepted dry runs.
+These claims use the existing schema-4 table and survive result retention.
+Keep source/namespace configuration coordinated on rollback; the earlier
+schema-4 worker cannot accept the required `dry_run_job_id` manifest field.

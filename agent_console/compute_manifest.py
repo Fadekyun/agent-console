@@ -30,7 +30,7 @@ def validate_manifest(value, *, kind, source_digest, input_digest):
             'parameters', 'production_writes'} <= set(value):
         raise ValueError('incomplete job manifest')
     if set(value) - {'version', 'kind', 'source_sha', 'source_artifact', 'inputs_artifact',
-                     'input_sha256', 'parameters', 'production_writes', 'business_key', 'emergency'}:
+                     'input_sha256', 'parameters', 'production_writes', 'business_key', 'emergency', 'dry_run_job_id'}:
         raise ValueError('unsupported manifest field')
     if type(value['version']) is not int or value['version'] != 1 or value['kind'] != kind:
         raise ValueError('manifest version or kind mismatch')
@@ -48,6 +48,8 @@ def validate_manifest(value, *, kind, source_digest, input_digest):
         raise ValueError('explicit production write policy required')
     if value['production_writes'] and kind not in ('bushi.run', 'bushi.emergency'):
         raise ValueError('this adapter cannot perform production writes')
+    from .compute_bushi_series import validate_envelope
+    validate_envelope(value)
     business_key(value)
     if 'emergency' in value and kind != 'bushi.emergency':
         raise ValueError('emergency authorization requires the emergency profile')
@@ -61,6 +63,10 @@ def validate_manifest(value, *, kind, source_digest, input_digest):
 
 def business_key(manifest):
     """Only the reviewed paid-order identity can claim this global namespace."""
+    from .compute_bushi_series import action, validate_envelope
+    if action(manifest):
+        validate_envelope(manifest)
+        return None  # Derived only after immutable input/proof verification.
     supplied = manifest.get('business_key')
     parameters = manifest.get('parameters', {})
     if not isinstance(parameters, dict):
@@ -86,3 +92,8 @@ def validate_emergency(manifest, *, priority, deadline, now):
         raise ValueError('emergency requires explicit urgent paid action and bound deadline')
     if not now < deadline <= now + 1200:
         raise ValueError('emergency deadline must be within the next twenty minutes')
+
+
+def business_namespace(manifest):
+    from .compute_bushi_series import namespace
+    return namespace(manifest) or ('agc:paid-participation' if business_key(manifest) else None)

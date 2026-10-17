@@ -156,6 +156,10 @@ class ComputeQueue:
                 if prior['spec_hash'] != spec_hash:
                     raise ValueError('request key already identifies a different immutable job')
                 return dict(prior)
+            from .compute_bushi_series import action as series_action, accepted_claim
+            if manifest is not None and series_action(manifest):
+                from .compute_artifacts import ComputeArtifacts
+                claim = accepted_claim(db, manifest, actor, ComputeArtifacts(self.store.state))
             if kind == 'bushi.emergency':
                 validate_emergency(manifest, priority=priority, deadline=deadline, now=self.clock())
             if claim and db.execute('SELECT job_id FROM compute_business_claims WHERE business_key=?', (claim,)).fetchone():

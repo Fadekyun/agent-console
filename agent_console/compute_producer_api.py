@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import Field
 
 from .compute_api import ComputeRequest, ComputeRoute, JobRequest
-from .compute_manifest import digest, business_key
+from .compute_manifest import digest, business_namespace
 from .compute_publication import ComputePublications
 from .compute_retention import ComputeRetention
 from .compute_transport import trusted_json
@@ -119,8 +119,8 @@ def producer_routes(engine_callable, *, config_loader=configured_producers):
             raise PermissionError('producer cannot authorize production writes')
         if payload.kind == 'bushi.emergency' and policy.get('allow_emergency') is not True:
             raise PermissionError('producer cannot authorize emergency execution')
-        claim = business_key(payload.manifest)
-        if claim and 'agc:paid-participation' not in policy.get('business_key_namespaces', []):
+        namespace = business_namespace(payload.manifest)
+        if namespace and namespace not in policy.get('business_key_namespaces', []):
             raise PermissionError('producer cannot claim this business namespace')
         engine = engine_callable()
         for key in ('source_artifact', 'inputs_artifact'):
