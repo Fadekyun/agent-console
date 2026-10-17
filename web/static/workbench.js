@@ -118,7 +118,8 @@ function route() {
   else if ($('#notice').dataset.kind === 'route') message('');
   renderWork(); renderSession();
   for (const [id, frame] of state.frames) {
-    if (!state.sessions.some(session => session.id === id && session.running)) {
+    const running=state.work?.page?.running_session_ids;
+    if (!(running ? running.includes(id) : state.sessions.some(session => session.id === id && session.running))) {
       frame.remove(); state.frames.delete(id);
     } else frame.hidden = id !== state.selected?.id;
   }

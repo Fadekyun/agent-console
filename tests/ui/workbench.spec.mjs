@@ -1303,3 +1303,23 @@ test('bounded overview loads historical pages and fetches direct-link details',a
   await page.goto('/work#session/historical-24');await expect(page.locator('#session-title')).toHaveText('historical-24');
   expect(requests.at(-1).get('selected')).toBe('historical-24');
 });
+
+test('filtered overview preserves live terminal frames outside the loaded groups',async({page})=>{
+  const {sessions}=await fixture(page);
+  sessions.push({...sessions[0],id:'second',tmux_name:'session-two'});
+  await page.route('**/api/workbench?*',route=>{
+    const query=new URL(route.request().url()).searchParams,selected=query.get('selected');
+    const rows=sessions.filter(s=>!query.get('q')||s.tmux_name.includes(query.get('q'))||s.id===selected||s.tmux_name===selected);
+    const data=workbenchData(rows);data.page={history_total:0,history_offset:0,has_more_history:false,active_attention:0,historical_attention:0,running_session_ids:sessions.map(s=>s.id)};
+    return route.fulfill({json:data});
+  });
+  await page.goto('/work#session/session-one');await ensureTerminal(page);
+  const first=page.locator('iframe[src*="session-one"]');await expect(first).toHaveCount(1);
+  await first.evaluate(e=>e.dataset.retained='original-frame');
+  await page.evaluate(()=>location.hash='#session/session-two');await expect(page.locator('#session-title')).toHaveText('session-two');await ensureTerminal(page);
+  await page.evaluate(()=>location.hash='#work');await page.locator('#search').fill('session-two');
+  await expect(page.locator('#work-list .card')).toHaveCount(1);
+  await expect(first).toHaveAttribute('data-retained','original-frame');
+  await page.evaluate(()=>location.hash='#session/session-one');await expect(page.locator('#session-title')).toHaveText('session-one');await ensureTerminal(page);
+  await expect(first).toHaveAttribute('data-retained','original-frame');
+});

@@ -60,6 +60,7 @@ def overview(snapshot, *, selected='', query='', include_hidden=False, history_l
                      'history_loaded': min(history_limit, max(0, len(historical) - history_offset)),
                      'has_more_history': history_offset + history_limit < len(historical),
                      'active_attention': current_attention, 'historical_attention': historical_attention,
+                     'running_session_ids': [session['id'] for session in snapshot['sessions'] if session['running']],
                      'matched_ids': matched if query else []},
             'filters': {key: sorted({str(node[key]) for node in nodes if node.get(key)})
                         for key in ('project_id', 'profile', 'tool')},
