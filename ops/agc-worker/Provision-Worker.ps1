@@ -183,7 +183,7 @@ public static class AgcAccountRights {
     Protect-Directory $Code 'ReadAndExecute'
     Protect-Directory $Data 'Modify'
     Copy-Item -LiteralPath (Join-Path $SourceDirectory 'wslconfig') -Destination (Join-Path $profile '.wslconfig') -Force
-    foreach ($file in @('Dispatch-Worker.ps1','Start-Worker.ps1','Initialize-Distro.ps1','worker.py','install-linux.sh','wsl.conf','adapters.example.json')) {
+    foreach ($file in @('Dispatch-Worker.ps1','Start-Worker.ps1','Host-Disk.ps1','Initialize-Distro.ps1','worker.py','install-linux.sh','wsl.conf','adapters.example.json')) {
         if (Test-Path (Join-Path $SourceDirectory $file)) { Copy-Item -LiteralPath (Join-Path $SourceDirectory $file) -Destination $Code -Force }
     }
     # Hard per-SID ceiling. Existing staff defaults/limits must remain unlimited
@@ -268,7 +268,7 @@ if ($Phase -eq 'Import') {
 
 if ($Phase -eq 'Runtime') {
     if (-not (Test-Path (Join-Path $Data 'distro-ready.json'))) { throw 'Import and verify independent distro first' }
-    foreach ($file in @('Dispatch-Worker.ps1','Start-Worker.ps1','worker.py','install-linux.sh')) {
+    foreach ($file in @('Dispatch-Worker.ps1','Start-Worker.ps1','Host-Disk.ps1','worker.py','install-linux.sh')) {
         Copy-Item -LiteralPath (Join-Path $SourceDirectory $file) -Destination $Code -Force
     }
     # Startup trigger never wakes or powers on the laptop. Script exits before

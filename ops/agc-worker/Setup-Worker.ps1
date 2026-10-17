@@ -33,6 +33,7 @@ foreach ($rule in $acl.Access) {
     if ($rule.AccessControlType -eq 'Allow' -and ($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Write) -and $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -notin @('S-1-5-18','S-1-5-32-544')) { throw 'Setup source has a non-administrator write ACL' }
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Invoke-WorkerSetup.ps1') -Destination $Code -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Host-Disk.ps1') -Destination $Code -Force
 Add-Type -AssemblyName System.Security
 $bytes = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes((Join-Path $Control 'credential.dpapi')),$null,[Security.Cryptography.DataProtectionScope]::LocalMachine)
 try {

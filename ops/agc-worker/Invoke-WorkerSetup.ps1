@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $OutputEncoding = [Text.UTF8Encoding]::new($false)
+. (Join-Path $PSScriptRoot 'Host-Disk.ps1')
 if ([Security.Principal.WindowsIdentity]::GetCurrent().Name -notmatch '\\agc-worker$') { throw 'Wrong worker Windows account' }
 $Data = 'C:\ProgramData\AGC-Worker\data'
 $Source = "C:\ProgramData\AGC-Worker\code\setup\$Sha256.sh"
@@ -26,9 +27,10 @@ try {
     Add-Type -AssemblyName System.Windows.Forms
     if ([Windows.Forms.SystemInformation]::PowerStatus.PowerLineStatus -ne 'Online') { throw 'worker_not_on_ac' }
     $os = Get-CimInstance Win32_OperatingSystem
-    $disk = [IO.DriveInfo]::new('C')
+    $disk = Get-WorkerDiskSpace
+    $result.disk = $disk
     $reserve = [Math]::Max(8GB,[uint64]$os.TotalVisibleMemorySize * 1024 * .25)
-    if ([uint64]$os.FreePhysicalMemory * 1024 -lt ($reserve + 2GB) -or $disk.AvailableFreeSpace -lt ($disk.TotalSize * .15 + 8GB)) { throw 'staff_headroom_hold' }
+    if ([uint64]$os.FreePhysicalMemory * 1024 -lt ($reserve + 2GB) -or $disk.AvailableFreeSpace -lt ($disk.TotalSize * .15 + 8GB) -or $disk.QuotaAvailableBytes -lt 8GB) { throw 'staff_headroom_hold' }
     if ((Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Sha256) { throw 'setup_source_digest_changed' }
     # Hold new admissions before inspecting the active slot. Existing work is
     # not killed by operator setup; the coordinator must drain it first.
@@ -49,7 +51,7 @@ try {
     $result.state='running'; Save-Receipt
     # Setup remains root only inside this worker VM; no Windows admin token or
     # staff distribution is used. Central queue must be held during setup.
-    & wsl.exe -d AGC-Worker -u root --exec /usr/bin/systemd-run --wait --pipe --collect "--unit=agc-setup-$($Sha256.Substring(0,24))" --property=MemoryHigh=1792M --property=MemoryMax=2G --property=MemorySwapMax=0 --property=CPUQuota=100% --property=CPUWeight=10 --property=IOWeight=10 --property=Nice=10 --property=TasksMax=256 "--property=RuntimeMaxSec=$TimeoutSeconds" --property=TimeoutStopSec=15 --property=KillMode=control-group --property=OOMPolicy=kill -- /bin/bash $linuxSource
+    & wsl.exe -d AGC-Worker -u root --exec /usr/bin/systemd-run --wait --pipe --collect "--unit=agc-setup-$($Sha256.Substring(0,24))" --setenv=WSL_DISTRO_NAME=AGC-Worker --slice=agc-worker-jobs.slice --property=MemoryHigh=1792M --property=MemoryMax=2G --property=MemorySwapMax=0 --property=CPUQuota=100% --property=CPUWeight=10 --property=IOWeight=10 --property=Nice=10 --property=TasksMax=256 "--property=RuntimeMaxSec=$TimeoutSeconds" --property=TimeoutStopSec=15 --property=KillMode=control-group --property=OOMPolicy=kill -- /bin/bash $linuxSource
     $result.exit_code=$LASTEXITCODE
     if ($LASTEXITCODE -ne 0) { throw 'bounded_worker_setup_failed' }
     $result.state='succeeded'

@@ -49,7 +49,8 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(worker.admission_holds(host(), now=1001), [])
         self.assertIn("host_telemetry_missing", worker.admission_holds({}, now=1001))
         self.assertIn("host_telemetry_stale", worker.admission_holds(host(), now=1031))
-        self.assertIn("host_telemetry_stale", worker.admission_holds(host(), now=999))
+        self.assertEqual(worker.admission_holds(host(), now=995), [])
+        self.assertIn("host_telemetry_stale", worker.admission_holds(host(), now=994.9))
         for field, value, reason in [
             ("policy_verified", False, "policy_unverified"), ("on_ac", False, "not_on_ac"),
             ("worker_memory_bytes", 16_000_000_001, "worker_memory_ceiling"),

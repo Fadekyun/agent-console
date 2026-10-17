@@ -7,6 +7,7 @@ $Base = 'C:\ProgramData\AGC-Worker'
 $Data = Join-Path $Base 'data'
 $Code = Join-Path $Base 'code'
 $Distro = 'AGC-Worker'
+. (Join-Path $PSScriptRoot 'Host-Disk.ps1')
 Add-Type @'
 using System; using System.Runtime.InteropServices;
 public static class AgcHost {
@@ -29,7 +30,7 @@ function In-Window {
 }
 if (-not (In-Window) -or -not [AgcHost]::OnAC()) { exit 0 }
 $initialMemory = [AgcHost]::ReadMemory()
-$initialDisk = [IO.DriveInfo]::new('C')
+$initialDisk = Get-WorkerDiskSpace
 if ($initialMemory.availablePhysical -lt ([Math]::Max(8GB,$initialMemory.totalPhysical * .25) + 1000000000) -or $initialDisk.AvailableFreeSpace -lt ($initialDisk.TotalSize * .15)) { exit 0 }
 if (-not (Test-Path (Join-Path $Data 'distro-ready.json'))) { throw 'Independent distro was not initialized' }
 $self = Get-Process -Id $PID
@@ -46,7 +47,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Worker supervisor unavailable' }
     while (In-Window) {
         $memory = [AgcHost]::ReadMemory()
-        $drive = [IO.DriveInfo]::new('C')
+        $drive = Get-WorkerDiskSpace
         $idle=[uint64]0;$kernel=[uint64]0;$user=[uint64]0
         if (-not [AgcHost]::GetSystemTimes([ref]$idle,[ref]$kernel,[ref]$user)) { throw 'CPU telemetry unavailable' }
         $total = ($kernel - $previousKernel) + ($user - $previousUser)
@@ -64,6 +65,9 @@ try {
             $verified = $qualification.worker_sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -and $qualification.cgroup_verified -eq $true -and $qualification.quota_verified -eq $true -and $qualification.separate_vm_verified -eq $true -and $qualification.gpu_enabled -eq $false
         }
         $sample = @{observed_at=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()/1000.0;cpu_count=$logical;memory_total_bytes=$memory.totalPhysical;memory_available_bytes=$memory.availablePhysical;commit_total_bytes=$memory.totalCommit;commit_available_bytes=$memory.availableCommit;worker_memory_bytes=$workerBytes;disk_total_bytes=$drive.TotalSize;disk_free_bytes=$drive.AvailableFreeSpace;worker_disk_used_bytes=$diskBytes;cpu_percent=[Math]::Max(0,[Math]::Min(100,$cpuPercent));on_ac=[AgcHost]::OnAC();policy_verified=$verified;gpu_qualified=$false;memory_accounting='all_wsl_private_commit_plus_watchdog'}
+        $sample.quota_total_bytes=$drive.QuotaTotalBytes
+        $sample.quota_available_bytes=$drive.QuotaAvailableBytes
+        $sample.disk_accounting=$drive.Source
         $sample | ConvertTo-Json -Compress | & wsl.exe -d $Distro -u root --exec /usr/local/bin/agc-worker host-sample
         if ($LASTEXITCODE -ne 0) { throw 'Host telemetry delivery failed' }
         $staffReserve = [Math]::Max(8GB, $sample.memory_total_bytes * .25)

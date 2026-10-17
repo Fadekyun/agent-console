@@ -234,7 +234,9 @@ def admission_holds(host, now=None, required_memory=0):
     if not isinstance(host, dict) or not isinstance(host.get("observed_at"), (int, float)):
         return holds + ["host_telemetry_missing"]
     age = now - host["observed_at"]
-    if not 0 <= age <= 30:
+    # Windows and the WSL/controller clocks may differ slightly. This applies
+    # only to host telemetry; attempt lease expiry still uses monotonic time.
+    if not -5 <= age <= 30:
         holds.append("host_telemetry_stale")
     if host.get("policy_verified") is not True:
         holds.append("policy_unverified")
