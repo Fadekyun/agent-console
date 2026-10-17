@@ -439,7 +439,7 @@ class Worker:
                       "RemainAfterExit": "yes",
                       "MemoryMax": str(memory), "MemorySwapMax": "0", "CPUQuota": str(cpus * 100) + "%",
                       "CPUWeight": "10", "IOWeight": "10", "Nice": "10", "TasksMax": "512",
-                      "RuntimeMaxSec": str(timeout), "TimeoutStopSec": "10", "KillMode": "control-group",
+                      "RuntimeMaxSec": str(timeout), "TimeoutStopSec": "5", "KillMode": "control-group",
                       "OOMPolicy": "kill", "NoNewPrivileges": "yes",
                       "PrivateTmp": "yes", "PrivateDevices": "yes", "ProtectSystem": "strict", "ProtectHome": "yes",
                       "ReadWritePaths": str(work) + " " + str(output), "WorkingDirectory": str(work),
@@ -507,7 +507,9 @@ class Worker:
                 return
             receipt = self.active
             idle = time.monotonic() - receipt["last_heartbeat_monotonic"]
-            if idle >= 90:
+            # Start graceful stop early; the five-second cgroup kill grace must
+            # fit inside the 90-second termination budget, not follow it.
+            if idle >= 80:
                 self.terminate("lease_lost")
                 return
             if idle >= 60:

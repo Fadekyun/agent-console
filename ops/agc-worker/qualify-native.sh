@@ -206,7 +206,7 @@ try:
         if mode == 'lease':
             assert receipt['reason'] == 'lease_lost' and receipt.get('checkpoint_requested'), receipt
             assert receipt.get('checkpoint_sha256'), 'checkpoint artifact not captured before lease stop'
-            assert case['elapsed_seconds'] >= 89, 'lease expiry was not exercised in real time'
+            assert 79 <= case['elapsed_seconds'] <= 90, 'real lease-loss stop exceeded its 90-second total budget'
         inventory = receipt['result']['inventory_artifact']
         inventory_path = instance.state / 'objects' / inventory['sha256']
         assert worker.digest_file(inventory_path) == inventory['sha256']
