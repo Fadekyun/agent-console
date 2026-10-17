@@ -119,6 +119,8 @@ class ProviderAdapter:
         return {}
 
     def secret_files(self, context: dict[str, Any]) -> list[Path]:
+        if self.registry.broker and context.get("provider") in {"commandcode", "openrouter"}:
+            return []
         secret_ref = context.get("secret_ref")
         return [self.registry.secret_path(secret_ref)] if secret_ref else []
 
@@ -460,6 +462,12 @@ class CommandCodeAdapter(ProviderAdapter):
 
         context = kwargs["context"]
         model = selected_model(context, kwargs.get("model"))
+        from .broker_client import BROKER_URL, CAPABILITY
+        from .broker_launch import active
+        resolved = kwargs.get("resolved_environment") or {}
+        protected = active(resolved)
+        model_url = resolved[BROKER_URL] + "/model/commandcode/v1" if protected else context["base_url"]
+        key_variable = CAPABILITY if protected else COMMANDCODE_ENV_VAR
         context_path = kwargs["context_path"]
         root = context_path.parent / (context_path.stem + "-" + self.tool)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -469,12 +477,12 @@ class CommandCodeAdapter(ProviderAdapter):
         mcp_servers = session_mcp_servers(kwargs.get("resolved_environment"))
         if self.tool == "pi":
             write_private_json(root / "models.json", {"providers": {"commandcode": {
-                "baseUrl": context["base_url"], "api": "openai-completions",
-                "apiKey": PI_API_KEY_REFERENCE, "authHeader": True,
+                "baseUrl": model_url, "api": "openai-completions",
+                "apiKey": "$" + key_variable, "authHeader": True,
                 "headers": {"User-Agent": "agent-console-commandcode/1.0"},
                 "models": pi_model_entries(context, selected=model),
             }}})
-            ensure_pi_auth_env_reference(root / "auth.json")
+            ensure_pi_auth_env_reference(root / "auth.json", variable=key_variable)
             per_session_mcp = pi_mcp_config(mcp_servers)
             write_private_json(root / "mcp.json", per_session_mcp)
             environment["PI_CODING_AGENT_DIR"] = str(root)
@@ -483,8 +491,8 @@ class CommandCodeAdapter(ProviderAdapter):
         else:
             hermes_config: dict[str, Any] = {
                 "model": {"provider": "custom", "default": model,
-                          "base_url": context["base_url"],
-                          "api_key": "${" + COMMANDCODE_ENV_VAR + "}"},
+                          "base_url": model_url,
+                          "api_key": "${" + key_variable + "}"},
             }
             if supports_reasoning(model):
                 # CommandCode only honours a top-level reasoning_effort; Hermes'
