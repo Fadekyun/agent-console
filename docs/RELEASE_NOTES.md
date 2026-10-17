@@ -1,3 +1,8 @@
+# 0.28.29 — 2026-10-17 (#198)
+
+- Preserve session audit history across renames by recording durable IDs on new lifecycle events. Recover legacy name intervals conservatively and exclude reused or ambiguous identities. Existing history cursors remain compatible.
+- Configuration/migration: none; identity is additive audit metadata. Verification: durable/repeated rename, name reuse, ambiguity and pagination tests. Rollback: select the prior release; retained audit metadata is backward compatible.
+
 # 0.28.28 — 2026-10-17 (#193)
 
 - Fix writable native automatic-review workflow launches when the prepared command omits `--sandbox`; record effective workspace-write permissions without changing launch arguments.
