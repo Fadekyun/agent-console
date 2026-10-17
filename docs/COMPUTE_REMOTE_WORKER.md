@@ -165,3 +165,70 @@ limits, staff priority, AC/schedule interruption, lost SSH acknowledgements,
 artifact corruption, and production publication reconciliation before migrating
 each workload's old timer. Source unit tests cannot prove Windows/WSL isolation
 or actual laptop capabilities.
+
+## Forced-command producer bridge (CT106/CT955 to CT115)
+
+`agent_console/compute_producer_bridge.py` is a standalone standard-library file.
+Install a reviewed copy root-owned under `/opt/agent-console-producer/`; invoke
+with `/usr/bin/python3 -I` so caller Python paths cannot replace imports. The
+`bridge` command accepts one bounded JSON object on stdin and returns one JSON
+object on stdout. It ignores `SSH_ORIGINAL_COMMAND` and accepts no caller headers.
+
+Request: `{"version":1,"method":"GET","path":"/api/compute/producers/jobs/JOB"}`.
+POST requests add an object `body`. Response: `{"status":200,"body":{...}}`.
+Only the producer upload, enqueue, inspect, fetch, publication begin/inspect/finish
+and consume routes are accepted. Owner hold/retry/reconcile routes are inaccessible.
+The fixed destination is `http://127.0.0.1:3210`; authenticated SSH protects the
+network leg. No proxy environment, redirects, forwarded identity or managed-agent
+headers are used. API producer policies must separately allow `127.0.0.1/32` and
+retain workload, request-prefix, production-write and publication-target limits.
+
+Provision **one dedicated Unix account per producer**, each with no sudo, no
+Console state access and read access only to its own root-owned configuration.
+Use a root-controlled authorized-keys path and an entry shaped as follows (replace
+public key and source IP with enrolled values; this is a template, not an installer):
+
+```text
+restrict,from="192.168.1.71",command="/usr/bin/python3 -I /opt/agent-console-producer/compute_producer_bridge.py bridge --config /etc/agent-console-producers/points.json" ssh-ed25519 PUBLIC_KEY
+```
+
+Enforce no forwarding, PTY, tunnels or agent forwarding in the account's sshd
+policy as well. Do not permit account-owned authorized keys to enroll another
+command. The fixed command needs no root privileges. Config shape is exactly
+`{"producer":"points","token":"HOST_LOCAL_GENERATED_BEARER"}`; use root-owned
+0640 with the dedicated account's private group, protected root-owned ancestor
+directories, and no world access. The API stores only the matching token SHA256.
+No token is sent to the source host in SSH mode.
+
+The same Python file supplies `ProducerClient.from_file(path)` and CLI commands
+`request`, `upload --file PATH`, `fetch --job JOB --artifact SHA256 --file NEW_PATH`.
+Every command takes `--config PATH`. Client SSH configuration has exactly:
+
+```json
+{
+  "transport": "ssh-stdio",
+  "ssh_host": "points-producer@192.168.1.115",
+  "ssh_identity_file": "/etc/points-compute/id_ed25519",
+  "ssh_known_hosts_file": "/etc/points-compute/known_hosts"
+}
+```
+
+Pin the host key independently before enabling. All paths are absolute and
+protected; configuration and ancestor directories are root-owned. Private keys
+may also be owned by the dedicated client UID. SSH uses no remote command, no
+user SSH config, no multiplexing, no environment forwarding and strict host pins.
+Direct HTTPS clients instead use exactly `transport:"https"`, `endpoint` (origin
+only), `producer`, and `token` in the protected local config; literal loopback HTTP
+is also permitted for local services. LAN HTTP and URL credentials are rejected.
+
+Request envelopes are capped at 512 KiB; responses at 1 MiB. Calls are time bounded,
+artifact chunks are 256 KiB, and the API's 2 GiB/object ceiling remains. Uploads
+follow the central authoritative offset; fetches verify size and SHA256 before
+an exclusive durable destination creation. There are **no automatic retries** on
+transport failure. Reconcile the existing immutable request/job/publication before
+retrying; a lost publication reply never grants another publication attempt.
+
+Validation: `python -m unittest discover -s tests -p test_compute_producer_bridge.py`.
+Tests use disposable files and local subprocess fixtures, with no network access.
+Rollback: revoke only the affected producer SSH key/account or disable its API
+policy; preserve queue, artifacts and publication receipts for reconciliation.
