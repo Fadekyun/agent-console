@@ -186,8 +186,13 @@ atomically renamed before a receipt refers to it. Existing cache objects are
 revalidated before a stage response can report completion.
 
 Heartbeats every 15 seconds; at 60 seconds without one, a checkpoint-capable
-adapter receives SIGUSR1. At 90 seconds systemd stops its whole cgroup (10 second
-kill grace), ahead of the central 120-second lease. A new daemon boot stops old
+adapter receives SIGUSR1. The independent Python watchdog begins stopping at
+75 seconds, with a five-second kill grace. A separate root-owned systemd timer
+kills the exact job cgroup after 80 seconds without a renewed heartbeat, even
+if the daemon stalls. Both paths must prove termination within 90 seconds,
+ahead of the central 120-second lease. Job code cannot renew the timer. RPC
+input has a total deadline, and transfers do not own the watchdog state lock.
+A new daemon boot stops old
 units and records unknown outcomes. Generation fences survive restart. Duplicate
 starts return the stored receipt. Unknown external writes require readback and
 operator reconciliation; termination proof does not prove a write never occurred.
@@ -221,9 +226,11 @@ output. Acknowledged build scratch is reclaimed immediately.
 `qualify-native.sh` is an operator-only qualification script for the installed
 worker core. Run it through `Setup-Worker.ps1` with a reviewed SHA and a 360-second
 timeout after toolchain work finishes. It requires the production worker held
-and drained, creates its own registry/state and cgroup slice, and runs four jobs
+and drained, creates its own registry/state and cgroup slice, and runs five jobs
 sequentially: success/duplicate, real 64 MiB OOM, timeout with a child process,
-and real 90-second lease loss with checkpoint and unknown-write classification.
+lease loss with checkpoint and unknown-write classification, and a separate
+timer case with the Python watchdog deliberately idle. The latter two require
+actual whole-group termination within the 90-second budget.
 The adapter is local and harmless; the write flag only exercises classification.
 Jobs use at most 128 MiB/one CPU and the test slice 256 MiB/one CPU. It permits
 only the missing policy-verification marker and skips the isolated instance's
@@ -253,7 +260,7 @@ The coordinator serializes this operation with other heavy work; do not put
 credentials in setup scripts or their logs. No shell operation is added to the
 worker's public SSH/RPC protocol. This helper cannot restart staff WSL.
 
-Only the exact `bushi.run` registry entry may set
+Only the exact `bushi.run` or dedicated `bushi.emergency` registry entry may set
 `credential_ids:["agc-bushi-organizer-state.json"]`. Its source must be a regular
 root-owned file under root-only `/etc/agc-worker/credentials/`, mode0600 and at
 most1MiB. systemd `LoadCredential` makes a private read-only copy for that unit;
@@ -279,3 +286,50 @@ inspection and refuses an automatic restart. Reconcile that incomplete directory
 before an explicit retry; never remove an installed root or its receipt to retry.
 `check-installation.sh` reads the guest limits and cgroup configuration. Live
 workload/interruption qualification is still required before admission.
+
+## CT102 emergency policy
+
+`emergency_worker.py` selects a separate root-installed policy and state/socket
+directories. It reuses the binding, receipt, cgroup termination, artifact and
+unknown-outcome behavior of `worker.py`. A job cannot select this policy itself.
+The initial capability is only `bushi.emergency` paid participation: an explicit
+urgent deadline within 20 minutes, canonical paid-order UUID, and exact
+installed source revision/archive are mandatory. A supplied business key must
+match that order; the central queue independently derives the same claim when
+it is omitted. No input archive or uploaded
+source is accepted. The fixed wrapper and dedicated organizer credential remain
+root controlled. The adapter also checks the absolute deadline before submission.
+
+`install-emergency.sh <worker-source-dir> <reviewed-source-tar> <tar-sha256>
+<git-revision> <dedicated-public-key-file> <dedicated-credential-file>` requires
+root in CT102 (`bushi-automation`), an already installed reviewed adapter closure with
+`.agc-worker-reviewed.json` containing `source_sha` and `wrapper_sha256`, and a
+verified cgroup memory ceiling no greater than 2 GiB. It installs no packages and
+does not touch existing Bushi timers. The installer refuses unmanaged worker
+accounts and existing enabled/active emergency policy. It creates only its
+dedicated account, forced SSH dispatcher, systemd units, tmpfs and configuration.
+SSH is limited to CT115's direct LAN source `192.168.1.115`, its dedicated key,
+and fixed JSON RPC on the existing SSH port. Existing incompatible SSH access
+rules cause installation to stop for operator review; no allowlist is widened.
+
+The browser job has a 1 GiB RAM ceiling, zero swap, 50% CPU and at most 20 minutes
+or its remaining deadline. The workspace/output mount is a 512 MiB tmpfs.
+An aggregate slice caps browser plus supervisor CPU at 50% and RAM at 1280 MiB.
+The durable receipts and verified output objects remain outside scratch.
+Central host samples arrive through the fixed `host-sample` RPC every 15 seconds;
+all fields are validated and samples older than 30 seconds or more than 5 seconds
+in the future are refused. Local cgroup memory and scratch are sampled separately.
+Start needs at least 4 GiB N100 available RAM and 512 MiB guest reserve after the
+job reservation. Running work stops on N100 RAM below 2 GiB, memory full PSI >=1,
+I/O some PSI >=10, thin-pool data >=80%, metadata >=70%, stale samples, or local
+guest/scratch pressure. This policy runs on any day and never starts the laptop.
+
+Installation leaves both `/etc/bushi-emergency/hold` and `policy.json` enabled=false.
+Root must qualify the actual CT102 cgroup/source/credential behavior and global
+organizer fence before explicitly enabling and removing the hold. The central
+queue independently requires warmup and headroom. For rollback, hold the queue,
+create the local hold, set enabled=false, stop `bushi-emergency-jobs.slice` and
+`bushi-emergency.service`, then disable only that service. Preserve unknown
+receipts, source and output objects until explicit outcome reconciliation; do
+not unmount/delete scratch with an active or uncertain job. No live CT102
+qualification is implied by the source tests.
