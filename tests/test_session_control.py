@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from agent_console.config import Settings
 from agent_console.database import Database
 from agent_console.inspection import InspectionUnavailable
+from agent_console.profiles import PROFILE_SCHEMA
 from agent_console.session_control import SessionControl, validate_child
 from agent_console.session_control_api import session_control_routes
 from agent_console import cli
@@ -183,13 +184,44 @@ class SessionControlTests(unittest.TestCase):
                     if command == 'kill':
                         self.assertFalse(mock.call_args.kwargs['allow_unmanaged'])
 
-    def test_mutation_boundaries_remain_enforced_with_global_visibility(self):
+    def test_all_roles_can_control_same_tree_across_projects(self):
+        with self.db.connect() as db:
+            db.execute("UPDATE sessions SET parent_session_id='parent' WHERE id='peer'")
+            db.execute("UPDATE sessions SET parent_session_id='peer' WHERE id='other'")
+        for profile in PROFILE_SCHEMA:
+            for mode in (None, 'plan'):
+                with self.db.connect() as db:
+                    db.execute("UPDATE sessions SET profile=?,agent_mode=? WHERE id='child'", (profile,mode))
+                # Parent, sibling, and sibling's child (in another project).
+                for target in ('parent','peer','other'):
+                    for command, method in [('attention','set_attention'), ('interrupt','interrupt'),
+                                            ('restart-agent','restart'), ('kill','kill')]:
+                        with self.subTest(profile=profile, mode=mode, target=target, command=command):
+                            mock = getattr(self.manager, method)
+                            mock.reset_mock()
+                            response = self.request(command, {'name':target,'state':'ready_for_review'}, identity='child')
+                            self.assertEqual(response.status_code,200,response.text)
+                            self.assertEqual(mock.call_args.args,(target,))
+                            self.assertEqual(mock.call_args.kwargs['session_id'],target)
+
+    def test_cousins_can_control_each_other_by_id_after_rename_and_name_reuse(self):
+        with self.db.connect() as db:
+            db.execute("UPDATE sessions SET parent_session_id='parent' WHERE id='peer'")
+            db.execute("UPDATE sessions SET parent_session_id='peer',tmux_name='renamed-other' WHERE id='other'")
+            db.execute("INSERT INTO sessions(id,tmux_name,parent_session_id,profile,tool,managed,created_at,status,evidence_capability_hash) VALUES('cousin','cousin-name','child','reviewer','codex',1,'2026-10-10','detached',?)",
+                       (hashlib.sha256(b'cousin-cap').hexdigest(),))
+            db.execute("UPDATE sessions SET tmux_name='other' WHERE id='parent'")
+        for caller, target, name in [('cousin','other','renamed-other'), ('other','cousin','cousin-name')]:
+            response = self.request('interrupt', {'name':target}, identity=caller)
+            self.assertEqual(response.status_code,200,response.text)
+            self.manager.interrupt.assert_called_with(name,session_id=target)
+
+    def test_other_tree_and_self_mutation_boundaries_remain_enforced(self):
         for profile, mode in [('reviewer',None), ('coder','plan'), ('coder','auto')]:
             with self.db.connect() as db:
                 db.execute("UPDATE sessions SET profile=?,agent_mode=? WHERE id='child'", (profile,mode))
-                db.execute("UPDATE sessions SET parent_session_id='parent' WHERE id='peer'")
-            targets = ['peer','other'] + (['parent'] if profile == 'reviewer' or mode == 'plan' else [])
-            for target in targets:
+            # Same-project peer and other-project peer are both separate roots.
+            for target in ('peer','other'):
                 for command in ('attention','interrupt','restart-agent','kill'):
                     with self.subTest(profile=profile, mode=mode, target=target, command=command):
                         response = self.request(command, {'name':target,'state':'ready_for_review'}, identity='child')
@@ -199,18 +231,20 @@ class SessionControlTests(unittest.TestCase):
         for method in ('set_attention','interrupt','restart','kill'):
             getattr(self.manager,method).assert_not_called()
 
-    def test_ancestor_controls_reject_noninteractive_unmanaged_and_cycles(self):
+    def test_tree_controls_reject_noninteractive_unmanaged_and_cycles(self):
         for update, status in [("managed=0",403), ("managed=1,execution_kind='integration-plan'",403),
                                ("execution_kind='interactive',parent_session_id='child'",400)]:
             with self.db.connect() as db:
                 db.execute('UPDATE sessions SET ' + update + " WHERE id='parent'")
-            for command in ('attention','interrupt','restart-agent','kill'):
+            for command in ('attention','interrupt','restart-agent','kill','children'):
                 response = self.request(command, {'name':'parent','state':'ready_for_review'}, identity='child')
                 self.assertEqual(response.status_code,status,response.text)
         for method in ('set_attention','interrupt','restart','kill'):
             getattr(self.manager,method).assert_not_called()
 
-    def test_child_waits_are_readable_across_projects_and_read_only_roles(self):
+    def test_child_waits_allow_same_tree_across_projects_and_read_only_roles(self):
+        with self.db.connect() as db:
+            db.execute("UPDATE sessions SET parent_session_id='parent' WHERE id IN ('peer','other')")
         for identity, profile, mode in [('peer','reviewer',None), ('other','coder','plan')]:
             with self.db.connect() as db:
                 db.execute('UPDATE sessions SET profile=?,agent_mode=? WHERE id=?', (profile,mode,identity))
@@ -218,9 +252,26 @@ class SessionControlTests(unittest.TestCase):
                 response = self.request('children', {'name':'parent',**selection}, identity=identity)
                 self.assertEqual(response.status_code,200,response.text)
                 self.assertEqual(response.json()['parent_id'],'parent')
-                self.assertEqual([child['id'] for child in response.json()['children']],['child'])
-            response = self.request('children', {'name':'parent','child_ids':['other']}, identity=identity)
+                expected = {'child'} if selection else {'child','peer','other'}
+                self.assertEqual({child['id'] for child in response.json()['children']},expected)
+            response = self.request('children', {'name':'child','child_ids':['other']}, identity=identity)
             self.assertEqual(response.status_code,403,response.text)
+
+    def test_child_waits_deny_other_trees_but_read_routes_still_work(self):
+        for identity in ('peer','other'):
+            for selection in ({}, {'child_selectors':['child']}, {'child_ids':['child']}):
+                response = self.request('children', {'name':'parent',**selection}, identity=identity)
+                self.assertEqual(response.status_code,403,response.text)
+                self.assertIn('same tree',response.json()['detail'])
+            response = self.request('read', {'route':['session','inspect'],'name':'parent'}, identity=identity)
+            self.assertEqual(response.status_code,200,response.text)
+
+    def test_controls_do_not_accept_terminal_or_environment_operations(self):
+        for command in ('send-keys','terminal-input','environment','release','archive'):
+            response = self.request(command, {'name':'child'})
+            self.assertEqual(response.status_code,400,response.text)
+        for method in ('set_attention','interrupt','restart','kill','delegate'):
+            getattr(self.manager,method).assert_not_called()
 
     def test_delegate_cannot_impersonate_parent(self):
         self.assertEqual(self.request('delegate',{'name':'peer','profile':'coder','task':'x'}).status_code,403)
