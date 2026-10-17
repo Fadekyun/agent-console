@@ -31,11 +31,14 @@ try {
     $running=@(Invoke-BoundedWsl -Arguments @('--list','--running','--quiet'))
     if ($running -contains 'AGC-Worker') {
         try {
-            Invoke-BoundedWsl -Arguments @('-d','AGC-Worker','-u','root','--exec','/usr/bin/touch','/etc/agc-worker/hold') -TimeoutSeconds 10 | Out-Null
-            Invoke-BoundedWsl -Arguments @('-d','AGC-Worker','-u','root','--exec','/usr/bin/timeout','25','/usr/bin/systemctl','stop','agc-worker-jobs.slice','agc-worker.service') -TimeoutSeconds 30 | Out-Null
-        } finally {
-            # This targets only the enrolled Windows user's worker distro.
+            # Do not use `wsl -d ... --exec` here: a concurrent watchdog stop
+            # after the running-list check could make that command restart WSL
+            # on a closed day. Direct termination can only stop this distro.
             Invoke-BoundedWsl -Arguments @('--terminate','AGC-Worker') -TimeoutSeconds 25 | Out-Null
+        } catch {
+            # A racing normal shutdown may make terminate report failure.
+            # Only the subsequent independent running-list check proves stop.
+            $result.terminate_command_error=$true
         }
     }
     $remaining=@(Invoke-BoundedWsl -Arguments @('--list','--running','--quiet'))

@@ -196,12 +196,13 @@ operator reconciliation; termination proof does not prove a write never occurred
 
 Hold/drain the central queue first. `Provision-Worker.ps1 -Phase Disable`
 disables the worker background/bootstrap/setup tasks, then runs a dedicated
-limited-account stop task. It stops the worker job/setup slice and supervisor,
-terminates only `AGC-Worker`, confirms the distro is absent from that user's
+limited-account stop task. It terminates only `AGC-Worker`, confirms the distro is absent from that user's
 running list, and only then disables the account. A failed or timed-out stop
 retains an unknown receipt and does not claim shutdown; the account stays
 enabled with automatic tasks disabled for operator recovery. The stop never
-starts a stopped distro, including on Monday/Tuesday. Distro, outputs, receipts
+starts a stopped distro, including on Monday/Tuesday: it uses direct termination
+and never `wsl -d --exec`, which could race a concurrent stop and restart WSL.
+Distro, outputs, receipts
 and staff settings remain intact. Central reservations still require outcome
 reconciliation; VM termination does not prove an external write failed. Do not unregister
 the distro or delete receipts while outcomes remain unknown. Quota enforcement

@@ -230,6 +230,9 @@ class ReceiptTests(unittest.TestCase):
             self.assertEqual(receipt["state"], "unknown")
             self.assertEqual(receipt["reason"], "external_write_unknown")
             self.assertTrue((instance.state / "objects" / result["inventory_artifact"]["sha256"]).exists())
+            (output / "response.json").write_text("[]")
+            with self.assertRaisesRegex(ValueError, "invalid_domain_receipt"):
+                instance.collect_result(receipt)
 
     @patch.object(worker, "schedule_open", return_value=True)
     def test_retained_success_receipt_is_durable_before_systemd_unit_release(self, _):

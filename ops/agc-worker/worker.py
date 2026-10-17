@@ -587,6 +587,8 @@ class Worker:
             if domain_response.stat().st_size > 1024**2:
                 raise ValueError("domain_receipt_limit")
             response = read_json(domain_response)
+            if not isinstance(response, dict):
+                raise ValueError("invalid_domain_receipt")
             if response.get("ok") is False and response.get("errorType") == "write_unknown":
                 receipt.update(state="unknown", reason="external_write_unknown")
         return {"manifest_sha256": digest, "manifest_size": len(data), "artifact_count": len(inventory),
