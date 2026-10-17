@@ -158,6 +158,25 @@ class ProducerBridgeTests(unittest.TestCase):
                 client.upload(filename)
             client.request.assert_called_once()  # never auto-retries ambiguous calls
 
+    def test_fetch_empty_object_requires_eof_and_exact_empty_digest(self):
+        empty = hashlib.sha256(b'').hexdigest()
+        client = object.__new__(bridge.ProducerClient)
+        response = {'status': 200, 'body': {'artifact_id': empty, 'offset': 0,
+                    'size': 0, 'data': '', 'eof': True}}
+        client.request = Mock(return_value=response)
+        with tempfile.TemporaryDirectory() as temp:
+            filename = Path(temp) / 'empty.log'
+            self.assertEqual(client.fetch('job', empty, filename)['body'], {'sha256': empty, 'size': 0})
+            self.assertEqual(filename.read_bytes(), b'')
+            filename.unlink()
+            response['body']['eof'] = False
+            with self.assertRaises(bridge.TransportError):
+                client.fetch('job', empty, filename)
+            response['body'].update(eof=True, artifact_id='a'*64)
+            with self.assertRaisesRegex(bridge.TransportError, 'digest mismatch'):
+                client.fetch('job', 'a'*64, filename)
+            self.assertEqual(list(Path(temp).iterdir()), [])
+
     def test_fetch_verified_atomic_no_overwrite_or_corrupt_partial(self):
         data = b'committed output'
         sha = hashlib.sha256(data).hexdigest()

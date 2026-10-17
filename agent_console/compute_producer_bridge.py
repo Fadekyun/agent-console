@@ -332,13 +332,14 @@ class ProducerClient:
                     body = result['body']
                     size = body.get('size')
                     if (body.get('artifact_id') != artifact_id or body.get('offset') != offset
-                            or type(size) is not int or not 0 < size <= MAX_ARTIFACT
+                            or type(size) is not int or not 0 <= size <= MAX_ARTIFACT
                             or (expected_size is not None and expected_size != size)
                             or type(body.get('eof')) is not bool):
                         raise TransportError('invalid artifact response')
                     expected_size = size
                     chunk = base64.b64decode(body['data'], validate=True)
-                    if not chunk or len(chunk) > CHUNK or offset + len(chunk) > size:
+                    empty_object = size == 0 and offset == 0 and body['eof']
+                    if (not chunk and not empty_object) or len(chunk) > CHUNK or offset + len(chunk) > size:
                         raise TransportError('invalid artifact chunk')
                     stream.write(chunk)
                     sha.update(chunk)
