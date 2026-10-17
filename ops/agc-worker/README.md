@@ -209,3 +209,29 @@ real workloads. The root coordinator owns those live checks and production
 cutovers. GPU execution remains unqualified. Automatic bulk cache retention is
 not yet implemented; full disks hold new work rather than discard unacknowledged
 output. Acknowledged build scratch is reclaimed immediately.
+
+## Operator setup and per-adapter credentials
+
+`Setup-Worker.ps1 -ScriptFile <reviewed-linux-script> -Sha256 <exact-hash>
+-Label <operation>` runs only from the existing Windows administrator context.
+It copies the reviewed script to administrator-owned storage and registers one
+hidden limited-account task. The task checks schedule/AC/headroom, holds new
+worker admissions, refuses an active job, verifies transferred bytes, and runs
+only inside `AGC-Worker` with systemd limits: 2 GiB RAM, zero swap, one CPU,
+low CPU/I/O weights, 256 tasks and a bounded timeout. Setup receipts and logs
+live under `data/setup-<label>-<hash>.*`. It leaves the local hold in place.
+The coordinator serializes this operation with other heavy work; do not put
+credentials in setup scripts or their logs. No shell operation is added to the
+worker's public SSH/RPC protocol. This helper cannot restart staff WSL.
+
+Only the exact `bushi.run` registry entry may set
+`credential_ids:["agc-bushi-organizer-state.json"]`. Its source must be a regular
+root-owned file under root-only `/etc/agc-worker/credentials/`, mode0600 and at
+most1MiB. systemd `LoadCredential` makes a private read-only copy for that unit;
+the wrapper validates the trusted `CREDENTIALS_DIRECTORY` and fixed filename.
+systemd can retain root ownership and grant the job UID read access via ACL, so
+0440/0550 ACL-mask modes are legitimate; world access and nonowner write remain
+forbidden. General builds receive no organizer credential. A Bushi domain
+`write_unknown` result becomes an unknown worker receipt even if its process
+exited successfully; artifacts remain available for reconciliation and cannot
+be acknowledged for automatic cleanup.

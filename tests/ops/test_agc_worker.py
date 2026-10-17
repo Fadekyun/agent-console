@@ -103,6 +103,13 @@ class ValidationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 worker.toolchain_properties({"root_directory": root}, Path("/tmp/job"))
 
+    def test_credential_identity_cannot_be_requested_by_builds(self):
+        self.assertEqual(worker.credential_properties("agc.build", {}), {})
+        with self.assertRaises(ValueError):
+            worker.credential_properties("agc.build", {"credential_ids": ["agc-bushi-organizer-state.json"]})
+        with self.assertRaises(ValueError):
+            worker.credential_properties("bushi.run", {"credential_ids": ["../../staff-browser"]})
+
 
 class ReceiptTests(unittest.TestCase):
     def make_worker(self, tmp):
@@ -209,6 +216,19 @@ class ReceiptTests(unittest.TestCase):
             instance.persist(receipt)
             with self.assertRaises(ValueError):
                 instance.acknowledge({**binding, "inventory_sha256": "e" * 64})
+
+    def test_external_write_ambiguity_is_not_a_completed_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = self.make_worker(tmp)
+            binding = {**worker.validate_binding(request()), "kind": "bushi.run"}
+            receipt = {**binding, "state": "succeeded", "termination_confirmed": True, "production_writes": True}
+            output = instance.state / "jobs" / instance.key(binding) / "output"
+            output.mkdir(parents=True)
+            (output / "response.json").write_text(json.dumps({"ok": False, "errorType": "write_unknown"}))
+            result = instance.collect_result(receipt)
+            self.assertEqual(receipt["state"], "unknown")
+            self.assertEqual(receipt["reason"], "external_write_unknown")
+            self.assertTrue((instance.state / "objects" / result["inventory_artifact"]["sha256"]).exists())
 
 
 if __name__ == "__main__":

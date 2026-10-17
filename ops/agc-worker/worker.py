@@ -184,6 +184,22 @@ def toolchain_properties(adapter, job):
             "BindPaths": str(job / "workspace") + " " + str(job / "output")}
 
 
+def credential_properties(kind, adapter):
+    ids = adapter.get("credential_ids", [])
+    if not ids:
+        return {}
+    if kind != "bushi.run" or ids != ["agc-bushi-organizer-state.json"]:
+        raise ValueError("credential_not_allowed_for_adapter")
+    parent = Path("/etc/agc-worker/credentials")
+    source = parent / ids[0]
+    info, directory = source.lstat(), parent.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077
+            or not 0 < info.st_size <= 1024**2 or not stat.S_ISDIR(directory.st_mode)
+            or directory.st_uid != 0 or directory.st_mode & 0o077):
+        raise ValueError("credential_source_not_private")
+    return {"LoadCredential": ids[0] + ":" + str(source)}
+
+
 def extract_archive(archive, target, max_bytes=40_000_000_000):
     """No links, special files, path aliases, overwrite or compression bombs."""
     target = Path(target)
@@ -420,6 +436,7 @@ class Worker:
                                                   "PLAYWRIGHT_BROWSERS_PATH=/usr/local/lib/agc-worker-adapters/browsers")),
                       "UnsetEnvironment": "DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS SSH_AUTH_SOCK"}
         properties.update(toolchain_properties(adapter, job))
+        properties.update(credential_properties(binding["kind"], adapter))
         command = ["systemd-run", "--quiet", "--unit=" + unit, "--service-type=exec", "--uid=agcjob"]
         command += ["--property=" + key + "=" + value for key, value in properties.items()]
         command += ["--", *argv, "--manifest", str(manifest_path), "--workspace", str(work), "--output", str(output)]
@@ -542,6 +559,13 @@ class Worker:
         checkpoints = [entry for entry in inventory if entry["path"] == "checkpoint.json"]
         if checkpoints:
             receipt["checkpoint_sha256"] = checkpoints[0]["sha256"]
+        domain_response = output / "response.json"
+        if receipt["kind"] == "bushi.run" and receipt["production_writes"] and domain_response.is_file():
+            if domain_response.stat().st_size > 1024**2:
+                raise ValueError("domain_receipt_limit")
+            response = read_json(domain_response)
+            if response.get("ok") is False and response.get("errorType") == "write_unknown":
+                receipt.update(state="unknown", reason="external_write_unknown")
         return {"manifest_sha256": digest, "manifest_size": len(data), "artifact_count": len(inventory),
                 "artifacts": [{"sha256": digest, "size": len(data)}],
                 "inventory_artifact": {"sha256": digest, "size": len(data)}}
