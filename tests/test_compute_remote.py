@@ -461,32 +461,26 @@ class OrganizerFenceTests(unittest.TestCase):
     enqueue = RemoteTests.enqueue
 
     def test_cross_host_named_reservation_survives_unknown_until_termination(self):
-        from dataclasses import replace
-        from agent_console import compute_policy, compute_queue
-        self.assertFalse(compute_policy.PROFILES['bushi.emergency'].enabled)
+        from test_compute_emergency import emergency_manifest, emergency_telemetry
         job=self.enqueue(kind='bushi.run')
         laptop_attempt=self.queue.reserve(laptop())
         self.assertEqual(self.queue.status()['resource_reservations'],[
             {'resource':'bushi-organizer','attempt_id':laptop_attempt['id']}])
         emergency=self.queue.enqueue(kind='bushi.emergency',execution_target='n100',
-            source_digest='c'*64,input_digest='d'*64,request_key='emergency',actor='owner')
-        future_profiles=dict(compute_policy.PROFILES)
-        future_profiles['bushi.emergency']=replace(future_profiles['bushi.emergency'],enabled=True)
-        telemetry={**healthy(self.now),'guest_id':'lxc-102','guest_available_bytes':2*GiB}
-        # Simulate later qualified fallback policy without enabling any adapter
-        # in production; this exercises the cross-host SQL reservation itself.
-        with patch.object(compute_policy,'PROFILES',future_profiles), patch.object(compute_queue,'PROFILES',future_profiles):
-            self.assertIsNone(self.queue.reserve(telemetry))
-            self.assertEqual(self.queue.inspect(emergency['id'])['reason'],'shared_resource_reserved')
-            self.now+=121
-            self.queue.expire()
-            self.assertEqual(len(self.queue.status()['resource_reservations']),1)
-            self.queue.reconcile_terminated(laptop_attempt['id'],evidence='exact worker cgroup confirmed empty',actor='owner')
-            telemetry.update(sampled_at=self.now,healthy_since=self.now-300)
-            attempt=self.queue.reserve(telemetry)
-            self.assertEqual(attempt['job_id'],emergency['id'])
-            self.queue.finish(attempt['id'],attempt['generation'],failure='adapter_failed')
-            self.assertEqual(self.queue.status()['resource_reservations'],[])
+            source_digest=SHA,input_digest='b'*64,request_key='emergency',actor='owner',
+            manifest=emergency_manifest(self.now), priority=90, deadline=int(self.now+900))
+        telemetry=emergency_telemetry(self.now)
+        self.assertIsNone(self.queue.reserve(telemetry))
+        self.assertEqual(self.queue.inspect(emergency['id'])['reason'],'shared_resource_reserved')
+        self.now+=121
+        self.queue.expire()
+        self.assertEqual(len(self.queue.status()['resource_reservations']),1)
+        self.queue.reconcile_terminated(laptop_attempt['id'],evidence='exact worker cgroup confirmed empty',actor='owner')
+        telemetry.update(sampled_at=self.now,healthy_since=self.now-300)
+        attempt=self.queue.reserve(telemetry)
+        self.assertEqual(attempt['job_id'],emergency['id'])
+        self.queue.finish(attempt['id'],attempt['generation'],failure='adapter_failed')
+        self.assertEqual(self.queue.status()['resource_reservations'],[])
 
 
 class ExternalOutcomeFenceTests(unittest.TestCase):

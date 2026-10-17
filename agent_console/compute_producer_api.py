@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import Field
 
 from .compute_api import ComputeRequest, ComputeRoute, JobRequest
-from .compute_manifest import digest
+from .compute_manifest import digest, business_key
 from .compute_publication import ComputePublications
 from .compute_retention import ComputeRetention
 from .compute_transport import trusted_json
@@ -110,13 +110,18 @@ def producer_routes(engine_callable, *, config_loader=configured_producers):
     def enqueue(payload: JobRequest, producer=Depends(authenticate)):
         policy = producer.policy
         if (payload.kind not in policy.get('kinds', [])
-                or payload.execution_target != 'agc-laptop'
+                or payload.execution_target != ('n100' if payload.kind == 'bushi.emergency' else 'agc-laptop')
                 or not payload.request_key.startswith(policy.get('request_prefix', producer.name + ':'))
                 or payload.priority > policy.get('max_priority', 0)
                 or payload.manifest is None):
             raise PermissionError('job is outside producer scope')
         if payload.manifest.get('production_writes') and policy.get('allow_production_writes') is not True:
             raise PermissionError('producer cannot authorize production writes')
+        if payload.kind == 'bushi.emergency' and policy.get('allow_emergency') is not True:
+            raise PermissionError('producer cannot authorize emergency execution')
+        claim = business_key(payload.manifest)
+        if claim and 'agc:paid-participation' not in policy.get('business_key_namespaces', []):
+            raise PermissionError('producer cannot claim this business namespace')
         engine = engine_callable()
         for key in ('source_artifact', 'inputs_artifact'):
             if key in payload.manifest and not engine.artifacts.has(payload.manifest[key]):

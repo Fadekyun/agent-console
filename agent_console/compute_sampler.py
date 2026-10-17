@@ -375,3 +375,89 @@ class LaptopSampler:
             self.healthy_since = self.last_sample = None
             value['online'] = False
         return value
+
+
+# Fixed read-only CT102 volume probe, distinct from CT115's local report pool.
+# A changed storage mapping fails closed until independently qualified.
+_EMERGENCY_HOST_SCRIPT = _HOST_SCRIPT.replace("'115'", "'102'").replace(
+    'vm-115-disk-0', 'vm-102-disk-0').replace(
+    "if config.get('hostname') != 'agent-console-staging': raise ValueError('guest identity')",
+    "if config.get('hostname') != 'bushi-automation': raise ValueError('guest identity')")
+EMERGENCY_HOST_PROBE_COMMAND = (*HOST_PROBE_COMMAND[:-1],
+    '/usr/bin/python3 -c ' + shlex.quote(_EMERGENCY_HOST_SCRIPT))
+
+
+class EmergencySampler:
+    """Independent N100 observation plus authenticated, locally measured CT102."""
+    def __init__(self, worker, *, transport=_transport, resource_snapshot=None):
+        self.worker, self._transport = worker, transport
+        self._resource_snapshot = ((os.getenv('AGENT_CONSOLE_RESOURCE_SNAPSHOT') or DEFAULT_RESOURCE_SNAPSHOT)
+                                   if resource_snapshot is None else resource_snapshot)
+        self.healthy_since = self.last_sample = self.boot_id = None
+
+    def sample(self, *, enabled, operator_hold, now):
+        from .compute_manifest import artifact
+        from .compute_policy import admission, HEALTHY_WINDOW_SECONDS
+        value = {'physical_host': 'n100', 'guest_id': 'lxc-102', 'enabled': enabled,
+                 'operator_hold': operator_hold, 'online': False, 'sampled_at': now}
+        gate = host_snapshot_gate(self._resource_snapshot, now) if enabled else None
+        if not enabled or gate:
+            self.healthy_since = self.last_sample = None
+            return {**value, 'readiness': gate or 'worker_disabled', **({'host_gate': gate} if gate else {})}
+        try:
+            raw = self._transport(EMERGENCY_HOST_PROBE_COMMAND, PROBE_TIMEOUT_SECONDS)
+            if not isinstance(raw, str) or len(raw.encode()) > MAX_PROBE_BYTES:
+                raise ProbeError('invalid_host_sample')
+            host = json.loads(raw)
+            for key in ('host_cpu_count', 'host_memory_total_bytes', 'guest_limit_bytes'):
+                _number(host[key], positive=True)
+            _number(host['host_available_bytes'], maximum=host['host_memory_total_bytes'])
+            if host['host_cpu_count'] % 1 or not GIB <= host['guest_limit_bytes'] <= 2 * GIB:
+                raise ProbeError('invalid_host_sample')
+            for key in ('memory_full_avg60', 'io_some_avg60', 'thinpool_data_percent', 'thinpool_metadata_percent'):
+                _number(host[key], maximum=100)
+            sample = {'observed_at': now, 'physical_host': 'n100',
+                      'memory_total_bytes': host['host_memory_total_bytes'],
+                      'memory_available_bytes': host['host_available_bytes'],
+                      'cpu_count': host['host_cpu_count'],
+                      'ct102_memory_limit_bytes': host['guest_limit_bytes'],
+                      **{key: host[key] for key in ('memory_full_avg60', 'io_some_avg60',
+                         'thinpool_data_percent', 'thinpool_metadata_percent')}}
+            self.worker.call('host-sample', sample=sample)
+            response = self.worker.call('status')
+            telemetry = response['telemetry']
+            if (response.get('worker_id') != 'bushi-emergency' or not isinstance(response.get('boot_id'), str)
+                    or not response['boot_id'] or not isinstance(telemetry, dict)
+                    or not -5 <= now - _number(telemetry['sampled_at']) <= 30
+                    or telemetry.get('guest_memory_limit_bytes') != host['guest_limit_bytes']):
+                raise ProbeError('invalid_worker_sample')
+            for key in ('guest_available_bytes', 'guest_disk_free_bytes'):
+                _number(telemetry[key])
+            if telemetry['guest_available_bytes'] > host['guest_limit_bytes']:
+                raise ProbeError('invalid_guest_headroom')
+            artifact(telemetry['installed_source_artifact'])
+            from re import fullmatch
+            if not isinstance(telemetry.get('installed_source_sha'), str) or not fullmatch(
+                    '[0-9a-f]{40}|[0-9a-f]{64}', telemetry['installed_source_sha']):
+                raise ProbeError('invalid_installed_source')
+            value.update({key: host[key] for key in ('host_cpu_count', 'host_memory_total_bytes',
+                'host_available_bytes', 'memory_full_avg60', 'io_some_avg60',
+                'thinpool_data_percent', 'thinpool_metadata_percent')})
+            value.update({key: telemetry.get(key) for key in ('guest_available_bytes',
+                'guest_memory_limit_bytes', 'guest_disk_free_bytes', 'policy_verified',
+                'installed_source_sha', 'installed_source_artifact')})
+            value.update(online=True, healthy_since=now-HEALTHY_WINDOW_SECONDS,
+                         capabilities=response.get('capabilities'),
+                         worker_ready=isinstance(response.get('admission'), dict)
+                            and response['admission'].get('ready') is True)
+            reason = admission('bushi.emergency', value, (), now)
+            if (reason or self.boot_id != response['boot_id'] or self.last_sample is None
+                    or not 0 <= now - self.last_sample <= 30):
+                self.healthy_since = None if reason else now
+            self.last_sample, self.boot_id = now, response['boot_id']
+            value['healthy_since'] = self.healthy_since if self.healthy_since is not None else now
+            value['readiness'] = reason or ('ready' if now-value['healthy_since'] >= HEALTHY_WINDOW_SECONDS else 'warming_up')
+        except (OSError, ValueError, TypeError, KeyError, StopIteration, subprocess.SubprocessError):
+            self.healthy_since = self.last_sample = None
+            value.update(online=False, readiness='telemetry_unavailable')
+        return value

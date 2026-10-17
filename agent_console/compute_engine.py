@@ -9,23 +9,26 @@ import time
 
 from .compute_artifacts import ComputeArtifacts, CHUNK_BYTES
 from .compute_manifest import artifact
-from .compute_policy import WORKERS, laptop_availability, laptop_schedule_reason
+from .compute_policy import WORKERS, admission, emergency_runtime_hold, laptop_availability, laptop_schedule_reason
 from .compute_queue import ComputeQueue
-from .compute_sampler import ComputeSampler, LaptopSampler, maintenance_report
-from .compute_transport import SSHWorker, WorkerUnavailable, binding, validate_binding
+from .compute_sampler import ComputeSampler, LaptopSampler, EmergencySampler, maintenance_report
+from .compute_transport import SSHWorker, EmergencySSHWorker, WorkerUnavailable, binding, validate_binding
 from .workflow_store import canonical
 
 log = logging.getLogger(__name__)
 
 
 class ComputeEngine:
-    def __init__(self, state_dir, *, enabled=False, sampler=None, clock=time.time, worker=None):
+    def __init__(self, state_dir, *, enabled=False, sampler=None, clock=time.time, worker=None, emergency_worker=None):
         self.queue = ComputeQueue(state_dir, clock=clock)
         self.enabled = enabled is True
         self.clock = clock
         self.sampler = sampler or ComputeSampler(filesystem_path=state_dir)
         self.worker = worker if worker is not None else SSHWorker.from_env()
         self.laptop_sampler = LaptopSampler(self.worker) if self.worker else None
+        self.emergency_worker = emergency_worker if emergency_worker is not None else EmergencySSHWorker.from_env()
+        self.emergency_sampler = EmergencySampler(self.emergency_worker) if self.emergency_worker else None
+        self.emergency_telemetry = None
         self.artifacts = ComputeArtifacts(state_dir)
         self._lock = threading.Lock()
         self.telemetry = None
@@ -43,9 +46,10 @@ class ComputeEngine:
             # Existing leases must be inspected/drained even under an owner hold;
             # holds prevent new starts, never silently abandon a running process.
             remote_result = self._remote_tick(held) if self.worker else None
+            emergency_result = self._emergency_tick(held) if self.emergency_worker else None
             attempt = self.queue.reserve(self.telemetry)
             if attempt is None:
-                return remote_result
+                return emergency_result or remote_result
             if json.loads(attempt['profile_json'])['name'] != 'maintenance.report':
                 raise ValueError('no verified local adapter for this profile')
             self.queue.heartbeat(attempt['id'], attempt['generation'])
@@ -87,6 +91,41 @@ class ComputeEngine:
             return self.queue.inspect(attempt['job_id'])
         return None
 
+    def _emergency_tick(self, held):
+        active = [a for a in self.queue.active_attempts('n100') if a['guest_id'] == 'lxc-102']
+        self.emergency_telemetry = self.emergency_sampler.sample(
+            enabled=self.enabled or bool(active), operator_hold=held or not self.enabled, now=self.clock())
+        self.emergency_telemetry['enabled'] = self.enabled
+        for attempt in active:
+            self._advance_safely(attempt, held=held)
+        self._acknowledge_archived(target='n100')
+        if not self.enabled or held:
+            return None
+        attempt = self.queue.reserve(self.emergency_telemetry)
+        if attempt:
+            self._advance_safely(attempt, held=False)
+            return self.queue.inspect(attempt['job_id'])
+        return None
+
+    def _advance_safely(self, attempt, *, held):
+        try:
+            self._advance(attempt, held=held)
+        except WorkerUnavailable:
+            pass
+        except (ValueError, KeyError, TypeError):
+            self.queue.mark_unknown(attempt['id'], reason='remote_protocol_invalid')
+
+    def _worker_for(self, attempt):
+        if attempt['physical_host'] == 'agc-laptop' and attempt['guest_id'] == 'AGC-Worker':
+            worker = self.worker
+        elif attempt['physical_host'] == 'n100' and attempt['guest_id'] == 'lxc-102':
+            worker = self.emergency_worker
+        else:
+            raise ValueError('no fixed remote adapter for attempt')
+        if worker is None:
+            raise WorkerUnavailable('worker_not_enrolled')
+        return worker
+
     def _upload(self, description, attempt, *, budget):
         artifact(description)
         if not self.artifacts.has(description):
@@ -94,7 +133,7 @@ class ComputeEngine:
         offset = 0
         while time.monotonic() < budget:
             chunk = self.artifacts.get(description['sha256'], offset=offset)
-            response = self.worker.call('stage', artifact_id=description['sha256'],
+            response = self._worker_for(attempt).call('stage', artifact_id=description['sha256'],
                 offset=offset, data=chunk['data'], size=description['size'], final=chunk['eof'])
             next_offset = response.get('offset')
             if type(next_offset) is not int or not 0 <= next_offset <= description['size']:
@@ -117,7 +156,7 @@ class ComputeEngine:
             return True
         offset = self.artifacts.offset(description)
         while time.monotonic() < budget:
-            response = self.worker.call('fetch', artifact_id=description['sha256'], offset=offset, length=CHUNK_BYTES)
+            response = self._worker_for(attempt).call('fetch', artifact_id=description['sha256'], offset=offset, length=CHUNK_BYTES)
             if (response.get('artifact_id') != description['sha256'] or response.get('offset') != offset
                     or response.get('size') != description['size']):
                 raise ValueError('artifact response mismatch')
@@ -134,11 +173,22 @@ class ComputeEngine:
         job = self.queue.inspect(attempt['job_id'])
         expected = binding(job, attempt)
         manifest = json.loads(job['manifest_json'])
+        worker = self._worker_for(attempt)
+        emergency = job['kind'] == 'bushi.emergency'
         # Only the process that durably claims start can send it. A lost start
         # acknowledgement is inspected, never resent (including after restart).
         if attempt['remote_start_sent_at'] is None and attempt['state'] != 'unknown':
             if held or not self.enabled:
                 return
+            if emergency:
+                if self.clock() >= job['deadline'] - 30:
+                    # No start was sent, so there is no external write ambiguity.
+                    self.queue.finish(attempt['id'], attempt['generation'], failure='adapter_failed')
+                    return
+                if (admission('bushi.emergency', self.emergency_telemetry, (), self.clock())
+                        or self.emergency_telemetry.get('installed_source_sha') != manifest['source_sha']
+                        or self.emergency_telemetry.get('installed_source_artifact') != manifest['source_artifact']):
+                    return
             self.queue.heartbeat(attempt['id'], attempt['generation'])
             budget = time.monotonic() + 5
             for description in [manifest['source_artifact']] + ([manifest['inputs_artifact']] if 'inputs_artifact' in manifest else []):
@@ -146,9 +196,9 @@ class ComputeEngine:
                     return
             if not self.queue.claim_remote_start(attempt['id'], attempt['generation']):
                 return
-            response = self.worker.call('start', **expected, manifest=manifest)
+            response = worker.call('start', **expected, manifest=manifest)
         else:
-            response = self.worker.call('inspect', **expected)
+            response = worker.call('inspect', **expected)
         validate_binding(response, expected)
         state = response.get('state')
         terminated = response.get('termination_confirmed') is True
@@ -189,10 +239,12 @@ class ComputeEngine:
         if state not in {'starting', 'running', 'checkpointing', 'stopping'} or terminated:
             self.queue.mark_unknown(attempt['id'], reason='remote_state_uncertain')
             return
-        if held or not self.enabled or laptop_schedule_reason(self.clock()) or self.clock() >= attempt['started_at'] + json.loads(attempt['profile_json'])['timeout_seconds'] - 30:
-            self.worker.call('stop', **expected)
+        stop = (emergency_runtime_hold(self.emergency_telemetry, self.clock())
+                or self.clock() >= job['deadline'] - 30) if emergency else laptop_schedule_reason(self.clock())
+        if held or not self.enabled or stop or self.clock() >= attempt['started_at'] + json.loads(attempt['profile_json'])['timeout_seconds'] - 30:
+            worker.call('stop', **expected)
             return
-        heartbeat = self.worker.call('heartbeat', **expected)
+        heartbeat = worker.call('heartbeat', **expected)
         validate_binding(heartbeat, expected)
         self.queue.heartbeat(attempt['id'], attempt['generation'],
                              checkpoint_digest=heartbeat.get('checkpoint_sha256'))
@@ -212,12 +264,14 @@ class ComputeEngine:
                 return False
         return True
 
-    def _acknowledge_archived(self):
-        for attempt in self.queue.pending_remote_acks()[:1]:
+    def _acknowledge_archived(self, target='agc-laptop'):
+        # A scheduled-off laptop must not starve CT102 acknowledgements.
+        attempts = self.queue.pending_remote_acks(physical_host=target)
+        for attempt in attempts[:1]:
             try:
                 job = self.queue.inspect(attempt['job_id'])
                 expected = binding(job, attempt)
-                response = self.worker.call('ack', **expected, inventory_sha256=attempt['inventory_digest'])
+                response = self._worker_for(attempt).call('ack', **expected, inventory_sha256=attempt['inventory_digest'])
                 validate_binding(response, expected)
                 if response.get('acknowledged') is not True:
                     raise ValueError('worker archive not acknowledged')
@@ -272,10 +326,15 @@ class ComputeEngine:
                 value['enabled'] = self.enabled
                 value['availability'] = ('worker_disabled' if not self.enabled else
                                          'operator_hold' if held else 'requires_fresh_admission')
+            elif worker.worker_id == 'bushi-emergency':
+                value['enabled'] = self.enabled and self.emergency_worker is not None
+                value['availability'] = ((self.emergency_telemetry or {}).get('readiness')
+                    or ('requires_fresh_admission' if value['enabled'] else 'worker_disabled'))
             else:
                 value['enabled'] = self.enabled and self.worker is not None
                 value['availability'] = ((self.laptop_telemetry or {}).get('readiness') or
                                          laptop_availability(self.clock()))
             workers.append(value)
         return {**self.queue.status(), 'enabled': self.enabled, 'held': held,
-                'workers': workers, 'telemetry': self.telemetry, 'laptop_telemetry': self.laptop_telemetry}
+                'workers': workers, 'telemetry': self.telemetry, 'laptop_telemetry': self.laptop_telemetry,
+                'emergency_telemetry': self.emergency_telemetry}

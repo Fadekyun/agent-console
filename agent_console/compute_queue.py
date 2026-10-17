@@ -12,7 +12,7 @@ import re
 import time
 
 from .compute_policy import PROFILES, admission
-from .compute_manifest import validate_manifest
+from .compute_manifest import validate_manifest, business_key, validate_emergency
 from .workflow_store import WorkflowStore, bounded_text, canonical, identifier
 
 LEASE_SECONDS = 120
@@ -27,7 +27,7 @@ class ComputeQueue:
         with self.store.connect(write=True) as db:
             db.execute('CREATE TABLE IF NOT EXISTS compute_schema(version INTEGER NOT NULL)')
             row = db.execute('SELECT version FROM compute_schema').fetchone()
-            if row and row[0] not in (1, 2, 3):
+            if row and row[0] not in (1, 2, 3, 4):
                 raise ValueError('unsupported compute schema; preserve state')
             if not row:
                 db.execute('INSERT INTO compute_schema VALUES(1)')
@@ -74,7 +74,18 @@ class ComputeQueue:
                     db.execute(f'ALTER TABLE compute_attempts ADD COLUMN {name} {definition}')
             db.execute('CREATE TABLE IF NOT EXISTS compute_resource_reservations(resource TEXT PRIMARY KEY, attempt_id TEXT NOT NULL REFERENCES compute_attempts(id))')
             db.execute('CREATE TABLE IF NOT EXISTS compute_remote_acks(attempt_id TEXT PRIMARY KEY REFERENCES compute_attempts(id), inventory_digest TEXT NOT NULL, acknowledged_at REAL)')
-            db.execute('UPDATE compute_schema SET version=3')
+            db.execute('CREATE TABLE IF NOT EXISTS compute_business_claims(business_key TEXT PRIMARY KEY, job_id TEXT UNIQUE NOT NULL REFERENCES compute_jobs(id))')
+            if not row or row[0] < 4:
+                # Claims survive completion/cancellation and migration. Never let
+                # an older laptop request acquire a second business identity on N100.
+                for job in db.execute("SELECT id,manifest_json FROM compute_jobs WHERE manifest_json IS NOT NULL"):
+                    claim = business_key(json.loads(job['manifest_json']))
+                    if claim:
+                        previous = db.execute('SELECT job_id FROM compute_business_claims WHERE business_key=?', (claim,)).fetchone()
+                        if previous and previous['job_id'] != job['id']:
+                            raise ValueError('historical paid business claims conflict; owner reconciliation required')
+                        db.execute('INSERT OR IGNORE INTO compute_business_claims VALUES(?,?)', (claim, job['id']))
+            db.execute('UPDATE compute_schema SET version=4')
             db.execute('INSERT OR IGNORE INTO compute_control VALUES(1,1)')
 
     def held(self):
@@ -135,6 +146,7 @@ class ComputeQueue:
         if manifest is not None or dependencies or priority or not_before is not None or deadline is not None:
             spec.update(manifest_digest=manifest_digest, dependencies=dependencies,
                         priority=priority, not_before=not_before, deadline=deadline)
+        claim = business_key(manifest) if manifest is not None else None
         spec_hash = hashlib.sha256(canonical(spec).encode()).hexdigest()
         with self.store.connect(write=True) as db:
             prior = db.execute('SELECT * FROM compute_jobs WHERE request_key=?', (request_key,)).fetchone()
@@ -144,6 +156,10 @@ class ComputeQueue:
                 if prior['spec_hash'] != spec_hash:
                     raise ValueError('request key already identifies a different immutable job')
                 return dict(prior)
+            if kind == 'bushi.emergency':
+                validate_emergency(manifest, priority=priority, deadline=deadline, now=self.clock())
+            if claim and db.execute('SELECT job_id FROM compute_business_claims WHERE business_key=?', (claim,)).fetchone():
+                raise ValueError('business action already has an immutable request on another target or attempt')
             for dependency in dependencies:
                 prior_dependency = db.execute('SELECT actor FROM compute_jobs WHERE id=?', (dependency,)).fetchone()
                 if prior_dependency is None:
@@ -156,6 +172,8 @@ class ComputeQueue:
                 (job_id, kind, execution_target, source_digest, input_digest, request_key, spec_hash, actor, now, now))
             db.execute('UPDATE compute_jobs SET manifest_json=?,manifest_digest=?,dependencies_json=?,priority=?,not_before=?,deadline=? WHERE id=?',
                        (encoded, manifest_digest, canonical(dependencies), priority, not_before, deadline, job_id))
+            if claim:
+                db.execute('INSERT INTO compute_business_claims VALUES(?,?)', (claim, job_id))
             self._event(db, 'queued', job_id, spec, actor)
             return dict(db.execute('SELECT * FROM compute_jobs WHERE id=?', (job_id,)).fetchone())
 
@@ -206,6 +224,8 @@ class ComputeQueue:
                     AND execution_target=? ORDER BY priority DESC, deadline IS NULL, deadline,
                     created_at,id LIMIT 100""", (target,)).fetchall():
                 profile = PROFILES[job['kind']]
+                if profile.guest_id != telemetry.get('guest_id'):
+                    continue
                 reason = None
                 if job['deadline'] is not None and now >= job['deadline']:
                     reason = 'deadline_passed_requires_review'
@@ -217,6 +237,11 @@ class ComputeQueue:
                     dep = db.execute('SELECT state FROM compute_jobs WHERE id=?', (dependency,)).fetchone()
                     if dep is None or dep['state'] != 'completed':
                         reason = reason or 'dependency_not_completed'
+                if job['kind'] == 'bushi.emergency':
+                    manifest = json.loads(job['manifest_json']) if job['manifest_json'] else {}
+                    if (telemetry.get('installed_source_sha') != manifest.get('source_sha')
+                            or telemetry.get('installed_source_artifact') != manifest.get('source_artifact')):
+                        reason = reason or 'emergency_source_not_qualified'
                 reason = reason or admission(profile, telemetry, reservations, now)
                 if not reason and any(db.execute('SELECT attempt_id FROM compute_resource_reservations WHERE resource=?', (resource,)).fetchone() for resource in profile.resources):
                     reason = 'shared_resource_reserved'
@@ -407,10 +432,10 @@ class ComputeQueue:
             return changed == 1
 
 
-    def pending_remote_acks(self):
+    def pending_remote_acks(self, physical_host=None):
         with self.store.connect() as db:
             return [dict(row) for row in db.execute(
-                'SELECT a.*,k.inventory_digest FROM compute_remote_acks k JOIN compute_attempts a ON a.id=k.attempt_id WHERE k.acknowledged_at IS NULL LIMIT 10')]
+                'SELECT a.*,k.inventory_digest FROM compute_remote_acks k JOIN compute_attempts a ON a.id=k.attempt_id WHERE k.acknowledged_at IS NULL AND (? IS NULL OR a.physical_host=?) LIMIT 10', (physical_host, physical_host))]
 
     def confirm_remote_ack(self, attempt_id):
         with self.store.connect(write=True) as db:

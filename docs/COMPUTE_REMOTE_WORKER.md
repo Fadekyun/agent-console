@@ -77,8 +77,9 @@ visible as `deadline_passed_requires_review`; they never silently execute late.
 Request keys identify immutable jobs, including scheduling fields and manifests.
 
 Profiles are `yuyutei.collect`, `yuyutei.parse`, `agc.build`, `agc.test`, `tv.build`,
-`points.weekly`, `points.player_events`, and `bushi.run`. A disabled `bushi.emergency` profile describes the future bounded
-N100/CT102 fallback; no executable emergency adapter is enabled by this change.
+`points.weekly`, `points.player_events`, and `bushi.run`. The separately enrolled
+`bushi.emergency` profile supports explicit urgent paid participation on CT102
+only after the qualification described below; it has no implicit fallback.
 Both Bushi profiles require the same durable `bushi-organizer` named reservation,
 acquired atomically with the physical-host reservation and retained for unknown
 attempts until termination is reconciled. Local flocks alone do not release this
@@ -264,3 +265,138 @@ is absent from the producer bridge and inaccessible to managed agents.
 Schema 3 prevents older queue code from ignoring the external fence after rollback.
 Tests cover transfer failure, restart, late success after lease loss, failed writes,
 ordinary termination reconciliation, evidence fetch authorization and owner guards.
+
+
+## Explicit urgent paid participation on CT102
+
+This path uses the existing durable queue, physical N100 reservation and shared
+`bushi-organizer` reservation. It never sends a second browser job because a
+laptop request became delayed, disconnected or uncertain. The first admitted
+request explicitly chooses `bushi.emergency`, execution target `n100`; the
+laptop remains the target for routine browser jobs and bulk data collection.
+
+The initial emergency adapter supports only paid `participate`. It requires
+`production_writes:true`, the existing exact event/player/order parameters, and:
+
+```json
+{
+  "business_key": "agc:paid-participation:12345678-1234-4234-8234-123456789abc",
+  "emergency": {"urgent": true, "deadline": 1792462500}
+}
+```
+
+The UUID must equal `parameters.orderId`. The illustrative timestamp above must
+be replaced with an actual future Unix timestamp: the first enqueue requires a
+deadline within 1–1200 seconds, queue `deadline` equal to the manifest deadline,
+and priority 90–100. Urgency is outside browser parameters. No `inputs_artifact`
+is accepted for this initial adapter. The source commit **and** source archive
+descriptor must match the root-qualified installed runtime. It cannot execute
+an arbitrary uploaded source tree. The worker also checks the deadline before
+submission. Central drains at least 30 seconds before the deadline/runtime cap.
+
+Producer configuration must explicitly include `bushi.emergency` in `kinds`,
+`allow_emergency:true`, `allow_production_writes:true`, suitable `max_priority`,
+and `business_key_namespaces:["agc:paid-participation"]`. Existing laptop paid
+producers need the same namespace permission. Other namespaces and arbitrary
+cross-producer resource claims are rejected. Keep the stable paid request key
+(e.g. `agct:participate:<order UUID>`) across delivery retries and target choices.
+
+Schema 4 adds `compute_business_claims`. The paid-order claim is derived even
+when optional `business_key` is omitted; supplying it requires an exact match.
+The job and claim are created in one SQLite transaction. A new key, another
+producer or another target cannot claim that order again. Claims survive
+completion, cancellation, failure, external reconciliation and retention GC.
+The additive migration backfills existing paid requests and aborts atomically
+if historical claims conflict; it never picks a winner or deletes evidence.
+Older queue binaries reject schema 4 instead of ignoring the new protection.
+
+Root must independently qualify CT102 before setting
+`AGENT_CONSOLE_COMPUTE_EMERGENCY_CONFIG` to a root-owned non-writable JSON file:
+
+```json
+{
+  "enabled": true,
+  "host": "192.168.1.69",
+  "user": "bushi-compute",
+  "identity_file": "/etc/agent-console-compute/emergency_ed25519",
+  "known_hosts_file": "/etc/agent-console-compute/emergency_known_hosts"
+}
+```
+
+The transport accepts only this host/user and fixed `agc-emergency rpc` command,
+using a separate key and strict host pins. Restrict CT102's authorized key to
+actual CT115 LAN source `192.168.1.115`, no PTY, forwarding, agent or shell access.
+The root-reviewed runtime must enforce 1 GiB per job, 50% of one CPU, no job swap,
+512 MiB temporary workspace and at most 1200 seconds or the remaining deadline,
+whichever is smaller. Its browser receives only the independent organizer state;
+no database credential or staff browser state belongs in this worker.
+
+The trusted central sampler independently reads N100 `/proc` and fixed
+`pct config 102`, requiring hostname `bushi-automation`, root volume
+`local-lvm:vm-102-disk-0`, and the verified `pve/data` thin pool. CT102's configured
+memory ceiling must be at most 2 GiB and agree with the worker's local cgroup
+measurement. The previously observed 1 GiB CT102 setting cannot fit this job
+plus reserve; changing it requires root's current headroom check and explicit
+provisioning. No sampler modifies Proxmox configuration.
+
+Before each status sample, CT115 sends the emergency-only `host-sample` RPC:
+
+```json
+{
+  "protocol_version": 1,
+  "action": "host-sample",
+  "sample": {
+    "observed_at": 1792461600,
+    "physical_host": "n100",
+    "memory_total_bytes": 16500310016,
+    "memory_available_bytes": 6442450944,
+    "cpu_count": 4,
+    "ct102_memory_limit_bytes": 2147483648,
+    "memory_full_avg60": 0.1,
+    "io_some_avg60": 0.5,
+    "thinpool_data_percent": 79,
+    "thinpool_metadata_percent": 10
+  }
+}
+```
+
+These are illustrative values, never producer input or fixed capacity. Worker
+`status` returns identity `bushi-emergency`, boot ID, capability
+`bushi.emergency`, admission readiness and telemetry keys `sampled_at`,
+`guest_available_bytes`, `guest_memory_limit_bytes`, `guest_disk_free_bytes`,
+`policy_verified`, `installed_source_sha`, `installed_source_artifact`.
+The worker locally validates the host sample and measures guest resources;
+its watchdog stops if trusted samples become stale. Central warm-up requires
+five uninterrupted healthy minutes, resetting on boot, missing samples,
+pressure or holds. Samples expire after 30 seconds; clock skew up to 5 seconds
+is tolerated without shortening warm-up. The existing host maintenance veto
+still applies.
+
+Admission requires N100 available RAM >=4 GiB and >=2 GiB after reservations,
+CT102 >=512 MiB after the 1 GiB job reservation, disk >=6 GiB after scratch,
+memory full PSI avg60 <1, IO some PSI avg60 <10, thin-pool data <80% and metadata
+<70%. While running, N100 <2 GiB available, guest <512 MiB, pressure, stale
+telemetry, owner hold or deadline triggers stop. Worker self-reported busy
+readiness does not by itself terminate the already running job. Monday/Tuesday
+emergency operation does not contact or wake the laptop.
+
+Acceptance before enabling a real producer: verify fixed SSH identity and
+source pins, actual cgroup/CPU/tmpfs limits, host-sample expiry stop, successful
+bound output inventory and acknowledgement, process kill/lease expiry, and an
+external-write-unknown receipt that retains `bushi-organizer` across both hosts.
+Use a non-writing harness for lifecycle faults; do not synthesize a paid action
+against production. Pure compute regressions are in `test_compute_emergency.py`.
+
+Remaining case: a laptop job already queued with zero attempts cannot be moved
+by this version. For example, an urgent paid order may be waiting behind a build
+when Sunday draining begins. Preserve its job/key and surface the deadline for
+owner review. A later explicit atomic transfer must preserve the business claim
+and append an audit receipt; changing the manifest or enqueueing a new key is
+forbidden. There is no automatic emergency routing and no emergency support for
+series application or other browser families in this initial qualification.
+
+Rollback: hold new admission, stop/reconcile the exact active attempt using its
+fixed worker binding, then revoke the emergency key/config. Retain receipts,
+artifacts, business claims and uncertain organizer reservations. Keep a schema-4
+capable Console binary; never roll back to a state snapshot that loses a new
+claim or unknown external action. Existing laptop/DB services stay in place.

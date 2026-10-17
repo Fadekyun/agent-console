@@ -44,11 +44,17 @@ def validate_binding(response, expected):
 
 
 class SSHWorker:
+    actions = frozenset({'status', 'start', 'heartbeat', 'inspect', 'stop', 'stage', 'fetch', 'ack'})
+    host = '100.111.183.86'
+    user = 'agc-worker'
+    rpc_command = 'agc-worker rpc'
+    config_variable = 'AGENT_CONSOLE_COMPUTE_LAPTOP_CONFIG'
+
     def __init__(self, config):
         if config.get('enabled') is not True:
             raise ValueError('worker is not enabled')
-        if config.get('host') != '100.111.183.86' or config.get('user') != 'agc-worker':
-            raise ValueError('worker identity is not the enrolled AGC laptop')
+        if config.get('host') != self.host or config.get('user') != self.user:
+            raise ValueError('worker identity is not the enrolled fixed target')
         for key in ('identity_file', 'known_hosts_file'):
             if not isinstance(config.get(key), str) or not Path(config[key]).is_absolute():
                 raise ValueError('worker key and host pins require absolute configured paths')
@@ -61,16 +67,16 @@ class SSHWorker:
             '-o', 'PasswordAuthentication=no', '-o', 'KbdInteractiveAuthentication=no',
             '-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'ClearAllForwardings=yes',
             '-o', 'SendEnv=-*', '-o', 'ControlMaster=no', '-o', 'ControlPath=none',
-            'agc-worker@100.111.183.86', 'agc-worker rpc',
+            self.user + '@' + self.host, self.rpc_command,
         )
 
     @classmethod
     def from_env(cls):
-        location = os.getenv('AGENT_CONSOLE_COMPUTE_LAPTOP_CONFIG')
+        location = os.getenv(cls.config_variable)
         return cls(trusted_json(location)) if location else None
 
     def call(self, action, **payload):
-        if action not in {'status', 'start', 'heartbeat', 'inspect', 'stop', 'stage', 'fetch', 'ack'}:
+        if action not in self.actions:
             raise ValueError('unsupported worker action')
         data = (canonical({'protocol_version': 1, 'action': action, **payload}) + '\n').encode()
         if len(data) > MAX_RPC_BYTES:
@@ -119,3 +125,12 @@ class SSHWorker:
             if process.stdin and not process.stdin.closed:
                 process.stdin.close()
             process.stdout.close()
+
+
+class EmergencySSHWorker(SSHWorker):
+    """Separate root-enrolled key and fixed command; never an SSH hop or shell."""
+    actions = SSHWorker.actions | {'host-sample'}
+    host = '192.168.1.69'
+    user = 'bushi-compute'
+    rpc_command = 'agc-emergency rpc'
+    config_variable = 'AGENT_CONSOLE_COMPUTE_EMERGENCY_CONFIG'

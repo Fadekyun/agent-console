@@ -78,7 +78,7 @@ PROFILES: Mapping[str, ComputeProfile] = MappingProxyType({
         2 * GiB, 0, 256, 4 * GiB, 7200, enabled=True, resources=('bushi-organizer',)),
     'bushi.emergency': ComputeProfile(
         'bushi.emergency', 'n100', 'lxc-102', .5, 768 * MiB,
-        GiB, 0, 256, 512 * MiB, 1200, enabled=False, resources=('bushi-organizer',)),
+        GiB, 0, 256, 512 * MiB, 1200, enabled=True, resources=('bushi-organizer',)),
 })
 
 
@@ -103,6 +103,8 @@ WORKERS: Mapping[str, WorkerDescriptor] = MappingProxyType({
     'ct115-local': WorkerDescriptor(
         'ct115-local', 'n100', 'lxc-115',
         verified_memory_total_bytes=16_500_310_016, verified_logical_cpus=4),
+    'bushi-emergency': WorkerDescriptor('bushi-emergency', 'n100', 'lxc-102',
+        ram_ceiling_bytes=GiB, schedule='explicit urgent paid action only; all days'),
     'agc-laptop': WorkerDescriptor(
         'agc-laptop', 'agc-laptop', 'AGC-Worker',
         verified_memory_total_bytes=33_066_012_672, verified_logical_cpus=16,
@@ -196,6 +198,18 @@ def admission(
 
     if profile.physical_host == 'agc-laptop':
         return laptop_admission(profile, telemetry, reservations, now)
+
+    if profile.name == 'bushi.emergency':
+        if telemetry.get('policy_verified') is not True:
+            return 'emergency_policy_unverified'
+        if telemetry.get('worker_ready') is not True:
+            return 'worker_not_ready'
+        if (not isinstance(telemetry.get('capabilities'), list)
+                or 'bushi.emergency' not in telemetry['capabilities']):
+            return 'adapter_unavailable'
+        if (not _number(telemetry.get('guest_memory_limit_bytes'))
+                or not GiB <= telemetry['guest_memory_limit_bytes'] <= 2 * GiB):
+            return 'emergency_guest_ceiling_unverified'
 
     numeric = (
         'sampled_at', 'healthy_since', 'host_cpu_count',
@@ -351,3 +365,22 @@ def laptop_admission(profile, telemetry, reservations, now):
     if min(sampled, now) - telemetry['healthy_since'] < HEALTHY_WINDOW_SECONDS:
         return 'warming_up'
     return None
+
+
+def emergency_runtime_hold(telemetry, now):
+    """Safety floor while running; readiness/warm-up only govern new starts."""
+    if (not isinstance(telemetry, Mapping) or telemetry.get('online') is not True
+            or telemetry.get('policy_verified') is not True or telemetry.get('host_gate') is not None
+            or not _number(telemetry.get('sampled_at'))
+            or not -5 <= now - telemetry['sampled_at'] <= TELEMETRY_MAX_AGE_SECONDS):
+        return True
+    for key, minimum in (('host_available_bytes', HOST_RESERVE_BYTES),
+                         ('guest_available_bytes', GUEST_RESERVE_BYTES),
+                         ('guest_disk_free_bytes', GUEST_DISK_RESERVE_BYTES)):
+        if not _number(telemetry.get(key)) or telemetry[key] < minimum:
+            return True
+    for key, ceiling in (('memory_full_avg60', 1), ('io_some_avg60', 10),
+                         ('thinpool_data_percent', 80), ('thinpool_metadata_percent', 70)):
+        if not _number(telemetry.get(key)) or telemetry[key] >= ceiling:
+            return True
+    return False
