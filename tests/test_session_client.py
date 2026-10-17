@@ -33,6 +33,8 @@ class SessionClientErrorTests(unittest.TestCase):
                 (403, 'valid session reporting capability required'),
                 (403, 'read-only sessions cannot control other sessions'),
                 (403, 'session is not an ancestor or descendant of the caller'),
+                (403, 'this operation requires another session in the same tree'),
+                (403, 'session is not in the same tree as the caller'),
                 (404, 'session or required field not found'),
                 (404, 'session not found')]:
             with self.subTest(detail=detail):
