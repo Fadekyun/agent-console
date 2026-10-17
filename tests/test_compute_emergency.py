@@ -187,6 +187,8 @@ class EmergencySamplerTests(unittest.TestCase):
         self.host={key:self.raw[key] for key in ('host_cpu_count','host_memory_total_bytes',
             'host_available_bytes','memory_full_avg60','io_some_avg60','thinpool_data_percent','thinpool_metadata_percent')}
         self.host['guest_limit_bytes']=2*GiB
+        self.host.update(guest_current_bytes=0, guest_cgroup_path='/lxc/102',
+                         guest_namespace_root='/lxc/102/ns', boundary_observed_at=NOW)
         self.boot='boot-1'
         self.worker.call.side_effect=self.call
         self.transport=Mock(side_effect=lambda *_:json.dumps(self.host))
@@ -200,6 +202,7 @@ class EmergencySamplerTests(unittest.TestCase):
     def sample(self,delta=0):
         self.now=NOW+delta
         self.raw['sampled_at']=self.now
+        self.host['boundary_observed_at']=self.now
         return self.sampler.sample(enabled=True,operator_hold=False,now=self.now)
 
     def test_fixed_probe_then_host_sample_then_status_warms_for_five_minutes(self):
@@ -213,6 +216,9 @@ class EmergencySamplerTests(unittest.TestCase):
         sample=self.worker.call.call_args_list[0].kwargs['sample']
         self.assertEqual(sample['physical_host'],'n100')
         self.assertEqual(sample['ct102_memory_limit_bytes'],2*GiB)
+        self.assertEqual(sample['ct102_memory_current_bytes'],0)
+        self.assertEqual(sample['ct102_cgroup_path'],'/lxc/102')
+        self.assertEqual(sample['ct102_namespace_root'],'/lxc/102/ns')
         self.assertEqual(self.sample(331)['readiness'],'warming_up')
         self.boot='boot-2'
         self.assertEqual(self.sample(340)['healthy_since'],NOW+340)
@@ -232,6 +238,13 @@ class EmergencySamplerTests(unittest.TestCase):
             self.assertEqual(self.sample()['readiness'],'host_maintenance')
         self.worker.call.assert_not_called()
         self.transport.assert_not_called()
+
+    def test_actual_outer_usage_and_mapping_cannot_be_bypassed_by_guest_reply(self):
+        for update in ({'guest_cgroup_path':'/lxc/115'}, {'guest_namespace_root':'/lxc/102'},
+                       {'guest_current_bytes':True}, {'guest_current_bytes':2*GiB}):
+            with self.subTest(update=update):
+                original=self.host.copy();self.host.update(update)
+                self.assertFalse(self.sample()['online']);self.host=original
 
     def test_disabled_policy_never_probes_and_host_errors_are_redacted(self):
         self.sampler.sample(enabled=False,operator_hold=False,now=NOW)

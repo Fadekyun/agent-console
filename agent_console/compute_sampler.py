@@ -383,6 +383,9 @@ _EMERGENCY_HOST_SCRIPT = _HOST_SCRIPT.replace("'115'", "'102'").replace(
     'vm-115-disk-0', 'vm-102-disk-0').replace(
     "if config.get('hostname') != 'agent-console-staging': raise ValueError('guest identity')",
     "if config.get('hostname') != 'bushi-automation': raise ValueError('guest identity')")
+from .compute_emergency_probe import BOUNDARY_SCRIPT
+_EMERGENCY_HOST_SCRIPT = _EMERGENCY_HOST_SCRIPT.replace('print(json.dumps({', BOUNDARY_SCRIPT + '\nprint(json.dumps({**boundary,').replace(
+    "'guest_limit_bytes': int(config['memory']) * 1024 * 1024,", '')
 EMERGENCY_HOST_PROBE_COMMAND = (*HOST_PROBE_COMMAND[:-1],
     '/usr/bin/python3 -c ' + shlex.quote(_EMERGENCY_HOST_SCRIPT))
 
@@ -414,13 +417,21 @@ class EmergencySampler:
             _number(host['host_available_bytes'], maximum=host['host_memory_total_bytes'])
             if host['host_cpu_count'] % 1 or not GIB <= host['guest_limit_bytes'] <= 2 * GIB:
                 raise ProbeError('invalid_host_sample')
+            _number(host['guest_current_bytes'])
+            if (host['guest_current_bytes'] % 1 or host['guest_cgroup_path'] != '/lxc/102'
+                    or host['guest_namespace_root'] != '/lxc/102/ns'
+                    or not -5 <= now-_number(host['boundary_observed_at']) <= 30):
+                raise ProbeError('invalid_actual_guest_boundary')
             for key in ('memory_full_avg60', 'io_some_avg60', 'thinpool_data_percent', 'thinpool_metadata_percent'):
                 _number(host[key], maximum=100)
-            sample = {'observed_at': now, 'physical_host': 'n100',
+            sample = {'observed_at': host['boundary_observed_at'], 'physical_host': 'n100',
                       'memory_total_bytes': host['host_memory_total_bytes'],
                       'memory_available_bytes': host['host_available_bytes'],
                       'cpu_count': host['host_cpu_count'],
                       'ct102_memory_limit_bytes': host['guest_limit_bytes'],
+                      'ct102_memory_current_bytes': host['guest_current_bytes'],
+                      'ct102_cgroup_path': host['guest_cgroup_path'],
+                      'ct102_namespace_root': host['guest_namespace_root'],
                       **{key: host[key] for key in ('memory_full_avg60', 'io_some_avg60',
                          'thinpool_data_percent', 'thinpool_metadata_percent')}}
             self.worker.call('host-sample', sample=sample)
@@ -435,6 +446,8 @@ class EmergencySampler:
                 _number(telemetry[key])
             if telemetry['guest_available_bytes'] > host['guest_limit_bytes']:
                 raise ProbeError('invalid_guest_headroom')
+            if telemetry['guest_available_bytes'] > max(0, host['guest_limit_bytes']-host['guest_current_bytes']):
+                raise ProbeError('worker_exceeds_observed_outer_headroom')
             artifact(telemetry['installed_source_artifact'])
             from re import fullmatch
             if not isinstance(telemetry.get('installed_source_sha'), str) or not fullmatch(

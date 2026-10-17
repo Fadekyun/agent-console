@@ -15,6 +15,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import worker
+from emergency_boundary import memory_headroom, validate_enrollment
 
 GIB = 1024**3
 MIB = 1024**2
@@ -29,7 +30,8 @@ worker.CRITICAL_HOST_MEMORY_BYTES = 2 * GIB
 worker.MAX_ARTIFACT = 16 * MIB
 SOURCE_FIELDS = {'observed_at', 'physical_host', 'memory_total_bytes', 'memory_available_bytes',
                  'cpu_count', 'ct102_memory_limit_bytes', 'memory_full_avg60', 'io_some_avg60',
-                 'thinpool_data_percent', 'thinpool_metadata_percent'}
+                 'thinpool_data_percent', 'thinpool_metadata_percent', 'ct102_memory_current_bytes',
+                 'ct102_cgroup_path', 'ct102_namespace_root'}
 FIXED_ARGV = ['/usr/bin/node', '/usr/local/lib/agc-worker-adapters/agc/scripts/compute/bushi-run.cjs']
 
 
@@ -43,14 +45,12 @@ def trusted_json(path):
     return value
 
 
-def local_guest():
-    # The cgroup namespace root is the LXC boundary, not the service's child
-    # cgroup. Guest MemAvailable alone can expose host memory on some LXCs.
+def local_guest(sample, enrollment):
+    # Proxmox hides /lxc/102 above the /lxc/102/ns namespace mount. Never infer
+    # its limit from MemAvailable or treat visible 'max' as an arbitrary budget.
     maximum = (Path('/sys/fs/cgroup') / 'memory.max').read_text().strip()
-    if maximum == 'max':
-        raise ValueError('guest_memory_unbounded')
-    limit = int(maximum)
     used = int(Path('/sys/fs/cgroup/memory.current').read_text())
+    memory = memory_headroom(sample, enrollment, maximum, used)
     scratch = worker.STATE_ROOT / 'jobs'
     mounts = [line.split() for line in Path('/proc/mounts').read_text().splitlines()]
     if not any(fields[1] == str(scratch) and fields[2] == 'tmpfs' for fields in mounts):
@@ -59,7 +59,7 @@ def local_guest():
     if info.f_blocks * info.f_frsize > 512 * MIB:
         raise ValueError('emergency_scratch_exceeds_cap')
     persistent = os.statvfs(worker.STATE_ROOT)
-    return {'guest_memory_limit_bytes': limit, 'guest_available_bytes': max(0, limit-used),
+    return {**memory,
             'guest_disk_free_bytes': persistent.f_bavail * persistent.f_frsize,
             'scratch_available_bytes': info.f_bavail * info.f_frsize,
             'scratch_limit_bytes': info.f_blocks * info.f_frsize}
@@ -69,10 +69,14 @@ def validate_sample(sample, now=None):
     now = time.time() if now is None else now
     if not isinstance(sample, dict) or set(sample) != SOURCE_FIELDS or sample['physical_host'] != 'n100':
         raise ValueError('invalid_emergency_host_sample')
-    for key in SOURCE_FIELDS - {'physical_host'}:
+    if sample['ct102_cgroup_path'] != '/lxc/102' or sample['ct102_namespace_root'] != '/lxc/102/ns':
+        raise ValueError('invalid_emergency_boundary')
+    for key in SOURCE_FIELDS - {'physical_host', 'ct102_cgroup_path', 'ct102_namespace_root'}:
         value = sample[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             raise ValueError('invalid_emergency_host_sample')
+    if any(type(sample[key]) is not int for key in ('ct102_memory_limit_bytes', 'ct102_memory_current_bytes')):
+        raise ValueError('invalid_emergency_boundary_counters')
     if not -5 <= now-sample['observed_at'] <= 30:
         raise ValueError('stale_emergency_host_sample')
     if not (0 < sample['memory_available_bytes'] <= sample['memory_total_bytes']
@@ -88,7 +92,7 @@ def emergency_admission(host, now=None, required_memory=0):
     holds = []
     try:
         sample = validate_sample(host.get('n100_sample'), now)
-        guest = local_guest()
+        guest = local_guest(sample, host.get('boundary_enrollment'))
     except (ValueError, OSError, TypeError, AttributeError):
         return ['emergency_headroom_unverified']
     if guest['guest_memory_limit_bytes'] != sample['ct102_memory_limit_bytes']:
@@ -120,6 +124,7 @@ class EmergencyWorker(BaseWorker):
     def __init__(self, state=None, config=None):
         super().__init__(state, config)
         self.policy = trusted_json(self.config / 'policy.json')
+        validate_enrollment(self.policy.get('boundary_enrollment'))
         if self.policy.get('version') != 1 or not worker.HEX64.fullmatch(self.policy.get('source_artifact', {}).get('sha256', '')):
             raise ValueError('invalid_emergency_policy')
         if set(self.adapters) != {'bushi.emergency'}:
@@ -149,8 +154,9 @@ class EmergencyWorker(BaseWorker):
 
     def sampled_host(self, sample):
         disk = os.statvfs(self.state)
-        guest = local_guest()
+        guest = local_guest(sample, self.policy['boundary_enrollment'])
         return {'observed_at': sample['observed_at'], 'n100_sample': sample,
+                'boundary_enrollment': self.policy['boundary_enrollment'],
                 'policy_verified': self.policy.get('enabled') is True,
                 'memory_available_bytes': sample['memory_available_bytes'],
                 'memory_total_bytes': sample['memory_total_bytes'],
@@ -161,13 +167,22 @@ class EmergencyWorker(BaseWorker):
 
     def status(self):
         result = super().status()
-        guest = local_guest()
+        try:
+            sample = validate_sample(self.host.get('n100_sample'))
+            guest = local_guest(sample, self.policy['boundary_enrollment'])
+        except (ValueError, OSError, KeyError, TypeError):
+            guest = {'guest_memory_limit_bytes':None, 'guest_available_bytes':0,
+                     'guest_disk_free_bytes':0}
         result.update(worker_id='bushi-emergency', physical_host='n100', guest_id='lxc-102')
         result['telemetry'] = {**guest, 'sampled_at': self.host.get('observed_at'),
             'policy_verified': self.policy.get('enabled') is True,
             'installed_source_sha': self.policy['installed_source_sha'],
             'installed_source_artifact': self.policy['source_artifact']}
         result['installed_source_artifact'] = self.policy['source_artifact']
+        result['guest'] = {'memory_available_bytes':guest['guest_available_bytes'],
+            'memory_total_bytes':guest['guest_memory_limit_bytes'],
+            'memory_effective_limit_bytes':guest.get('guest_effective_memory_limit_bytes'),
+            'disk_free_bytes':guest['guest_disk_free_bytes'], 'boot_id':self.boot_id}
         return result
 
     def stage(self, request):

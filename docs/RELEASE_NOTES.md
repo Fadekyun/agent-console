@@ -1,3 +1,10 @@
+## 0.32.3 — unreleased, 2026-10-17 (#203)
+
+- Impact: emergency admission measures the actual N100 `/lxc/102` memory limit/current and verifies CT102 init/mount membership, including Proxmox's hidden parent above the guest namespace. The worker combines fresh authenticated outer usage with local namespace usage and any tighter visible limit; visible `max` alone grants no capacity.
+- Configuration/migration: deploy the paired sampler/worker and `emergency_boundary.py`; installer argument 7 requires a fresh root-protected enrollment receipt produced by the fixed N100 probe. The installed cap must match actual `memory.max` and Proxmox configuration and remain at most 2 GiB. Existing policy without enrollment fails closed. No queue schema change from 5, limit modification, new port or automatic worker enablement.
+- Verification: real read-only N100 probe verified CT102's current 1 GiB outer cap and `/lxc/102/ns` mount mapping. Bounded fixtures reject wrong containers/mounts/configuration, concurrent restarts, stale enrollment, inflated headroom and unknown initial state; service tests exercise the existing headroom gates. Runtime installation/qualification remains a separate held step.
+- Rollback: hold/drain and reconcile attempts, then disable emergency policy. Retain compatible schema 5 queue code, receipts and reservations. Roll back sampler and worker together; do not fabricate a visible limit or restore old policy to bypass enrollment. No host cgroup or container configuration was changed by this source fix.
+
 ## 0.32.2 — unreleased, 2026-10-17 (#203)
 
 - Impact: an authenticated owner can move an urgent paid Bushi job from the laptop queue to the bounded N100 runner only before any attempt exists. The same job, producer request, source, input and business claim survive the atomic transition; a durable receipt lets the producer validate the effective binding and retry lost acknowledgements. Running/unknown work cannot transfer. The fixed emergency SSH destination is verified CT102 `192.168.1.67`, separate from the source database.

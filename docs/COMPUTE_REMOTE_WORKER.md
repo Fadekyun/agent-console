@@ -336,10 +336,44 @@ no database credential or staff browser state belongs in this worker.
 The trusted central sampler independently reads N100 `/proc` and fixed
 `pct config 102`, requiring hostname `bushi-automation`, root volume
 `local-lvm:vm-102-disk-0`, and the verified `pve/data` thin pool. CT102's configured
-memory ceiling must be at most 2 GiB and agree with the worker's local cgroup
-measurement. The previously observed 1 GiB CT102 setting cannot fit this job
+memory ceiling must be at most 2 GiB and agree with the actual outer cgroup
+limit and the worker's enrollment. The previously observed 1 GiB CT102 setting cannot fit this job
 plus reserve; changing it requires root's current headroom check and explicit
 provisioning. No sampler modifies Proxmox configuration.
+
+The emergency host probe now measures `/sys/fs/cgroup/lxc/102/memory.max` and
+`memory.current` on N100, verifies the init PID from `lxc-info -n 102 -pH`, its
+`/proc/<pid>/cgroup` membership and the cgroup2 mount root in `mountinfo`.
+The actual limit must equal `pct config 102` and be at most 2 GiB; a tighter
+unexpected ancestor, remap or restart during the probe fails closed. CT102's
+visible namespace root may legitimately report `max` because its outer parent
+is hidden. Neither that value nor guest `MemAvailable` is a capacity grant.
+The sample includes `ct102_memory_current_bytes`, `ct102_cgroup_path` and
+`ct102_namespace_root`; timestamp is the actual host observation. The receiver
+requires all fields, freshness within 30 seconds (5 seconds future skew), and the installed
+enrollment binding. Available memory is the lesser of actual outer headroom
+and local namespace headroom, including a tighter finite visible limit.
+
+Before initial installation or a deliberate cap change, run from the reviewed
+Console checkout on CT115 using its already authorized N100 SSH identity:
+
+```bash
+/home/agentstage/.local/share/agent-console/venv/bin/python -I \
+  ops/agc-worker/enroll-emergency-boundary.py
+```
+
+The helper is read-only and emits exactly
+`{version:1,physical_host:"n100",guest_id:"lxc-102",cgroup_path:"/lxc/102",
+namespace_root:"/lxc/102/ns",memory_limit_bytes:<actual>,observed_at:<unix>}`.
+Root transfers that public JSON through the authenticated route to, for example,
+`/root/bushi-emergency-stage/boundary-enrollment.json` (root-owned, mode 0600, protected
+ancestors), then passes that path as **argument 7** to `install-emergency.sh`.
+The receipt must be at most 300 seconds old when installed. Capture it after any approved
+host cap change; never supply an invented numeric limit. Policy persists the
+full `boundary_enrollment`, and every new trusted host sample must match it.
+Existing policy needs held re-enrollment; sampler/worker upgrades are paired.
+No sample at startup yields unknown capacity and a valid held status response.
+Do not set the guest namespace root's limit merely to make enrollment pass.
 
 Before each status sample, CT115 sends the emergency-only `host-sample` RPC:
 
@@ -354,6 +388,9 @@ Before each status sample, CT115 sends the emergency-only `host-sample` RPC:
     "memory_available_bytes": 6442450944,
     "cpu_count": 4,
     "ct102_memory_limit_bytes": 2147483648,
+    "ct102_memory_current_bytes": 134217728,
+    "ct102_cgroup_path": "/lxc/102",
+    "ct102_namespace_root": "/lxc/102/ns",
     "memory_full_avg60": 0.1,
     "io_some_avg60": 0.5,
     "thinpool_data_percent": 79,

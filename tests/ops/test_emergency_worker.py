@@ -13,6 +13,8 @@ SPEC.loader.exec_module(emergency)
 def sample():
     return {'observed_at': 1000, 'physical_host': 'n100', 'memory_total_bytes': 16 * 1024**3,
             'memory_available_bytes': 6 * 1024**3, 'cpu_count': 4, 'ct102_memory_limit_bytes': 2 * 1024**3,
+            'ct102_memory_current_bytes':128*1024**2, 'ct102_cgroup_path':'/lxc/102',
+            'ct102_namespace_root':'/lxc/102/ns',
             'memory_full_avg60': 0, 'io_some_avg60': 0, 'thinpool_data_percent': 30, 'thinpool_metadata_percent': 10}
 
 
@@ -21,7 +23,9 @@ class EmergencyPolicyTests(unittest.TestCase):
         self.assertEqual(emergency.validate_sample(sample(), now=995), sample())
         for update in [{'physical_host': 'agc-laptop'}, {'observed_at': 969}, {'observed_at': 1006},
                        {'memory_available_bytes': float('nan')}, {'cpu_count': True},
-                       {'ct102_memory_limit_bytes': 3 * 1024**3}]:
+                       {'ct102_memory_limit_bytes': 3 * 1024**3},
+                       {'ct102_memory_current_bytes': True}, {'ct102_memory_current_bytes': -1},
+                       {'ct102_namespace_root':'/lxc/115/ns'}]:
             with self.assertRaises(ValueError): emergency.validate_sample({**sample(), **update}, now=1000)
         with self.assertRaises(ValueError): emergency.validate_sample({**sample(), 'extra': 1}, now=1000)
 
@@ -50,6 +54,18 @@ class EmergencyPolicyTests(unittest.TestCase):
         self.assertTrue(instance.stage({'artifact_id': 'a' * 64, 'size': 123})['complete'])
         with self.assertRaisesRegex(ValueError, 'not_installed'):
             instance.stage({'artifact_id': 'b' * 64, 'size': 123})
+
+    def test_cold_held_status_has_no_invented_limit_or_positive_headroom(self):
+        instance=object.__new__(emergency.EmergencyWorker)
+        instance.host={};instance.boot_id='boot'
+        instance.policy={'enabled':False,'installed_source_sha':'a'*40,
+                         'source_artifact':{'sha256':'b'*64,'size':123}}
+        with patch.object(emergency.BaseWorker,'status',return_value={'admission':{'ready':False}}):
+            response=instance.status()
+        self.assertFalse(response['admission']['ready'])
+        self.assertIsNone(response['telemetry']['guest_memory_limit_bytes'])
+        self.assertEqual(response['telemetry']['guest_available_bytes'],0)
+        self.assertFalse(response['telemetry']['policy_verified'])
 
     def test_expired_or_unmarked_urgency_is_rejected_before_execution(self):
         instance = object.__new__(emergency.EmergencyWorker)

@@ -301,10 +301,22 @@ source is accepted. The fixed wrapper and dedicated organizer credential remain
 root controlled. The adapter also checks the absolute deadline before submission.
 
 `install-emergency.sh <worker-source-dir> <reviewed-source-tar> <tar-sha256>
-<git-revision> <dedicated-public-key-file> <dedicated-credential-file>` requires
+<git-revision> <dedicated-public-key-file> <dedicated-credential-file>
+<fresh-boundary-enrollment-file>` requires
 root in CT102 (`bushi-automation`), an already installed reviewed adapter closure with
 `.agc-worker-reviewed.json` containing `source_sha` and `wrapper_sha256`, and a
-verified cgroup memory ceiling no greater than 2 GiB. It installs no packages and
+verified cgroup memory ceiling no greater than 2 GiB. Generate the final argument
+with `enroll-emergency-boundary.py` on CT115 after any approved host cap change,
+transfer its public JSON through the authenticated route to a root-owned file
+under protected CT102 ancestors, and install within 300 seconds. The fixed probe
+checks the actual N100 `/lxc/102` limit/current and CT102 init/mount mapping;
+the visible `/lxc/102/ns` namespace root can legitimately have `memory.max=max`.
+The paired sampler and worker require fresh outer usage matching the persisted
+enrollment and combine it conservatively with local namespace headroom. A cold
+worker reports unknown capacity and remains held until a valid sample arrives.
+Missing enrollment or a changed cap fails closed; never set a synthetic visible
+limit to bypass verification. See `docs/COMPUTE_REMOTE_WORKER.md` for the exact
+seven-field enrollment and RPC schema. It installs no packages and
 does not touch existing Bushi timers. The installer refuses unmanaged worker
 accounts and existing enabled/active emergency policy. It creates only its
 dedicated account, forced SSH dispatcher, systemd units, tmpfs and configuration.

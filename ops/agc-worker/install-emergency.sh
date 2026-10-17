@@ -13,15 +13,17 @@ ARCHIVE_SHA=${3:?source archive SHA256}
 SOURCE_SHA=${4:?reviewed Git revision}
 PUBLIC_KEY=${5:?dedicated CT115 public key file}
 CREDENTIAL=${6:?dedicated organizer credential file}
+BOUNDARY_RECEIPT=${7:?fresh root-protected N100 boundary enrollment receipt}
 test -f "$SOURCE/worker.py"
 test -f "$SOURCE/emergency_worker.py"
+test -f "$SOURCE/emergency_boundary.py"
 test -x /usr/bin/node
 test -f /usr/local/lib/agc-worker-adapters/agc/scripts/compute/bushi-run.cjs
 test -f /usr/local/lib/agc-worker-adapters/agc/.agc-worker-reviewed.json
-python3 - "$ARCHIVE" "$ARCHIVE_SHA" "$SOURCE_SHA" "$PUBLIC_KEY" "$CREDENTIAL" <<'PY'
+python3 - "$ARCHIVE" "$ARCHIVE_SHA" "$SOURCE_SHA" "$PUBLIC_KEY" "$CREDENTIAL" "$BOUNDARY_RECEIPT" "$SOURCE" <<'PY'
 import hashlib,json,os,re,stat,sys
 from pathlib import Path
-archive,digest,revision,key,credential=sys.argv[1:]
+archive,digest,revision,key,credential,boundary,source=sys.argv[1:]
 assert re.fullmatch('[0-9a-f]{64}',digest) and re.fullmatch('[0-9a-f]{40}|[0-9a-f]{64}',revision)
 p=Path(archive);assert 0<p.stat().st_size<=16*1024**2
 assert hashlib.file_digest(p.open('rb'),'sha256').hexdigest()==digest
@@ -35,8 +37,19 @@ for p in [root,*root.rglob('*')]:
 marker=json.loads((root/'.agc-worker-reviewed.json').read_text())
 assert marker['source_sha']==revision
 assert marker['wrapper_sha256']==hashlib.file_digest((root/'scripts/compute/bushi-run.cjs').open('rb'),'sha256').hexdigest()
-limit=Path('/sys/fs/cgroup/memory.max').read_text().strip()
-assert limit!='max' and 0<int(limit)<=2*1024**3,'CT102 must have a verified <=2GiB ceiling'
+helper=Path(source)/'emergency_boundary.py'
+for p in (Path(boundary),helper):
+ assert p.is_absolute()
+ for parent in (p,*p.parents):
+  s=parent.lstat();assert s.st_uid==0 and not s.st_mode&0o022 and not stat.S_ISLNK(s.st_mode),'Protected enrollment/source required'
+ assert p.is_file() and p.stat().st_size<=65536
+import runpy
+check=runpy.run_path(str(helper))['validate_enrollment']
+check(json.loads(Path(boundary).read_text()),fresh=True)
+# Visible root may be max because Proxmox enforces a hidden /lxc/102 parent.
+# The authenticated host receipt supplies that actual boundary, never an arg.
+visible=Path('/sys/fs/cgroup/memory.max').read_text().strip()
+assert visible=='max' or visible.isdecimal() and int(visible)>0,'Invalid visible cgroup memory limit'
 PY
 test ! -e /etc/bushi-emergency/policy.json || python3 - <<'PY'
 import json,socket
@@ -85,17 +98,21 @@ install -d -m 0755 /usr/local/lib/bushi-emergency
 install -d -m 0700 /etc/bushi-emergency /etc/bushi-emergency/credentials /var/lib/bushi-emergency /var/lib/bushi-emergency/objects
 install -d -m 0711 /var/lib/bushi-emergency/jobs
 install -m 0755 "$SOURCE/worker.py" /usr/local/lib/bushi-emergency/worker.py
+install -m 0644 "$SOURCE/emergency_boundary.py" /usr/local/lib/bushi-emergency/emergency_boundary.py
 install -m 0755 "$SOURCE/emergency_worker.py" /usr/local/lib/bushi-emergency/emergency_worker.py
 install -m 0600 "$ARCHIVE" "/var/lib/bushi-emergency/objects/$ARCHIVE_SHA"
 install -m 0600 "$CREDENTIAL" /etc/bushi-emergency/credentials/agc-bushi-organizer-state.json
 touch /etc/bushi-emergency/hold
-python3 - "$ARCHIVE" "$ARCHIVE_SHA" "$SOURCE_SHA" <<'PY'
+python3 - "$ARCHIVE" "$ARCHIVE_SHA" "$SOURCE_SHA" "$BOUNDARY_RECEIPT" <<'PY'
 import json,os,sys
 from pathlib import Path
-archive,digest,revision=sys.argv[1:]
+archive,digest,revision,boundary=sys.argv[1:]
+sys.path.insert(0,'/usr/local/lib/bushi-emergency')
+from emergency_boundary import validate_enrollment
+enrollment=validate_enrollment(json.loads(Path(boundary).read_text()),fresh=True)
 root=Path('/etc/bushi-emergency')
 policy={'version':1,'enabled':False,'installed_source_sha':revision,
- 'source_artifact':{'sha256':digest,'size':Path(archive).stat().st_size}}
+ 'source_artifact':{'sha256':digest,'size':Path(archive).stat().st_size},'boundary_enrollment':enrollment}
 adapter={'bushi.emergency':{'enabled':False,'argv':['/usr/bin/node','/usr/local/lib/agc-worker-adapters/agc/scripts/compute/bushi-run.cjs'],
  'memory_bytes':1024**3,'cpus':1,'cpu_quota_percent':50,'timeout_seconds':1200,
  'parameter_keys':['action','eventId','gid','applicationNumber','teamId','organizerRowId','orderId'],
