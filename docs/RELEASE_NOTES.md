@@ -1,11 +1,13 @@
-## 0.31.0 — unreleased, 2026-10-10 (#189)
+## 0.31.0 — unreleased, 2026-10-17 (#189)
 
 - Impact: optional separate-user broker stores five protected credentials; the existing Environment form saves them without returning values. Four MCP services and CommandCode/OpenRouter model requests receive current scoped keys at request time. Managed launch snapshots and native configs contain broker references instead of upstream keys. Ordinary variables retain explicit restart behavior. README now introduces sessions, trees, profiles and Environment with demo screenshots and short GIFs.
-- Configuration/migration: opt in with `AGENT_CONSOLE_BROKER_URL` and `AGENT_CONSOLE_BROKER_ADMIN_FILE` after installing the separate-user service described in `docs/CREDENTIAL_BROKER.md`. Broker mode owns all five protected names and never reads old selected account files for those providers. No automatic import, rotation, deployment, live-session restart or database migration. Configure keys in the UI after setup. Existing processes adopt broker routing only on an explicit restart; subsequent protected edits apply on their next request. Same-UID Console/session processes still share access to the Console admin credential; the separate broker protects stored upstream key material, not session isolation.
+- Configuration/migration: opt in by setting `AGENT_CONSOLE_BROKER_URL` and `AGENT_CONSOLE_BROKER_ADMIN_FILE` in shared runtime configuration for both web and the local owner CLI after installing the separate-user service described in `docs/CREDENTIAL_BROKER.md`. Broker mode owns all five protected names and never reads old selected account files for those providers. No automatic import, rotation, deployment, live-session restart or database migration. Configure keys in the UI after setup. Existing processes adopt broker routing only on an explicit restart; subsequent protected edits apply on their next request. Same-UID Console/session processes still share access to the Console admin credential; the separate broker protects stored upstream key material, not session isolation.
 - Verification: run isolated Environment/CommandCode/provider/model/session regressions, broker fake-upstream tests, protected launch integration tests and browser Environment/media checks. Tests use synthetic values and private temporary state; real integrations remain an operator acceptance step.
-- Rollback: keep the broker available for existing broker-connected sessions. Restore the previous reviewed application and native launch assets through the normal rollback process, or stop those sessions and create new ones after restoring direct account configuration. Removing broker settings changes new launches only; this version refuses restart or resume of a broker-backed session with broker mode disabled before touching its process, credentials, or launch assets. No keys are exported to legacy files.
+- Rollback: before any broker-backed session exists, use the normal guarded application rollback and remove the two broker settings from shared runtime configuration. After broker-backed sessions exist, keep the broker, compatible application code, wrappers and native assets available; prefer a forward repair or a rollback build retaining broker support. Pre-broker releases such as 0.30.2 lack the restart/resume refusal guard and must not be selected while broker-backed records remain restartable. Stopping or archiving a terminal alone does not clear its launch configuration. This broker-aware version rejects restart/resume after opt-out before touching processes or assets. Preserve the private store; no credential export, reverse migration or rotation is provided.
 
-## 0.30.2 — unreleased, 2026-10-10 (#190)
+- Integration: reapplied issue #189 on the current private release, preserving the fullscreen repair and workflow permission correction.
+
+## 0.30.5 — unreleased, 2026-10-17 (#190)
 
 - Impact: all managed interactive roles, including read-only and Plan sessions, can coordinate other sessions sharing their root tree: attention, interrupt, restart, and stop. Parents, siblings, cousins, and descendants are included across projects. Child waits use the same tree boundary. Recorded-session inspection remains available across trees; sharing a project alone does not grant control.
 - Boundaries: durable target IDs, rejection of unmanaged/noninteractive targets, existing self-operation rules, restart readiness, and delegation role/mode/repository/worktree checks remain in place. This grants no terminal-input, environment, or release authority.
@@ -13,13 +15,43 @@
 - Verification: focused session-control, session-client, selected-child wait, lifecycle identity and version checks cover all roles, mixed-project trees, cousins, separate roots, cycles, rename/name reuse and excluded operations. Original change verification also covered profiles, managed context, delegation, restart readiness and inspection. No full suite or live session mutation is part of this integration.
 - Rollback: select the retained previous release and its matching CLI, then restart only the web service. Prior ancestor/descendant and writable-role control restrictions return; preserve databases and live sessions.
 
-## 0.30.1 — unreleased, 2026-10-10 (#191)
+- Integration: reapplied issue #190 on the current private release, preserving the fullscreen repair and workflow permission correction.
+
+## 0.30.4 — unreleased, 2026-10-17 (#191)
 
 - Impact: fix false low-memory launch blocks when CT115 holds reclaimable inactive file cache. Each finite parent/namespace memory limit is evaluated against its own usage and cache counters; the tightest adjusted headroom wins. Anonymous, active-file and kernel memory stay charged.
 - Safety: retain raw usage, limit, inactive-file cache, raw margin and container full PSI in the snapshot. Container full PSI avg10 above 5 forces headroom to zero. Missing, malformed or inconsistent readings also publish zero headroom immediately. The existing host pressure, disk, freshness and maintenance checks remain in force.
 - Configuration/migration: none. Preserve `ct115_memory_headroom_bytes` for the currently installed consumer. The host sampler can be updated independently; no application/session restart, cache flush, budget change or database migration is required.
 - Verification: six small filesystem-fixture tests cover cache versus noncache usage, nested finite limits, pressure vetoes and missing/negative/oversized/malformed readings. Version consistency and whitespace checks pass. Tests run without host probes, provider launches or full suites; deployment verification is separate.
 - Rollback: restore the retained `/usr/local/sbin/n100-resource-sampler` backup on n100. The next scheduled sample returns to raw cache-inclusive headroom; keep snapshots root-owned. No state rollback is required.
+
+- Integration: reapplied issue #191 on the current private release, preserving the fullscreen repair and workflow permission correction.
+
+## 0.30.3 — unreleased, 2026-10-17 (#193)
+
+- Impact: writable Codex Pro workflow tasks launch with native automatic review when their prepared command omits `--sandbox`. Record the actual native permission mode in both the launch receipt and session metadata; Plan and read actions remain read-only. Missing or conflicting native permissions fail before task startup.
+- Configuration/migration: none. Launch arguments, approval policy, and existing sessions are unchanged. This private integration reuses the permission fix from PR #200 (`b730ecf4`) on the deployed 0.30.2 source, preserving both terminal resize repairs.
+- Verification: `scripts/test-isolated.py -q tests/test_native_permissions.py tests/test_workflow_engine.py tests/test_providers.py tests/test_version.py` passed 46 tests and 13 subtests. Fake agents, private databases, and private tmux sockets verify automatic-review completion, read-only metadata, and rejection before native startup; no real model requests. Whitespace checks passed.
+- Rollback: select the retained 0.30.2 release through the guarded release process and restart web only. No schema migration or agent restart is needed; the writable workflow launch failure returns.
+
+## 0.30.2 — unreleased, 2026-10-15 (#196)
+
+- Impact: extend the pinned xterm resize guard to allocate missing visible rows in initialized buffers before redraw. This prevents the missing-row parser failure associated with a stranded status bar and repeated output. Existing text, normal scrollback, drafts, and the terminal connection are preserved.
+- Evidence: the owner screenshot shows first-fullscreen corruption in Brave on macOS. The recorded invalid buffer state from upstream xterm #6063 fails deterministically before this repair. The natural Mac trigger has not been reproduced locally; this is a bounded repair of the matching buffer failure, not physical-device certification.
+- Configuration/migration: none. Reload the Console page after rollout; both terminal module URLs change to avoid stale caches. Running agents stay in tmux.
+- Verification: the final resize/invariant suite passed 17 cases with four desktop-only skips on mobile. Coverage includes subsequent ANSI erase/write, active and inactive buffers, retained history, and the first Workbench expansion at device scale 2 with the Input drawer open. Adjacent layout/input/identity checks: 126 passed; three existing manual-reconnect expectations fail against this private baseline, which already retries temporary failures automatically. The same failure was reproduced on pristine 0.30.1. All three version checks passed; independent source review found no blockers. See `TERMINAL_RESIZE_RCA.md`.
+- Rollback: select the retained 0.30.1 release through the guarded release process and reload the browser. No data migration or agent restart is needed.
+- Deployment scope: narrow hotfix on the selected private 0.30.1 release; no unrelated pending branches or runtime dependency changes.
+
+## 0.30.1 — unreleased, 2026-10-15 (#196)
+
+- Impact: maximizing a short terminal no longer brings back stale prompt rows from xterm's unused alternate-screen buffer. The compatibility guard only adjusts an empty buffer; populated output, normal scrollback, drafts, and connections are preserved.
+- Configuration/migration: none. Reload the Console page once after rollout to replace any already-corrupted browser terminal; agents keep running in tmux. Terminal asset URL updated to avoid a stale cached module.
+- Verification: a browser regression reproduced one visible prompt becoming two before the fix, with no outgoing input. Run `npx playwright test tests/ui/terminal-resize.spec.mjs tests/ui/terminal-layout.spec.mjs tests/ui/terminal-input.spec.mjs tests/ui/terminal-identity.spec.mjs` and `python -m pytest tests/test_version.py`. Result: 133 browser cases passed, two desktop-only cases skipped on mobile, and all three version checks passed. Independent source review found no blockers. See `TERMINAL_RESIZE_RCA.md` for the dependency cause and future upgrade checks.
+- Rollback: select the retained prior release through the existing guarded release process and reload the browser. The display defect returns; no data migration or agent restart is needed.
+
+
+- Deployment scope: private hotfix on deployed `3286c4806d2e`, retaining its existing 0.30.0 features. The terminal code matches PR #197; pending broker, controls, and sampler source branches are not part of this release.
 
 ## 0.30.0 — local integration candidate, 2026-10-10 (#181)
 

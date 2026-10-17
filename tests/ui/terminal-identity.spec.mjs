@@ -18,7 +18,14 @@ async function fixture(page){
     window.__identitySockets=[];window.__identityBytes=[];
     class Socket{
       static OPEN=1;
-      constructor(url){this.url=url;this.readyState=1;window.__identitySockets.push(this);queueMicrotask(()=>this.onopen?.());}
+      constructor(url){
+        this.url=url;this.readyState=1;window.__identitySockets.push(this);
+        queueMicrotask(()=>{
+          if(window.__identityFailureCode){
+            this.readyState=3;this.onclose?.({code:window.__identityFailureCode});
+          }else this.onopen?.();
+        });
+      }
       send(value){if(typeof value!=='string')window.__identityBytes.push(new TextDecoder().decode(value));}
       close(){this.readyState=3;}
     }
@@ -87,13 +94,52 @@ test('legacy dock keeps the same iframe and active tab through rename and update
 });
 
 
-test('terminal failure offers manual reconnect without an automatic retry loop',async({page})=>{
-  await fixture(page);await connected(page);
-  await page.evaluate(()=>{const socket=window.__identitySockets.at(-1);socket.readyState=3;socket.onclose({code:4001,reason:'Temporary terminal failure'});});
-  await expect(page.locator('#connection')).toHaveText('Temporary terminal failure');await expect(page.locator('#reconnect')).toBeVisible();
-  await page.waitForTimeout(600);expect(await page.evaluate(()=>window.__identitySockets.length)).toBe(1);
+test('temporary terminal failures reconnect automatically without replaying input or losing identity and draft',async({page})=>{
+  await page.clock.install();await fixture(page);await connected(page);
+  await page.locator('#toggle-composer').click();await page.locator('#composer').fill('Unsent recovery draft');
+  await page.clock.pauseAt(await page.evaluate(()=>Date.now()+1000));
+  await page.evaluate(()=>{Math.random=()=>0;});
+  let count=1;
+  for(const code of [4001,1011]){
+    await page.evaluate(code=>{const socket=window.__identitySockets.at(-1);socket.readyState=3;socket.onclose({code});},code);
+    await expect(page.locator('#connection')).toContainText('(attempt 1/30)');
+    await expect(page.locator('#reconnect')).toBeDisabled();
+    await page.clock.fastForward(249);
+    expect(await page.evaluate(()=>window.__identitySockets.length)).toBe(count);
+    await page.clock.fastForward(1);
+    await expect(page.locator('#connection')).toHaveText('Connected');
+    expect(await page.evaluate(()=>window.__identitySockets.length)).toBe(++count);
+    await page.clock.fastForward(60000);
+    expect(await page.evaluate(()=>window.__identitySockets.length)).toBe(count);
+  }
+  expect(await page.evaluate(()=>window.__identitySockets.map(socket=>new URL(socket.url).searchParams.get('session_id')))).toEqual(['original-id','original-id','original-id']);
+  await expect(page.locator('#composer')).toHaveValue('Unsent recovery draft');
+  expect(await page.evaluate(()=>window.__identityBytes)).toEqual([]);
+});
+
+test('consecutive terminal connection failures stop after bounded retries and allow manual recovery',async({page})=>{
+  await page.clock.install();await fixture(page);await connected(page);
+  await page.locator('#toggle-composer').click();await page.locator('#composer').fill('Keep through failed retries');
+  await page.clock.pauseAt(await page.evaluate(()=>Date.now()+1000));
+  await page.evaluate(()=>{
+    // A failed handshake must not emit open, which resets the retry budget.
+    window.__identityFailureCode=1011;
+    const socket=window.__identitySockets.at(-1);socket.readyState=3;socket.onclose({code:1011});
+  });
+  for(let attempt=1;attempt<=30;attempt++){
+    await expect(page.locator('#connection')).toContainText(`(attempt ${attempt}/30)`);
+    await page.clock.fastForward(30000);
+    await expect.poll(()=>page.evaluate(()=>window.__identitySockets.length)).toBe(attempt+1);
+  }
+  await expect(page.locator('#connection')).toHaveText('Max reconnection attempts reached. Click Reconnect to retry.');
+  await expect(page.locator('#reconnect')).toBeVisible();await expect(page.locator('#reconnect')).toBeEnabled();
+  await page.clock.fastForward(60000);
+  expect(await page.evaluate(()=>window.__identitySockets.length)).toBe(31);
+  await page.evaluate(()=>{window.__identityFailureCode=null;});
   await page.locator('#reconnect').click();await expect(page.locator('#connection')).toHaveText('Connected');
-  expect(await page.evaluate(()=>window.__identitySockets.length)).toBe(2);
+  expect(await page.evaluate(()=>window.__identitySockets.length)).toBe(32);
+  await expect(page.locator('#composer')).toHaveValue('Keep through failed retries');
+  expect(await page.evaluate(()=>window.__identityBytes)).toEqual([]);
 });
 
 for (const entry of ['typing', 'cleared', 'direct recovery']) {

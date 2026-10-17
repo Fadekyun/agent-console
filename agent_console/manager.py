@@ -1870,7 +1870,9 @@ class SessionManager:
                 # than presenting the interactive-mode default as its sandbox.
                 native_manifest=self.settings.state_dir/'workflow-attempts'/_workflow_attempt/'launch.json'
                 native_argv=json.loads(native_manifest.read_text())['argv']
-                launch_view['permission_mode']=native_argv[native_argv.index('--sandbox')+1]
+                from .native_permissions import native_permission_mode
+                permission_mode = native_permission_mode(native_argv)
+                launch_view['permission_mode'] = permission_mode
 
             launcher_created = True
             launcher = self._write_launcher(

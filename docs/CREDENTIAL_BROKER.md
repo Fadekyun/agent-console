@@ -39,12 +39,14 @@ curl --fail http://127.0.0.1:8792/healthz
 
 Before enabling the broker, check the installed tool launchers. Selecting a Console release does not replace custom `AGCONSOLE_PI_BIN`, `AGCONSOLE_HERMES_BIN` or `AGCONSOLE_OPENCODE_BIN` wrappers. Install the reviewed `scripts/pi-wrapper`, `scripts/hermes-wrapper` and `scripts/opencode-wrapper` changes at the configured paths where those wrappers are used, preserving any unrelated local changes. Legacy wrappers that source credential files can reintroduce raw keys after Console prepares the environment. The [Pi/Hermes wrapper guide](PI_HERMES_COMMANDCODE.md#updating-an-existing-host-wrapper) describes the backup and verification process.
 
-Configure the Console web service with:
+Set both options in the shared runtime file used by the Console web service and local owner CLI (normally `~/.config/agent-console/runtime.env`):
 
 ```text
 AGENT_CONSOLE_BROKER_URL=http://127.0.0.1:8792
 AGENT_CONSOLE_BROKER_ADMIN_FILE=/absolute/private/path/broker-admin-token
 ```
+
+Put only the administration token file path in this configuration, never its contents. A web-service-only environment override is insufficient: local `agentctl` commands load the shared runtime file and would otherwise continue using direct credential configuration. Direct Python entrypoints must receive the same two settings. Managed launch snapshots and launcher exports strip all `AGENT_CONSOLE_BROKER_ADMIN*` settings. Processes sharing the Console Unix user still have the access described under Security boundary.
 
 Reload the Console web service in your normal maintenance window. New and explicitly restarted managed sessions use broker routes. Enter test credentials through **Settings → Environment variables**, then confirm behavior before entering real keys. Once enabled, the five protected names use broker storage exclusively; legacy host files and launch snapshots are not used as a fallback.
 
@@ -106,4 +108,8 @@ python -m unittest tests.test_credential_broker -v
 
 The tests exercise all six fixed routes, write-only metadata, inheritance and suppression, immediate replacement, project token revocation, permission separation, malformed input, redirects, streaming, cancellation, error redaction, and atomic storage. They contact no real upstreams and require no real credentials.
 
-For rollback, keep the broker available for existing broker-connected sessions. Restore the previous reviewed application and its native launch assets through the normal rollback process, or stop those sessions and create new ones after restoring direct account configuration. Removing the two broker settings only changes new launches; this version refuses to restart or resume a broker-backed session with broker mode disabled, before stopping any running process. It never converts broker tokens into raw keys. Preserve the private broker store while deciding whether to retain it. No automatic reverse migration or credential rotation is performed.
+Before any broker-backed session has been created, the normal guarded application rollback remains available. Remove the two broker settings from the shared runtime configuration and restart web only; preserve the private broker store and credential files.
+
+After a broker-backed session has been created, keep the broker service, compatible application code, matching wrappers and native launch assets available. Prefer a forward repair or a reviewed rollback build that retains broker support. Pre-broker releases, including 0.30.2, lack the restart/resume guard and must not be selected while broker-backed session records remain restartable. Stopping or archiving a terminal alone does not remove its stored broker launch configuration. Returning those records to a pre-broker release requires a separately reviewed retirement or conversion procedure; no automatic reverse migration is provided.
+
+With this broker-aware version, removing the two settings from shared runtime configuration changes new launches and makes restart/resume of a broker-backed session fail before touching its process or launch assets. It never converts broker tokens into raw keys. Keep the broker running for existing clients, retain its private store, and do not export or rotate upstream credentials as part of rollback.
