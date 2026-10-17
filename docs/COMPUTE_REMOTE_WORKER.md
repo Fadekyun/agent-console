@@ -143,8 +143,8 @@ Only acknowledged results with completed publications can enter garbage
 collection. Unknown/unpublished jobs, all other live references, and 48-hour
 upload pins protect shared objects. Job, attempt and publication receipts remain
 in SQLite. After central artifact acceptance, a durable acknowledgement outbox
-lets the worker reclaim its archived workspace and unshared blobs; receipt and
-inventory metadata remain. Lost acknowledgement responses are retried safely. Orphan uploads and `.part` files are never deleted solely by age.
+lets the worker reclaim its archived workspace; receipt, inventory and bulk
+content objects remain until a separately qualified worker cache policy retires them. Lost acknowledgement responses are retried safely. Orphan uploads and `.part` files are never deleted solely by age.
 The owner-only `POST /api/compute/publications/{id}/reconcile` records
 `outcome: completed|abandoned` and external verification `evidence` for an expired
 publication. It never executes a production action. Do not clear unknown receipts merely to unblock a queue; reconcile the actual
@@ -155,7 +155,7 @@ transaction/idempotency contract and does not make a multi-system write atomic.
 
 Set the durable owner hold first. Existing remote work is stopped/inspected; no
 new job starts. Disable the worker configuration only after termination receipts
-are confirmed. Preserve unknown reservations and the database. Schema version 2
+are confirmed. Preserve unknown reservations and the database. Schema version 3
 is additive but older queue code rejects it intentionally, so a code rollback
 must keep the compatible queue modules or restore a pre-migration database only
 when no post-migration receipts would be lost. Never blindly replay old timers.
@@ -232,3 +232,31 @@ Validation: `python -m unittest discover -s tests -p test_compute_producer_bridg
 Tests use disposable files and local subprocess fixtures, with no network access.
 Rollback: revoke only the affected producer SSH key/account or disable its API
 policy; preserve queue, artifacts and publication receipts for reconciliation.
+
+## External write uncertainty is separate from process termination
+
+A Bushi worker may exit after clicking submit without knowing whether the site
+applied it. The fixed worker classifies its bound `response.json`
+`errorType: write_unknown` as `state: unknown`, `reason: external_write_unknown`
+and includes its immutable output inventory. The controller persists a separate
+external-write fence **before** artifact retrieval. A failed transfer, expired
+lease, restart or later process-exit receipt cannot release `bushi-organizer`.
+Both host and named reservations stay held. Production-write failures without
+proof that no write started are treated conservatively the same way.
+
+Evidence artifacts are retrieved and verified while the attempt remains unknown;
+the owning producer may fetch archived evidence for review. Unknown results are
+never acknowledged to the worker or automatically consumed. Ordinary termination
+reconciliation explicitly rejects these attempts, including after process exit.
+
+Only authenticated owner control can call
+`POST /api/compute/attempts/{id}/reconcile-external` with the exact `generation`,
+`outcome: applied|not_applied`, and independently verified external `evidence`.
+Confirmed process termination is also required. This records the reviewed outcome
+and releases reservations, but leaves the original attempt terminal and ineligible
+for replay. Follow-up work needs a new explicitly reconciled request. This route
+is absent from the producer bridge and inaccessible to managed agents.
+
+Schema 3 prevents older queue code from ignoring the external fence after rollback.
+Tests cover transfer failure, restart, late success after lease loss, failed writes,
+ordinary termination reconciliation, evidence fetch authorization and owner guards.

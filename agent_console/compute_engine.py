@@ -152,31 +152,36 @@ class ComputeEngine:
         validate_binding(response, expected)
         state = response.get('state')
         terminated = response.get('termination_confirmed') is True
+        terminal_states = {'completed', 'succeeded', 'failed', 'stopped', 'oom', 'timeout', 'interrupted'}
+        external_uncertain = (attempt.get('external_write_unknown')
+            or response.get('reason') == 'external_write_unknown'
+            or (manifest['production_writes'] and response.get('write_outcome') != 'not_started'
+                and (state == 'unknown' or (terminated and state not in {'completed', 'succeeded'})
+                     or attempt['state'] == 'unknown')))
+        if external_uncertain:
+            # Persist the business fence before fetching anything: disk/transport
+            # failures must not allow the other host to repeat the external action.
+            self.queue.mark_external_unknown(attempt['id'], attempt['generation'], terminated=terminated)
+            report = response.get('result')
+            if terminated and isinstance(report, dict) and report.get('inventory_artifact'):
+                if self._archive_result(report, expected, attempt):
+                    self.queue.mark_external_unknown(attempt['id'], attempt['generation'], terminated=True,
+                        report={**report, 'binding': expected, 'external_write_unknown': True})
+            return
         if attempt['state'] == 'unknown':
-            if terminated and state in {'completed', 'succeeded', 'failed', 'stopped', 'oom', 'timeout', 'interrupted'}:
+            if terminated and state in terminal_states:
                 self.queue.reconcile_terminated(attempt['id'],
                     evidence='Authenticated worker terminal receipt matches immutable attempt binding; result requires review',
-                    actor='compute-dispatcher', failure='oom' if state == 'oom' or response.get('failure') == 'oom' else None)
+                    actor='compute-dispatcher', failure='oom' if state == 'oom' or response.get('failure') == 'oom' else None,
+                    write_not_started=response.get('write_outcome') == 'not_started')
             return
-        if terminated and state in {'completed', 'succeeded', 'failed', 'stopped', 'oom', 'timeout', 'interrupted'}:
+        if terminated and state in terminal_states:
             if state in {'completed', 'succeeded'}:
                 report = response.get('result')
-                if not isinstance(report, dict) or len(canonical(report).encode()) > 8192:
-                    raise ValueError('invalid result receipt')
-                artifacts = report.get('artifacts')
-                if not isinstance(artifacts, list) or not 1 <= len(artifacts) <= 10:
-                    raise ValueError('result must name bounded immutable artifacts')
-                budget = time.monotonic() + 5
                 self.queue.heartbeat(attempt['id'], attempt['generation'])
-                for description in artifacts:
-                    if not self._fetch(description, budget=budget, attempt=attempt):
-                        return
-                for description in self._result_descriptions(report, expected):
-                    if not self._fetch(description, budget=budget, attempt=attempt):
-                        return
+                if not self._archive_result(report, expected, attempt):
+                    return
                 self.queue.finish(attempt['id'], attempt['generation'], report={**report, 'binding': expected})
-            elif manifest['production_writes'] and response.get('write_outcome') != 'not_started':
-                self.queue.mark_unknown(attempt['id'], reason='remote_state_uncertain')
             else:
                 self.queue.finish(attempt['id'], attempt['generation'],
                                   failure='oom' if state == 'oom' or response.get('failure') == 'oom' else 'adapter_failed')
@@ -191,6 +196,21 @@ class ComputeEngine:
         validate_binding(heartbeat, expected)
         self.queue.heartbeat(attempt['id'], attempt['generation'],
                              checkpoint_digest=heartbeat.get('checkpoint_sha256'))
+
+    def _archive_result(self, report, expected, attempt):
+        if not isinstance(report, dict) or len(canonical(report).encode()) > 8192:
+            raise ValueError('invalid result receipt')
+        artifacts = report.get('artifacts')
+        if not isinstance(artifacts, list) or not 1 <= len(artifacts) <= 10:
+            raise ValueError('result must name bounded immutable artifacts')
+        budget = time.monotonic() + 5
+        for description in artifacts:
+            if not self._fetch(description, budget=budget, attempt=attempt):
+                return False
+        for description in self._result_descriptions(report, expected):
+            if not self._fetch(description, budget=budget, attempt=attempt):
+                return False
+        return True
 
     def _acknowledge_archived(self):
         for attempt in self.queue.pending_remote_acks()[:1]:

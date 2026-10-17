@@ -36,6 +36,12 @@ class ReconcileRequest(ComputeRequest):
     evidence: str = Field(min_length=1, max_length=4000)
 
 
+class ExternalOutcomeReconcile(ComputeRequest):
+    generation: int = Field(ge=1)
+    outcome: Literal['applied', 'not_applied']
+    evidence: str = Field(min_length=1, max_length=4000)
+
+
 class PublicationReconcile(ComputeRequest):
     outcome: Literal['completed', 'abandoned']
     evidence: str = Field(min_length=1, max_length=4000)
@@ -120,6 +126,10 @@ def compute_routes(engine_callable, require_identity, *, permitted_origins=froze
         return engine_callable().queue.reconcile_terminated(
             attempt_id, evidence=payload.evidence, actor=auth.actor,
         )
+
+    @router.post('/api/compute/attempts/{attempt_id}/reconcile-external')
+    def reconcile_external(attempt_id: str, payload: ExternalOutcomeReconcile, auth=Depends(operator)):
+        return engine_callable().queue.reconcile_external(attempt_id, **payload.model_dump(), actor=auth.actor)
 
     @router.get('/api/compute/publications')
     def publications():

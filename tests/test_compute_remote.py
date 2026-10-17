@@ -246,6 +246,30 @@ class ProducerTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/compute/producers/jobs/'+other['id'],headers=self.headers).status_code,403)
 
 
+    def test_producer_can_fetch_archived_unknown_evidence_but_not_reconcile_or_publish(self):
+        queue = self.engine.queue
+        queue.set_hold(held=False, actor='owner')
+        job = queue.enqueue(kind='bushi.run', execution_target='agc-laptop', source_digest=SHA,
+            input_digest='b'*64, request_key='test:unknown', actor='producer:test',
+            manifest=manifest('bushi.run', production_writes=True))
+        attempt = queue.reserve(laptop(queue.clock()))
+        expected = binding(job, attempt)
+        self.engine.artifacts.put(SHA, size=len(DATA), offset=0,
+            data=base64.b64encode(DATA).decode(), final=True)
+        queue.mark_external_unknown(attempt['id'], 1, terminated=True)
+        route = '/api/compute/producers/jobs/' + job['id'] + '/artifacts/' + SHA
+        self.assertEqual(self.client.get(route, headers=self.headers).status_code, 400)
+        queue.mark_external_unknown(attempt['id'], 1, terminated=True,
+            report={'binding': expected, 'artifacts': [{'sha256': SHA, 'size': len(DATA)}]})
+        response = self.client.get(route, headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(base64.b64decode(response.json()['data']), DATA)
+        self.assertEqual(self.client.post('/api/compute/producers/jobs/'+job['id']+'/publication',
+            headers=self.headers, json={'target':'site:prod','request_key':'test:pub'}).status_code, 400)
+        self.assertEqual(self.client.post('/api/compute/producers/attempts/'+attempt['id']+'/reconcile-external',
+            headers=self.headers, json={'generation':1,'outcome':'applied','evidence':'not authority'}).status_code, 404)
+
+
 if __name__=='__main__':
     unittest.main()
 
@@ -434,3 +458,123 @@ class OrganizerFenceTests(unittest.TestCase):
             self.assertEqual(attempt['job_id'],emergency['id'])
             self.queue.finish(attempt['id'],attempt['generation'],failure='adapter_failed')
             self.assertEqual(self.queue.status()['resource_reservations'],[])
+
+
+class ExternalOutcomeFenceTests(unittest.TestCase):
+    setUp = RemoteTests.setUp
+    engine = RemoteTests.engine
+
+    def enqueue_write(self):
+        return self.queue.enqueue(kind='bushi.run', execution_target='agc-laptop', source_digest=SHA,
+            input_digest='b'*64, request_key='bushi:write', actor='producer:test',
+            manifest=manifest('bushi.run', production_writes=True))
+
+    def worker(self, *, terminal='unknown'):
+        worker = Mock()
+        expected, objects = {}, {}
+        self.allow_fetch = False
+        def call(action, **payload):
+            if action == 'stage':
+                return {'complete': True, 'offset': len(DATA)}
+            if action == 'start':
+                expected.update({key: value for key, value in payload.items() if key != 'manifest'})
+                return {'binding': expected, 'state': 'running', 'termination_confirmed': False}
+            if action == 'heartbeat':
+                return {'binding': expected, 'state': 'running', 'termination_confirmed': False}
+            if action == 'inspect':
+                output = json.dumps({'ok': False, 'errorType': 'write_unknown', 'worker_binding': expected}).encode()
+                output_sha = hashlib.sha256(output).hexdigest()
+                inventory = json.dumps({'version': 1, 'binding': expected,
+                    'files': [{'path': 'response.json', 'sha256': output_sha, 'size': len(output)}]}).encode()
+                inventory_sha = hashlib.sha256(inventory).hexdigest()
+                objects.update({output_sha: output, inventory_sha: inventory})
+                description = {'sha256': inventory_sha, 'size': len(inventory)}
+                return {'binding': expected, 'state': terminal, 'termination_confirmed': True,
+                    'reason': 'external_write_unknown' if terminal == 'unknown' else 'adapter_failed',
+                    'result': {'inventory_artifact': description, 'artifacts': [description]}}
+            if action == 'fetch':
+                if not self.allow_fetch:
+                    raise WorkerUnavailable('lost artifact receipt')
+                data = objects[payload['artifact_id']]
+                return {'artifact_id': payload['artifact_id'], 'offset': 0, 'size': len(data),
+                        'data': base64.b64encode(data).decode(), 'eof': True}
+            raise AssertionError('unknown results must never be acknowledged')
+        worker.call.side_effect = call
+        return worker, objects
+
+    def test_external_unknown_keeps_cross_host_fence_and_evidence_across_restart(self):
+        job = self.enqueue_write()
+        worker, objects = self.worker()
+        engine = self.engine(worker)
+        engine.tick()  # start once
+        engine.tick()  # terminal unknown, transfer fault
+        attempt = self.queue.inspect(job['id'])['attempts'][0]
+        self.assertEqual(attempt['external_write_unknown'], 1)
+        self.assertIsNotNone(attempt['termination_confirmed_at'])
+        self.assertIsNone(attempt['result_json'])
+        self.assertEqual(self.queue.status()['resource_reservations'][0]['resource'], 'bushi-organizer')
+        self.assertEqual(len(self.queue.status()['reservations']), 1)
+        with self.assertRaisesRegex(ValueError, 'business outcome'):
+            self.queue.reconcile_terminated(attempt['id'], evidence='process definitely ended', actor='owner')
+        self.now += 121
+        self.allow_fetch = True
+        restarted = self.engine(worker)
+        restarted.tick()
+        result = self.queue.inspect(job['id'])
+        self.assertEqual(result['state'], 'unknown')
+        report = json.loads(result['attempts'][0]['result_json'])
+        self.assertTrue(report['external_write_unknown'])
+        self.assertEqual(restarted.result_artifact_ids(report), set(objects))
+        for sha, data in objects.items():
+            self.assertTrue(restarted.artifacts.has({'sha256': sha, 'size': len(data)}))
+        self.assertEqual(self.queue.pending_remote_acks(), [])
+        # Further protocol trouble cannot downgrade the durable business fence.
+        self.queue.mark_unknown(attempt['id'], reason='remote_protocol_invalid')
+        self.assertEqual(self.queue.inspect(job['id'])['attempts'][0]['reason'], 'external_write_unknown')
+        with self.assertRaises(ValueError):
+            self.queue.reconcile_external(attempt['id'], 2, outcome='applied', evidence='wrong generation', actor='owner')
+        self.queue.reconcile_external(attempt['id'], 1, outcome='applied',
+            evidence='Owner independently read exact event and player status10 from organizer', actor='owner')
+        self.assertEqual(self.queue.status()['resource_reservations'], [])
+        self.assertEqual(self.queue.status()['reservations'], [])
+        self.now += 400
+        with self.assertRaises(ValueError):
+            self.queue.retry(job['id'], actor='owner')
+        self.assertEqual(self.queue.pending_remote_acks(), [])
+        self.assertEqual(sum(call.args[0] == 'start' for call in worker.call.call_args_list), 1)
+
+    def test_lease_loss_and_late_success_cannot_release_external_authority(self):
+        job = self.enqueue_write()
+        worker, _ = self.worker(terminal='succeeded')
+        engine = self.engine(worker)
+        engine.tick()
+        self.now += 121
+        self.allow_fetch = True
+        engine.tick()
+        result = self.queue.inspect(job['id'])
+        self.assertEqual(result['state'], 'unknown')
+        self.assertEqual(result['attempts'][0]['external_write_unknown'], 1)
+        self.assertEqual(len(self.queue.status()['resource_reservations']), 1)
+        self.assertEqual(self.queue.pending_remote_acks(), [])
+
+    def test_failed_write_and_termination_only_reconciliation_remain_fenced(self):
+        job = self.enqueue_write()
+        worker, _ = self.worker(terminal='failed')
+        engine = self.engine(worker)
+        engine.tick()
+        self.allow_fetch = True
+        engine.tick()
+        attempt = self.queue.inspect(job['id'])['attempts'][0]
+        self.assertEqual(attempt['external_write_unknown'], 1)
+        with self.assertRaises(ValueError):
+            self.queue.reconcile_terminated(attempt['id'], evidence='cgroup empty', actor='owner', write_not_started=True)
+        self.assertEqual(len(self.queue.status()['resource_reservations']), 1)
+
+    def test_business_readback_cannot_release_a_still_running_process(self):
+        job = self.enqueue_write()
+        attempt = self.queue.reserve(laptop())
+        self.queue.claim_remote_start(attempt['id'], 1)
+        self.queue.mark_external_unknown(attempt['id'], 1)
+        with self.assertRaisesRegex(ValueError, 'process termination'):
+            self.queue.reconcile_external(attempt['id'], 1, outcome='not_applied', evidence='external readback', actor='owner')
+        self.assertEqual(len(self.queue.status()['resource_reservations']), 1)

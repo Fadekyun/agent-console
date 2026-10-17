@@ -27,7 +27,7 @@ class ComputeQueue:
         with self.store.connect(write=True) as db:
             db.execute('CREATE TABLE IF NOT EXISTS compute_schema(version INTEGER NOT NULL)')
             row = db.execute('SELECT version FROM compute_schema').fetchone()
-            if row and row[0] not in (1, 2):
+            if row and row[0] not in (1, 2, 3):
                 raise ValueError('unsupported compute schema; preserve state')
             if not row:
                 db.execute('INSERT INTO compute_schema VALUES(1)')
@@ -68,9 +68,13 @@ class ComputeQueue:
             attempt_columns = {r['name'] for r in db.execute('PRAGMA table_info(compute_attempts)')}
             if 'remote_start_sent_at' not in attempt_columns:
                 db.execute('ALTER TABLE compute_attempts ADD COLUMN remote_start_sent_at REAL')
+            for name, definition in (('external_write_unknown', 'INTEGER NOT NULL DEFAULT 0'),
+                                     ('termination_confirmed_at', 'REAL')):
+                if name not in attempt_columns:
+                    db.execute(f'ALTER TABLE compute_attempts ADD COLUMN {name} {definition}')
             db.execute('CREATE TABLE IF NOT EXISTS compute_resource_reservations(resource TEXT PRIMARY KEY, attempt_id TEXT NOT NULL REFERENCES compute_attempts(id))')
             db.execute('CREATE TABLE IF NOT EXISTS compute_remote_acks(attempt_id TEXT PRIMARY KEY REFERENCES compute_attempts(id), inventory_digest TEXT NOT NULL, acknowledged_at REAL)')
-            db.execute('UPDATE compute_schema SET version=2')
+            db.execute('UPDATE compute_schema SET version=3')
             db.execute('INSERT OR IGNORE INTO compute_control VALUES(1,1)')
 
     def held(self):
@@ -278,7 +282,7 @@ class ComputeQueue:
                 db.execute('INSERT OR IGNORE INTO compute_remote_acks VALUES(?,?,NULL)', (attempt_id, inventory_digest))
             self._event(db, state, attempt_id, {'reason': failure})
 
-    def reconcile_terminated(self, attempt_id, *, evidence, actor, failure=None):
+    def reconcile_terminated(self, attempt_id, *, evidence, actor, failure=None, write_not_started=False):
         bounded_text(evidence, 'termination evidence', 4000, True)
         if failure not in (None, 'oom'):
             raise ValueError('unsupported reconciled failure')
@@ -287,6 +291,11 @@ class ComputeQueue:
             row = db.execute('SELECT * FROM compute_attempts WHERE id=?', (attempt_id,)).fetchone()
             if row is None or row['state'] != 'unknown':
                 raise ValueError('only unknown attempts require termination reconciliation')
+            job = db.execute('SELECT manifest_json FROM compute_jobs WHERE id=?', (row['job_id'],)).fetchone()
+            write_started = (job['manifest_json'] and json.loads(job['manifest_json']).get('production_writes')
+                             and row['remote_start_sent_at'] is not None)
+            if row['external_write_unknown'] or (write_started and not write_not_started):
+                raise ValueError('external write requires separate business outcome reconciliation')
             now = self.clock()
             db.execute("UPDATE compute_attempts SET state='failed',reason=?,ended_at=? WHERE id=?", (failure, now, attempt_id))
             db.execute("UPDATE compute_jobs SET state='failed',reason=?,updated_at=? WHERE id=?", (failure, now, row['job_id']))
@@ -300,6 +309,8 @@ class ComputeQueue:
             row = db.execute('SELECT * FROM compute_jobs WHERE id=?', (job_id,)).fetchone()
             if row is None or row['state'] != 'failed' or row['reason'] == 'oom':
                 raise ValueError('retry requires confirmed termination without an unchanged OOM budget')
+            if db.execute('SELECT 1 FROM compute_attempts WHERE job_id=? AND external_write_unknown=1', (job_id,)).fetchone():
+                raise ValueError('external outcome requires a new explicitly reconciled request')
             if row['manifest_json'] and json.loads(row['manifest_json']).get('production_writes'):
                 raise ValueError('production write jobs require a newly reconciled request; never replay')
             if row['generation'] >= 3:
@@ -335,10 +346,57 @@ class ComputeQueue:
             row = db.execute('SELECT * FROM compute_attempts WHERE id=?', (attempt_id,)).fetchone()
             if row is None or row['state'] not in ACTIVE:
                 raise ValueError('attempt is not active')
+            if row['external_write_unknown']:
+                return  # Protocol or lease errors must never erase the business fence.
             db.execute("UPDATE compute_attempts SET state='unknown',reason=? WHERE id=?", (reason, attempt_id))
             db.execute("UPDATE compute_jobs SET state='unknown',reason='reconciliation_required',updated_at=? WHERE id=?",
                        (self.clock(), row['job_id']))
             self._event(db, 'unknown', attempt_id, {'reason': reason})
+
+
+    def mark_external_unknown(self, attempt_id, generation, *, terminated=False, report=None):
+        encoded = canonical(report) if report is not None else None
+        if encoded is not None:
+            bounded_text(encoded, 'external evidence', 8192, True)
+        with self.store.connect(write=True) as db:
+            row = db.execute('SELECT * FROM compute_attempts WHERE id=? AND generation=?',
+                             (attempt_id, generation)).fetchone()
+            if row is None or row['state'] not in ACTIVE:
+                raise ValueError('external evidence requires the unresolved attempt')
+            if row['result_json'] and encoded is not None and row['result_json'] != encoded:
+                raise ValueError('external evidence cannot change immutable result')
+            db.execute("""UPDATE compute_attempts SET state='unknown',reason='external_write_unknown',
+                external_write_unknown=1,termination_confirmed_at=COALESCE(termination_confirmed_at,?),
+                result_json=COALESCE(result_json,?),result_digest=COALESCE(result_digest,?) WHERE id=?""",
+                (self.clock() if terminated else None, encoded,
+                 hashlib.sha256(encoded.encode()).hexdigest() if encoded else None, attempt_id))
+            db.execute("UPDATE compute_jobs SET state='unknown',reason='external_write_unknown',updated_at=? WHERE id=?",
+                       (self.clock(), row['job_id']))
+            if not row['external_write_unknown'] or (encoded and not row['result_json']):
+                self._event(db, 'external_write_unknown', attempt_id,
+                            {'termination_confirmed': terminated, 'evidence_archived': encoded is not None})
+            # No reservation deletion and no worker ack/GC outbox entry.
+
+    def reconcile_external(self, attempt_id, generation, *, outcome, evidence, actor):
+        bounded_text(evidence, 'external readback evidence', 4000, True)
+        if outcome not in ('applied', 'not_applied'):
+            raise ValueError('external outcome must be established by readback')
+        with self.store.connect(write=True) as db:
+            row = db.execute('SELECT * FROM compute_attempts WHERE id=? AND generation=?',
+                             (attempt_id, generation)).fetchone()
+            if (row is None or row['state'] != 'unknown' or not row['external_write_unknown']
+                    or row['termination_confirmed_at'] is None):
+                raise ValueError('external reconciliation requires confirmed process termination')
+            reason = 'external_write_verified_' + outcome
+            db.execute("UPDATE compute_attempts SET state='failed',reason=?,ended_at=? WHERE id=?",
+                       (reason, self.clock(), attempt_id))
+            db.execute("UPDATE compute_jobs SET state='failed',reason=?,updated_at=? WHERE id=?",
+                       (reason, self.clock(), row['job_id']))
+            db.execute('DELETE FROM compute_reservations WHERE attempt_id=?', (attempt_id,))
+            db.execute('DELETE FROM compute_resource_reservations WHERE attempt_id=?', (attempt_id,))
+            self._event(db, 'external_outcome_reconciled', attempt_id,
+                        {'outcome': outcome, 'evidence': evidence}, actor)
+        return self.inspect(row['job_id'])
 
 
     def claim_remote_start(self, attempt_id, generation):

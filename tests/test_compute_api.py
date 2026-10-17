@@ -25,7 +25,7 @@ JOB = {
 class ComputeApiTests(unittest.TestCase):
     def setUp(self):
         self.queue = Mock()
-        for name in ('enqueue', 'inspect', 'retry', 'cancel', 'reconcile_terminated'):
+        for name in ('enqueue', 'inspect', 'retry', 'cancel', 'reconcile_terminated', 'reconcile_external'):
             getattr(self.queue, name).return_value = {'id': 'job-one', 'state': 'queued'}
         self.queue.set_hold.return_value = {'held': True}
         self.engine = SimpleNamespace(queue=self.queue, status=Mock(return_value={
@@ -55,6 +55,8 @@ class ComputeApiTests(unittest.TestCase):
             ('POST', '/api/compute/jobs/job-one/retry', {}),
             ('POST', '/api/compute/jobs/job-one/cancel', {}),
             ('POST', '/api/compute/attempts/attempt-one/reconcile', {'evidence': 'Verified process exit'}),
+            ('POST', '/api/compute/attempts/attempt-one/reconcile-external',
+             {'generation': 1, 'outcome': 'applied', 'evidence': 'Exact external event/player readback'}),
         ]
 
     def test_every_route_requires_operator_before_engine_access(self):

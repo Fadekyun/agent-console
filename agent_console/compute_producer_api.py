@@ -139,9 +139,12 @@ def producer_routes(engine_callable, *, config_loader=configured_producers):
               producer=Depends(authenticate)):
         engine = engine_callable()
         job = owned(engine, job_id, producer)
-        if job['state'] != 'completed':
+        attempt = job['attempts'][-1] if job['attempts'] else {}
+        if job['state'] != 'completed' and not attempt.get('external_write_unknown'):
             raise ValueError('result is not committed centrally')
-        result = json.loads(job['attempts'][-1]['result_json'])
+        if not attempt.get('result_json'):
+            raise ValueError('result evidence is not archived centrally')
+        result = json.loads(attempt['result_json'])
         if artifact_id not in engine.result_artifact_ids(result):
             raise PermissionError('artifact is not part of this result')
         return engine.artifacts.get(artifact_id, offset=offset, length=length)
