@@ -8,4 +8,3 @@ defaultVhdSize=260GB
 
 [experimental]
 autoMemoryReclaim=gradual
-sparseVhd=true

@@ -4,6 +4,13 @@ $OutputEncoding = [Text.UTF8Encoding]::new($false)
 if ([Security.Principal.WindowsIdentity]::GetCurrent().Name -notmatch '\\agc-worker$') { throw 'Wrong Windows account' }
 $Data = 'C:\ProgramData\AGC-Worker\data'
 $Distro = 'AGC-Worker'
+function Copy-WorkerFile([string]$WindowsPath, [string]$LinuxPath) {
+    $bytes = [IO.File]::ReadAllBytes($WindowsPath)
+    $digest = (Get-FileHash -LiteralPath $WindowsPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $decode = "import base64,hashlib,os,sys; data=base64.b64decode(sys.stdin.buffer.read().strip(),validate=True); assert hashlib.sha256(data).hexdigest()==sys.argv[2]; tmp=sys.argv[1]+'.tmp'; f=open(tmp,'wb'); f.write(data); f.flush(); os.fsync(f.fileno()); f.close(); os.replace(tmp,sys.argv[1])"
+    [Convert]::ToBase64String($bytes) | & wsl.exe -d $Distro -u root --exec /usr/bin/python3 -c $decode $LinuxPath $digest
+    if ($LASTEXITCODE -ne 0) { throw 'Byte-exact worker source copy failed' }
+}
 $stage = 'preflight'
 try {
 Start-Transcript -Path (Join-Path $Data 'bootstrap.log') -Force | Out-Null
@@ -18,13 +25,10 @@ if ($names -notcontains $Distro) {
 }
 # Initial import uses root. Copy via stdin; Windows-drive automount is never needed.
 $stage = 'worker_configuration'
-$wslConf = [IO.File]::ReadAllText('C:\ProgramData\AGC-Worker\code\wsl.conf')
-$wslConf | & wsl.exe -d $Distro -u root --exec /usr/bin/tee /etc/wsl.conf | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'WSL config copy failed' }
+Copy-WorkerFile 'C:\ProgramData\AGC-Worker\code\wsl.conf' '/etc/wsl.conf'
 & wsl.exe -d $Distro -u root --exec /usr/bin/mkdir -p /opt/agc-worker-bootstrap
 foreach ($name in @('worker.py','install-linux.sh','adapters.example.json')) {
-    [IO.File]::ReadAllText("C:\ProgramData\AGC-Worker\code\$name") | & wsl.exe -d $Distro -u root --exec /usr/bin/tee "/opt/agc-worker-bootstrap/$name" | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Source copy failed: $name" }
+    Copy-WorkerFile "C:\ProgramData\AGC-Worker\code\$name" "/opt/agc-worker-bootstrap/$name"
 }
 # Restart only this newly created worker distro to apply its own systemd config.
 & wsl.exe --terminate $Distro
