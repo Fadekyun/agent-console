@@ -133,7 +133,9 @@ if ($Phase -eq 'Account') {
 using System; using System.Text; using System.Runtime.InteropServices;
 public static class AgcProfile {
  [DllImport("userenv.dll", CharSet=CharSet.Unicode, SetLastError=true)]
- public static extern int CreateProfile(string sid, string name, StringBuilder path, uint size);
+ public static extern int CreateProfile([MarshalAs(UnmanagedType.LPWStr)] string sid,
+  [MarshalAs(UnmanagedType.LPWStr)] string name,
+  [Out,MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, uint size);
 }
 public static class AgcAccountRights {
  [StructLayout(LayoutKind.Sequential)] struct ObjectAttributes {
@@ -162,9 +164,10 @@ public static class AgcAccountRights {
  }
 }
 '@
-    $profilePath = New-Object Text.StringBuilder 1024
-    $createResult = [AgcProfile]::CreateProfile($WorkerSid.Value,$WorkerName,$profilePath,1024)
-    $profile = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$($WorkerSid.Value)").ProfileImagePath
+    # CreateProfile's RPC contract requires MAX_PATH, not an oversized buffer.
+    $profilePath = New-Object Text.StringBuilder 260
+    $createResult = [AgcProfile]::CreateProfile($WorkerSid.Value,$WorkerName,$profilePath,260)
+    $profile = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$($WorkerSid.Value)" -ErrorAction SilentlyContinue).ProfileImagePath
     if (-not $profile -or -not (Test-Path $profile)) { throw "Worker profile creation failed ($createResult)" }
     # Add only these rights to this new SID; do not replace machine policy or
     # existing account rights. Batch logon and key-only SSH remain available.
