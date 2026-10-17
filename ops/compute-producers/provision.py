@@ -51,7 +51,7 @@ def client(name,helper):
  pin=root/'known_hosts';atomic(pin,('192.168.1.115,127.0.0.1 '+HOST_KEY+'\n').encode(),0o640,group)
  host='127.0.0.1' if name=='tv' else '192.168.1.115'
  config={'transport':'ssh-stdio','ssh_host':'agc-cp-'+name+'@'+host,'ssh_identity_file':str(key),'ssh_known_hosts_file':str(pin)}
- atomic(root/'client.json',json.dumps(config).encode(),0o600 if name=='tv' else 0o640,group)
+ atomic(root/'client.json',json.dumps(config).encode(),0o600 if name in ('tv','points') else 0o640,group)
  directory('/opt/agent-console-producer')
  destination=Path('/opt/agent-console-producer/compute_producer_bridge.py')
  if destination.exists() and destination.read_bytes()!=helper:raise ValueError('existing helper differs; reviewed update required')
