@@ -118,3 +118,6 @@ a.button{display:inline-flex;align-items:center;justify-content:center;max-width
   .mobile-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding-inline:10px}
   .mobile-nav a{padding:10px 8px}
 }
+
+/* Operational details stay secondary to the next action. */
+.primary-status{font-weight:650}.status-details{font-size:.8rem}.status-details span{display:block}.tool-call{padding:1rem 0;border-bottom:1px solid var(--border,#dce2d9)}.tool-call pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:32rem;overflow:auto}.tool-call details{min-width:0}

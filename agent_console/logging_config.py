@@ -43,7 +43,7 @@ _SENSITIVE_KEY = re.compile(
     re.IGNORECASE,
 )
 _QUOTED_FIELD = re.compile(
-    r"(?P<prefix>(?P<quote>[\"']?)(?P<key>[A-Za-z_][A-Za-z0-9_-]*)(?P=quote)\s*[:=]\s*)"
+    r"(?<![A-Za-z0-9_-])(?P<prefix>(?P<quote>[\"']?)(?P<key>[A-Za-z_][A-Za-z0-9_-]*)(?P=quote)\s*[:=]\s*)"
     r"(?P<value>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')",
     re.DOTALL,
 )
@@ -113,9 +113,18 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname,
             "logger": record.name,
             "message": _redacted_message(record),
+            "process_id": record.process,
+            "release": redact_secrets(os.getenv('AGENT_CONSOLE_RELEASE', '') or
+                                      Path(__file__).resolve().parents[1].name),
         }
+        for key in ('session_id', 'request_id', 'operation'):
+            value = getattr(record, key, None)
+            if isinstance(value, (str, int)):
+                obj[key] = redact_secrets(str(value))[:200]
         if record.exc_info and isinstance(record.exc_info, tuple) and record.exc_info[1]:
             obj["exception"] = redact_secrets(str(record.exc_info[1]))
+            obj['exception_type'] = type(record.exc_info[1]).__name__
+            obj['traceback'] = redact_secrets(''.join(traceback.format_exception(*record.exc_info)))[-16384:]
         return json.dumps(obj, ensure_ascii=False, default=str)
 
 

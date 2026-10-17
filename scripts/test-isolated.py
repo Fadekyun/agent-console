@@ -32,6 +32,8 @@ with tempfile.TemporaryDirectory(prefix='agent-console-tests-') as directory:
     env.update({
         'AGENT_CONSOLE_WORKSPACE_ROOT': str(scratch / 'workspace'),
         'AGENT_CONSOLE_STATE_DIR': str(scratch / 'state'),
+        'AGENT_CONSOLE_LOG_DIR': str(scratch / 'logs'),
+        'PYTHONDONTWRITEBYTECODE': '1',
         'AGENT_CONSOLE_CONFIG_DIR': str(scratch / 'config'),
         'AGENT_CONSOLE_DB': str(scratch / 'state' / 'tests.sqlite3'),
         'AGENT_CONSOLE_PROFILE_DIR': str(root / 'agent-profiles'),

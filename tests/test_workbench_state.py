@@ -36,6 +36,27 @@ class WorkbenchTests(unittest.TestCase):
     def test_empty_ready_work_has_no_attention_groups(self):
         view=self.state.snapshot();self.assertEqual(view['groups'],[]);self.assertTrue(view['readiness']['ready'])
 
+    def test_tool_history_and_overview_keep_owner_authentication(self):
+        from fastapi import FastAPI, Header, HTTPException
+        from fastapi.testclient import TestClient
+        from agent_console.workbench_state import workbench_routes
+        session = self.session('history-owner', running=True)
+
+        def identity(x_operator: str | None = Header(None)):
+            if x_operator != 'test':
+                raise HTTPException(401, 'Authentication required')
+        app = FastAPI()
+        app.include_router(workbench_routes(self.manager, identity))
+        with TestClient(app) as client:
+            path = f"/api/workbench/sessions/{session['id']}/tool-calls"
+            self.assertEqual(client.get(path).status_code, 401)
+            response = client.get(path, headers={'x-operator': 'test'})
+            self.assertFalse(response.json()['available'])
+            self.assertEqual(response.headers['cache-control'], 'no-store')
+            self.assertEqual(client.get(path + '?limit=51', headers={'x-operator': 'test'}).status_code, 422)
+            response = client.get('/api/workbench?overview=true', headers={'x-operator': 'test'})
+            self.assertEqual(len(response.json()['nodes']), 1)
+
     def test_priority_keeps_attention_mechanics_and_results_distinct(self):
         stopped=self.session('stopped');running=self.session('running',running=True);blocked=self.session('blocked',running=True,attention='needs_input')
         view=self.state.snapshot();self.assertEqual([g['root_id'] for g in view['groups']],[blocked['id'],running['id'],stopped['id']])

@@ -1,3 +1,9 @@
+# 0.29.0 — 2026-10-17 (#199)
+
+- Add bounded workbench overviews, server-side historical search/paging, clear current/historical attention, compatible CLI aliases, command discovery and a read-only identity-bound Codex tool timeline with redacted output/downloads. Add process/release/exception diagnostic context, isolate test logs and prevent quadratic redaction of long plain output. Preserve drafts, focus, native sessions and existing API consumers.
+- Add an opt-in workspace-entrypoint compactor that preserves a hash-verified full operations archive and current policy blocks.
+- Configuration/migration: none; overview/tool-history endpoints are additive. Verification: focused Python and desktop/mobile browser regressions plus existing workflow, history, logging and terminal interaction coverage. Rollback: select the prior immutable release; restore workspace instructions from their recorded operations archive if applied. See `docs/CONSOLE_RELIABILITY.md` for limits and operator steps.
+
 # 0.28.29 — 2026-10-17 (#198)
 
 - Preserve session audit history across renames by recording durable IDs on new lifecycle events. Recover legacy name intervals conservatively and exclude reused or ambiguous identities. Existing history cursors remain compatible.

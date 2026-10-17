@@ -12,6 +12,8 @@ class OwnerArgumentParser(argparse.ArgumentParser):
         # Unknown arguments might contain an accidentally supplied secret.
         if message.startswith('unrecognized arguments:'):
             message = 'unrecognized arguments; environment values must use --stdin or the hidden prompt'
+        elif 'invalid choice:' in message:
+            message += '\nUse agentctl --help or agentctl session --help; profiles list and session restart NAME are supported aliases.'
         super().error(message)
 
 

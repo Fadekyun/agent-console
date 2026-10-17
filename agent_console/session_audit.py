@@ -41,7 +41,7 @@ def session_audit(connection, session, *, before=2147483647, limit=50):
         if row['id'] >= before:
             continue
         identity = row['details'].get('session_id')
-        matched = identity == session['id'] or row['target'] == session['id']
+        matched = identity == session['id'] or identity is None and row['target'] == session['id']
         if identity is None and row['at'] >= start:
             matched |= any(row['target'] == name and lower < row['id'] < upper
                            for name, lower, upper in intervals)

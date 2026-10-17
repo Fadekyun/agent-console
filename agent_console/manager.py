@@ -3229,6 +3229,11 @@ class SessionManager:
             "profile_dir": str(profile_dir),
             "profile_dir_exists": profile_dir.is_dir(),
             "tools": {name: path.is_file() for name, path in TOOL_BINARIES.items()},
+            "commands": {name: {'available': bool(shutil.which(name)), 'path': shutil.which(name)}
+                         for name in ('git', 'tmux', 'ssh', 'rg', 'python3', 'node')},
+            "command_help": {'restart': 'agentctl session restart NAME',
+                             'profiles': 'agentctl profile list',
+                             'missing_rg': 'Install ripgrep or use find and grep on hosts without rg'},
             "authentication": self.auth.doctor(),
             "integration_planner": integration_capability_status(
                 self.settings.config_dir or self.settings.state_dir / "config"
