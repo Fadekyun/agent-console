@@ -109,6 +109,10 @@ class ToolHistoryTests(unittest.TestCase):
         self.assertEqual(len(output['text']), 256 * 1024)
         self.assertTrue(output['truncated'])
         self.assertEqual(self.rollout.stat().st_size, size)
+        download = tool_output(self.settings, self.session, offset=page['calls'][0]['output_offset'],
+                               call_id='call-one', thread=page['thread'], max_bytes=4 * 1024 * 1024)
+        self.assertEqual(len(download['text']), 400000)
+        self.assertFalse(download['truncated'])
 
     def test_unicode_output_obeys_the_byte_limit_without_broken_characters(self):
         self.record('function_call', name='exec')

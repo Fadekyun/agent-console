@@ -12,7 +12,7 @@ Session details → **Tool calls** reads Codex/Codex Pro records from the sessio
 
 - `GET /api/workbench/sessions/{id}/tool-calls` returns up to fifty calls, timestamps, available durations, tool names, command exit codes and redacted previews. `before` and `thread` paginate older bounded segments.
 - `GET /api/workbench/sessions/{id}/tool-calls/output` validates `offset`, `call_id` and `thread`; `download=true` returns a redacted text attachment. Both routes use existing owner authentication and `Cache-Control: no-store`.
-- Each scan reads at most 16 MiB, each accepted native record is at most 4 MiB, previews are 2,048 characters, and expanded/downloaded output is limited to 256 KiB. The native original is preserved. Missing output is explicitly unavailable; it is not labelled running. Nonzero exits can be expected for searches or deliberate failure tests.
+- Each scan reads at most 16 MiB, each accepted native record is at most 4 MiB, previews are 2,048 characters, and expanded output is limited to 256 KiB. Downloads return redacted output up to 4 MiB, allowing larger accepted records to be read in full. UTF-8 limits preserve complete characters. The native original is preserved. Missing output is explicitly unavailable; it is not labelled running. Nonzero exits can be expected for searches or deliberate failure tests.
 - Tool arguments and prompts are not returned by this interface. Existing credential-redaction rules apply to every output surface. Native output is untrusted data, rendered as text.
 
 ## Operator and development commands

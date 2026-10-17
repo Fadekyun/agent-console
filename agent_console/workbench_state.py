@@ -245,12 +245,13 @@ def workbench_routes(manager,require_identity):
     @router.get('/api/workbench/sessions/{identity}/tool-calls/output')
     def tool_output(identity:str, response:Response, offset:int=Query(ge=0),
                     call_id:str=Query(max_length=200), thread:str=Query(max_length=100), download:bool=False):
-        from .tool_history import tool_output as read_output
+        from .tool_history import tool_output as read_output, MAX_LINE, MAX_OUTPUT
         from fastapi.responses import PlainTextResponse
         response.headers['Cache-Control'] = 'no-store'
-        output = read_output(manager.settings, native_session(identity), offset=offset, call_id=call_id, thread=thread)
+        output = read_output(manager.settings, native_session(identity), offset=offset, call_id=call_id, thread=thread,
+                             max_bytes=MAX_LINE if download else MAX_OUTPUT)
         if download:
-            text = output['text'] + ('\n[Output truncated at 256 KiB]\n' if output['truncated'] else '')
+            text = output['text'] + ('\n[Output truncated at 4 MiB]\n' if output['truncated'] else '')
             return PlainTextResponse(text, headers={'Cache-Control': 'no-store',
                                                     'Content-Disposition': 'attachment; filename="tool-output.txt"'})
         return output

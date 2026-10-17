@@ -169,7 +169,7 @@ def tool_calls(settings, session, *, before=None, thread=None, limit=50):
             'notice': 'Read-only native records. Nonzero command exits can be expected, such as searches with no matches. Missing output is not proof that a tool is still running.'}
 
 
-def tool_output(settings, session, *, offset, call_id, thread):
+def tool_output(settings, session, *, offset, call_id, thread, max_bytes=MAX_OUTPUT):
     handle, identity = _rollout(settings, session)
     with handle:
         if identity != thread or not 0 <= offset < os.fstat(handle.fileno()).st_size:
@@ -191,4 +191,4 @@ def tool_output(settings, session, *, offset, call_id, thread):
         raise ValueError('Native output identity does not match')
     text = redact_secrets(_text(payload.get('output', '')))
     encoded = text.encode('utf-8')
-    return {'text': encoded[:MAX_OUTPUT].decode('utf-8', errors='ignore'), 'truncated': len(encoded) > MAX_OUTPUT}
+    return {'text': encoded[:max_bytes].decode('utf-8', errors='ignore'), 'truncated': len(encoded) > max_bytes}
