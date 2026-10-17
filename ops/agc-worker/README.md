@@ -62,7 +62,8 @@ never reads, copies or replaces the existing controller or staff private keys.
 ```
 
 `Account` creates only this nonadministrator account, adds it to builtin Users,
-denies interactive/RDP logon for its SID and hides its own login tile. Random
+denies interactive/RDP logon for its SID, grants that SID batch logon for its
+hidden tasks, and hides its own login tile. Random
 task credentials are encrypted with Windows **LocalMachine DPAPI**, protected by
 an Administrators/SYSTEM-only directory. This works with key-only administrator
 SSH, where CurrentUser DPAPI is unavailable. No credentials appear in output.

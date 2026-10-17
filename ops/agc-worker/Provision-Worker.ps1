@@ -173,6 +173,10 @@ public static class AgcAccountRights {
     # existing account rights. Batch logon and key-only SSH remain available.
     [AgcAccountRights]::Add($WorkerSid.Value,'SeDenyInteractiveLogonRight')
     [AgcAccountRights]::Add($WorkerSid.Value,'SeDenyRemoteInteractiveLogonRight')
+    # Scheduled Task registration through key-only SSH did not grant this
+    # automatically on the inspected host (Security4625/type4/0xC000015B).
+    # Add only this worker SID; never broaden a builtin group's logon rights.
+    [AgcAccountRights]::Add($WorkerSid.Value,'SeBatchLogonRight')
     $loginTiles = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList'
     if (-not (Test-Path $loginTiles)) { New-Item -Path $loginTiles -Force | Out-Null }
     New-ItemProperty -Path $loginTiles -Name $WorkerName -Value 0 -PropertyType DWord -Force | Out-Null
