@@ -96,7 +96,7 @@ for name in ('bushi-emergency-job','bushi-compute'):
 PY
 install -d -m 0755 /usr/local/lib/bushi-emergency
 install -d -m 0700 /etc/bushi-emergency /etc/bushi-emergency/credentials /var/lib/bushi-emergency /var/lib/bushi-emergency/objects
-install -d -m 0711 /var/lib/bushi-emergency/jobs
+install -d -m 0700 /var/lib/bushi-emergency/jobs
 install -m 0755 "$SOURCE/worker.py" /usr/local/lib/bushi-emergency/worker.py
 install -m 0644 "$SOURCE/emergency_boundary.py" /usr/local/lib/bushi-emergency/emergency_boundary.py
 install -m 0755 "$SOURCE/emergency_worker.py" /usr/local/lib/bushi-emergency/emergency_worker.py
@@ -128,7 +128,7 @@ Description=Bounded Bushi emergency scratch only
 What=tmpfs
 Where=/var/lib/bushi-emergency/jobs
 Type=tmpfs
-Options=size=536870912,mode=0711,nosuid,nodev,noexec
+Options=size=536870912,mode=0700,nosuid,nodev,noexec
 [Install]
 WantedBy=multi-user.target
 UNIT

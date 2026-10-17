@@ -1,3 +1,10 @@
+## 0.32.4 — unreleased, 2026-10-17 (#203)
+
+- Impact: native worker jobs now use a private `/run/agc-job` mount instead of traversing host state. The production 0077 umask no longer causes CHDIR/read failures. Both laptop toolchain and CT102 native adapters receive the same fixed manifest/workspace/output/lease paths; only workspace/output are writable.
+- Configuration/migration: keep admissions held and drain/reconcile before installing the paired worker and qualifiers. Host state/jobs stay 0700; each bound job root is root:job-primary-group 0710 and manifest/lease are 0640. Heartbeat replacements set group/mode before rename. Emergency tmpfs installation now uses 0700. No new credential, queue authority, schema or host-wide traversal grant; runtime requalification is required before hold release.
+- Verification: bounded worker fixtures exercise actual 0077 file creation, explicit modes, current-job-only native/toolchain bindings, rejected path syntax and atomic readable lease replacement. Updated native qualification asserts actual unit mount/working directory, denied metadata writes and sibling/host access, private host mount table, and visible lease replacement under 0077; full native results remain pending, not inferred from unit mocks.
+- Rollback: retain central/operator holds, preserved receipts and schema-5-compatible queue code. Do not restore 0711 host state or use the former direct host paths as a workaround. A previous worker binary must remain held; no known working private-path fallback is claimed. Root qualifies the corrected native and toolchain paths before any workload resumes.
+
 ## 0.32.3 — unreleased, 2026-10-17 (#203)
 
 - Impact: emergency admission measures the actual N100 `/lxc/102` memory limit/current and verifies CT102 init/mount membership, including Proxmox's hidden parent above the guest namespace. The worker combines fresh authenticated outer usage with local namespace usage and any tighter visible limit; visible `max` alone grants no capacity.

@@ -2,6 +2,7 @@
 # Operator qualification only. Run via Setup-Worker.ps1 after serialized setup.
 # No production policy marker, registry, source checkout or queue state changes.
 set -euo pipefail
+umask 0077
 test "${WSL_DISTRO_NAME:-}" = AGC-Worker
 test "$(id -u)" = 0
 test -f /etc/agc-worker/hold
@@ -22,6 +23,7 @@ import time
 import traceback
 import uuid
 
+os.umask(0o077)  # Match the production daemon, including directory creation.
 run_id = uuid.uuid4().hex
 base = Path('/var/lib/agc-worker-qualification-' + run_id)
 results = Path('/var/lib/agc-worker-qualification-results')
@@ -35,7 +37,7 @@ evidence = {'version': 1, 'run_id': run_id, 'state': 'running', 'cases': [],
             'started_at': time.time(), 'work_directory': str(base), 'slice': qual_slice}
 lock = open('/run/lock/agc-native-qualification.lock', 'w')
 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-base.mkdir(mode=0o755)
+base.mkdir(mode=0o700)
 results.mkdir(mode=0o700, exist_ok=True)
 spec = importlib.util.spec_from_file_location('qualified_worker', source)
 worker = importlib.util.module_from_spec(spec)
@@ -101,13 +103,42 @@ def process(pid):
     return {'pid':pid,'start_ticks':text[text.rfind(')')+2:].split()[19]}
 def checkpoint(*unused): save('checkpoint.json',{'checkpoint':True,'pid':os.getpid()})
 signal.signal(signal.SIGUSR1,checkpoint)
+import stat
+assert Path.cwd()==workspace==Path('/run/agc-job/workspace')
+assert output==Path('/run/agc-job/output') and Path(a.manifest)==Path('/run/agc-job/manifest.json')
+root=workspace.parent; metadata=root.stat()
+assert metadata.st_uid==0 and metadata.st_gid==os.getgid() and stat.S_IMODE(metadata.st_mode)==0o710
+manifest=json.loads(Path(a.manifest).read_text());lease=Path(manifest['worker_lease_file'])
+assert lease==Path('/run/agc-job/lease.json')
+before=json.loads(lease.read_text())['last_heartbeat_monotonic']
+for path in (Path(a.manifest),lease):
+ assert stat.S_IMODE(path.stat().st_mode)==0o640 and path.stat().st_uid==0
+ try:
+  with path.open('a'): pass
+ except PermissionError:pass
+ except OSError as error:
+  assert error.errno==30
+ else:raise AssertionError('job can write supervisor metadata')
+private=json.loads((workspace/'source/qualification.json').read_text())
+for name in ('fences.json','receipts/canary','jobs/sibling/canary'):
+ try:(Path(private['host_state'])/name).read_bytes()
+ except (PermissionError,FileNotFoundError):pass
+ else:raise AssertionError('job read private host/sibling state')
+for name in ('HOME','TMPDIR','XDG_CACHE_HOME','npm_config_cache'):
+ assert os.environ[name].startswith('/run/agc-job/workspace/')
+save('namespace.json',{'cwd':str(Path.cwd()),'uid':os.getuid(),'gid':os.getgid(),
+ 'job_root_mode':'0710','metadata_mode':'0640','host_state_inaccessible':True,
+ 'private_mount':any(' /run/agc-job ' in line for line in Path('/proc/self/mountinfo').read_text().splitlines())})
 processes=[process(os.getpid())]
 if a.mode in ('timeout','lease','timer'):
     signal.signal(signal.SIGTERM,signal.SIG_IGN)
     child=subprocess.Popen([sys.executable,'-c','import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(300)'])
     processes.append(process(child.pid))
 save('processes.json',processes)
-while not (workspace/'release').exists(): time.sleep(.05)
+while not (workspace/'release').exists():
+ if a.mode=='success' and json.loads(lease.read_text())['last_heartbeat_monotonic']>before:
+  save('lease-replaced.json',{'replacement_visible':True})
+ time.sleep(.05)
 if a.mode=='success':
     save('success.json',{'ok':True,'executions':1})
     (output/'empty-file').touch()
@@ -124,7 +155,7 @@ config = base / 'config'
 config.mkdir(mode=0o700)
 registry = {}
 for mode in ('success', 'oom', 'timeout', 'lease', 'timer'):
-    registry['qual.' + mode] = {'enabled': True, 'argv': ['/usr/bin/python3', str(adapter), '--mode', mode],
+    registry['qual.' + mode] = {'enabled': True, 'argv': ['/usr/bin/python3', '/run/agc-job/workspace/source/harmless-adapter.py', '--mode', mode],
         'parameter_keys': [], 'production_writes': mode in ('lease', 'timer'), 'supports_checkpoint': mode == 'lease',
         'memory_bytes': 128 * 1024**2, 'cpus': 1, 'timeout_seconds': 150 if mode in ('lease', 'timer') else (8 if mode == 'timeout' else 30)}
 (config / 'adapters.json').write_text(json.dumps(registry))
@@ -153,12 +184,17 @@ def real_properties(unit):
 try:
     production_drained()
     instance = worker.Worker(base / 'state', config)
+    (instance.state / 'receipts/canary').write_text('private qualification receipt')
+    (instance.state / 'jobs/sibling').mkdir(mode=0o700)
+    (instance.state / 'jobs/sibling/canary').write_text('private sibling')
     instance.started = time.monotonic() - 121
     instance.healthy_since = time.monotonic() - 181
     archive_buffer = io.BytesIO()
     with tarfile.open(fileobj=archive_buffer, mode='w') as archive:
-        item = tarfile.TarInfo('README.txt'); content = b'harmless native qualification\n'; item.size = len(content)
-        archive.addfile(item, io.BytesIO(content))
+        for name,content in [('harmless-adapter.py',adapter.read_bytes()),
+                             ('qualification.json',json.dumps({'host_state':str(instance.state)}).encode())]:
+            item = tarfile.TarInfo(name); item.size = len(content)
+            archive.addfile(item, io.BytesIO(content))
     archive_bytes = archive_buffer.getvalue()
     source_digest = hashlib.sha256(archive_bytes).hexdigest()
     worker.install_object(instance.state / 'objects', source_digest, len(archive_bytes), io.BytesIO(archive_bytes))
@@ -183,6 +219,20 @@ try:
         job = instance.state / 'jobs' / instance.key(binding)
         wait_until(lambda: (job / 'output/processes.json').exists(), 5, 'adapter ready')
         processes = worker.read_json(job / 'output/processes.json')
+        namespace = worker.read_json(job / 'output/namespace.json')
+        assert namespace['private_mount'] and namespace['host_state_inaccessible'], namespace
+        assert (instance.state.stat().st_mode & 0o777)==0o700
+        assert ((instance.state/'jobs').stat().st_mode & 0o777)==0o700
+        # Bind mounts must remain inside the service, not expose the same files
+        # through /run in the host namespace running this qualification driver.
+        assert not (worker.JOB_VIEW/'manifest.json').exists(), 'job mount escaped service namespace'
+        outside=command(['/usr/sbin/runuser','-u',worker.JOB_USER,'--','/usr/bin/python3','-c',
+            'import pathlib,sys\np=pathlib.Path(sys.argv[1])\ntry:p.read_bytes()\nexcept PermissionError:pass\nelse:raise SystemExit(1)',
+            str(job/'manifest.json')],check=False)
+        assert outside.returncode==0, 'unprivileged host process can traverse private worker state'
+        if mode=='success':
+            instance.dispatch({**binding,'protocol_version':1,'action':'heartbeat'})
+            wait_until(lambda:(job/'output/lease-replaced.json').exists(),5,'atomic lease replacement visible')
         if mode == 'oom':
             command(['systemctl', 'set-property', '--runtime', unit, 'MemoryHigh=60M', 'MemoryMax=64M'])
         properties = real_properties(unit)
@@ -193,7 +243,8 @@ try:
         cgroup = Path('/sys/fs/cgroup') / properties['ControlGroup'].lstrip('/')
         assert (cgroup / 'memory.oom.group').read_text().strip() == '1', 'OOMPolicy=kill must enable whole-cgroup OOM'
         case = {'mode': mode, 'expected_state': expected, 'unit': unit, 'properties': properties, 'memory_oom_group': 1,
-                'processes': processes, 'began_monotonic': time.monotonic()}
+                'processes': processes, 'namespace': namespace, 'production_umask':'0077',
+                'began_monotonic': time.monotonic()}
         evidence['cases'].append(case)
         (job / 'workspace/release').touch()
         if mode == 'timer':

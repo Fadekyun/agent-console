@@ -10,6 +10,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -136,6 +137,88 @@ class ReceiptTests(unittest.TestCase):
         instance = worker.Worker(Path(tmp) / "state", config)
         instance.host = host(worker.time.time())
         return instance
+
+    def test_real_0077_start_keeps_host_state_private_and_maps_only_current_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            previous_umask = os.umask(0o077)
+            try:
+                instance = self.make_worker(tmp)
+                instance.adapters = {'agc.build': {'enabled': True, 'parameter_keys': [],
+                    'argv': ['/usr/bin/true'], 'memory_bytes': 128*1024**2}}
+                runtime = Path(tmp)/'runtime'; runtime.mkdir()
+                worker.atomic_json(runtime/'host.json', host(worker.time.time()))
+                archive = io.BytesIO()
+                with tarfile.open(fileobj=archive, mode='w') as stream:
+                    item = tarfile.TarInfo('input.txt'); item.size = 4
+                    stream.addfile(item, io.BytesIO(b'data'))
+                raw = archive.getvalue(); digest = hashlib.sha256(raw).hexdigest()
+                worker.install_object(instance.state/'objects', digest, len(raw), io.BytesIO(raw))
+                req = request(); req['manifest']['source_artifact'] = {'sha256': digest, 'size': len(raw)}
+                req['manifest_sha256'] = hashlib.sha256(worker.canonical(req['manifest'])).hexdigest()
+                account = SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())
+                original_chown = os.chown
+                requested_owners = []
+                def chown(path, uid, gid):
+                    requested_owners.append((Path(path), uid, gid))
+                    # Only root ownership is substituted for this unprivileged
+                    # file-mode fixture; real umask, chmod, chown/group and IO run.
+                    original_chown(path, -1 if uid == 0 else uid, gid)
+                with patch.object(worker, 'RUNTIME_ROOT', runtime), patch.object(worker, 'admission_holds', return_value=[]), \
+                     patch.object(instance, 'status', return_value={'admission': {'holds': []}, 'guest': {'disk_free_bytes': 20*1024**3}}), \
+                     patch.object(worker.pwd, 'getpwnam', return_value=account), patch.object(worker.os, 'chown', side_effect=chown), \
+                     patch.object(worker, 'run') as launched:
+                    response = instance.start(req)
+                    self.assertEqual(response['state'], 'running')
+                    job = instance.state/'jobs'/instance.key(worker.validate_binding(req))
+                    self.assertEqual(instance.state.stat().st_mode & 0o777, 0o700)
+                    self.assertEqual((instance.state/'jobs').stat().st_mode & 0o777, 0o700)
+                    self.assertEqual(job.stat().st_mode & 0o777, 0o710)
+                    self.assertIn((job, 0, account.pw_gid), requested_owners)
+                    for name in ('manifest.json', 'lease.json'):
+                        self.assertEqual((job/name).stat().st_mode & 0o777, 0o640)
+                        self.assertEqual((job/name).stat().st_gid, account.pw_gid)
+                    self.assertEqual(worker.read_json(job/'manifest.json')['worker_lease_file'], '/run/agc-job/lease.json')
+                    command = next(call.args[0] for call in launched.call_args_list if '--service-type=exec' in call.args[0])
+                    self.assertIn('--property=BindReadOnlyPaths='+str(job)+':/run/agc-job', command)
+                    self.assertIn('--property=WorkingDirectory=/run/agc-job/workspace', command)
+                    self.assertIn('--property=ReadWritePaths=/run/agc-job/workspace /run/agc-job/output', command)
+                    self.assertEqual(command[-6:], ['--manifest', '/run/agc-job/manifest.json', '--workspace',
+                        '/run/agc-job/workspace', '--output', '/run/agc-job/output'])
+                    previous_inode = (job/'lease.json').stat().st_ino
+                    instance.dispatch({**worker.validate_binding(req), 'protocol_version': 1, 'action': 'heartbeat'})
+                    self.assertNotEqual((job/'lease.json').stat().st_ino, previous_inode)
+                    self.assertEqual((job/'lease.json').stat().st_mode & 0o777, 0o640)
+                    self.assertEqual((job/'lease.json').stat().st_gid, account.pw_gid)
+            finally:
+                os.umask(previous_umask)
+
+    def test_metadata_is_group_readable_before_atomic_publication(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'lease.json'
+            original_replace = os.replace
+            def replace(source, destination):
+                self.assertEqual(Path(source).stat().st_mode & 0o777, 0o640)
+                self.assertEqual(Path(source).stat().st_gid, os.getgid())
+                original_replace(source, destination)
+            with patch.object(worker.os, 'replace', side_effect=replace):
+                worker.atomic_json(path, {'generation': 1}, mode=0o640, group=os.getgid())
+                worker.atomic_json(path, {'generation': 2}, mode=0o640, group=os.getgid())
+            self.assertEqual(worker.read_json(path), {'generation': 2})
+
+    def test_native_and_toolchain_views_never_bind_host_state_or_siblings(self):
+        job = Path('/var/lib/agc-worker/jobs/current-only')
+        normal = worker.toolchain_properties({}, job)
+        with patch.object(Path, 'stat', return_value=SimpleNamespace(st_uid=0, st_mode=0o755)), \
+             patch.object(worker, 'read_json', return_value={'version': 1}):
+            toolchain = worker.toolchain_properties({'root_directory': '/var/lib/agc-worker/toolchains/debian13'}, job)
+        for properties in (normal, toolchain):
+            self.assertEqual(properties['BindPaths'], str(job/'workspace')+':/run/agc-job/workspace '+str(job/'output')+':/run/agc-job/output')
+            self.assertTrue(properties['BindReadOnlyPaths'].startswith(str(job)+':/run/agc-job'))
+            self.assertNotIn('/var/lib/agc-worker/jobs:', properties['BindReadOnlyPaths'])
+            self.assertEqual(properties['WorkingDirectory'], '/run/agc-job/workspace')
+            self.assertNotIn(str(job), properties['Environment'])
+        for bad in ('relative', '/tmp/a b', '/tmp/a:b', '/tmp/%n'):
+            with self.assertRaises(ValueError): worker.job_namespace_properties(Path(bad))
 
     def test_duplicate_start_returns_receipt_without_execution(self):
         with tempfile.TemporaryDirectory() as tmp:

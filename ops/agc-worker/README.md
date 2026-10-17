@@ -6,6 +6,33 @@ Windows standard account (`agc-worker`) with its own WSL distribution
 Source is reviewed and installed by the root coordinator. Provisioning leaves an
 operator hold in place; creating an account is not acceptance of any workload.
 
+## Per-job filesystem visibility
+
+The daemon and its `jobs` parent remain root-only 0700. Each job root is explicitly
+root:the job user's primary group 0710; its workspace/output belong to that job
+user. The production daemon's 0077 umask is preserved. Systemd maps only that
+one job read-only at `/run/agc-job` in the unit's mount namespace, then mounts
+`workspace` and `output` writable below it. WorkingDirectory, all three adapter
+arguments, HOME/TMPDIR/cache variables and `worker_lease_file` use those fixed
+unit-visible paths. The same mapping applies to native CT102 jobs and laptop
+RootDirectory toolchains; the host state directory is never a bind source.
+
+Manifest/lease files are root:job-group 0640. Atomic heartbeat replacements get
+their mode/group before rename, and the whole job-directory bind makes each
+replacement visible without letting job code replace the supervisor metadata.
+This follows systemd's [unit-specific bind mount contract](https://github.com/systemd/systemd/blob/main/man/systemd.exec.xml):
+with RootDirectory, sources remain host paths and destinations are inside the
+unit's root. Mounts are not exposed through the host's `/run/agc-job` path.
+
+Hold and drain before upgrading. `qualify-native.sh` and `qualify-toolchains.sh`
+now create their actual fixtures under 0077. The isolated native fixture checks
+real CHDIR, mapped paths, lease replacement visibility, denied metadata writes,
+denied host/sibling reads and no host-namespace mount exposure. It grants no
+central lease and does not submit a production job; its isolated systemd/lease
+fixture is not queue admission evidence. Runtime acceptance must be recorded on
+each reachable target before its hold is released. Do not broaden host parent
+permissions to make an old qualifier pass.
+
 ## Isolation and fixed limits
 
 Microsoft's [WSLg architecture](https://github.com/microsoft/wslg#user-distro)

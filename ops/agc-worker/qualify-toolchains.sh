@@ -1,24 +1,31 @@
 #!/bin/bash
 # Harmless offline checks under the same RootDirectory and unprivileged job user.
 set -euo pipefail
+umask 0077
 test "${WSL_DISTRO_NAME:-}" = AGC-Worker
 test "$(id -u)" = 0
 test -f /etc/agc-worker/hold
 python3 - <<'PY'
 import importlib.util,json,os,pathlib,pwd,shutil,socket,subprocess,uuid
+os.umask(0o077)
 spec=importlib.util.spec_from_file_location('worker','/usr/local/lib/agc-worker/worker.py')
 w=importlib.util.module_from_spec(spec);spec.loader.exec_module(w)
 with socket.socket(socket.AF_UNIX) as client:
  client.settimeout(10);client.connect('/run/agc-worker/rpc.sock');client.sendall(b'{"protocol_version":1,"action":"status"}\n')
  with client.makefile('rb') as stream:status=json.loads(stream.readline(524288))
  assert status.get('ok') and status.get('active') is None,'Production worker must be drained'
-base=pathlib.Path('/var/lib/agc-toolchain-qualification-'+uuid.uuid4().hex);base.mkdir(mode=0o755)
+base=pathlib.Path('/var/lib/agc-toolchain-qualification-'+uuid.uuid4().hex);base.mkdir(mode=0o700)
 user=pwd.getpwnam('agcjob')
+job=base/'job';job.mkdir(mode=0o700);os.chown(job,0,user.pw_gid);job.chmod(0o710)
 for name in ('workspace','output'):
- p=base/name;p.mkdir(mode=0o700);os.chown(p,user.pw_uid,user.pw_gid)
-probe=base/'probe.py'
+ p=job/name;p.mkdir(mode=0o700);os.chown(p,user.pw_uid,user.pw_gid)
+for name in ('.home','.tmp','.cache'):
+ p=job/'workspace'/name;p.mkdir(mode=0o700);os.chown(p,user.pw_uid,user.pw_gid)
+probe=job/'probe.py'
 probe.write_text('''import json,os,platform,subprocess,sys
 assert os.getuid()!=0 and not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY')
+assert os.getcwd()=='/run/agc-job/workspace' and sys.argv[0]=='/run/agc-job/probe.py'
+assert os.environ['HOME']=='/run/agc-job/workspace/.home'
 expected=sys.argv[1]
 node=subprocess.check_output(['node','--version'],text=True).strip()
 assert node=={'debian12':'v22.23.1','debian13':'v22.22.2'}[expected]
@@ -31,14 +38,15 @@ else:
  print(json.dumps({'bs4':bs4.__version__,'soupsieve':soupsieve.__version__,'css_selector':True}))
  subprocess.run(['node','-e',"const {chromium}=require('/usr/local/lib/agc-worker-adapters/agc/scripts/compute/node_modules/playwright');(async()=>{const browser=await chromium.launch({headless:true});try{const page=await browser.newPage();await page.goto('data:text/html,<title>worker-headless-check</title>');if(await page.title()!=='worker-headless-check')throw Error('title');console.log(JSON.stringify({headless:true,browser:browser.version()}));}finally{await browser.close();}})().catch(()=>process.exit(1));"],check=True,timeout=40)
 print(json.dumps({'toolchain':expected,'node':node,'glibc':platform.libc_ver()[1],'uid':os.getuid(),'path':os.environ['PATH'],'passed':True}))
-''');probe.chmod(0o644)
+''');os.chown(probe,0,user.pw_gid);probe.chmod(0o640)
 units=[];results=[]
 try:
  for toolchain in ('debian12','debian13'):
   unit='agc-toolchain-qualification-'+uuid.uuid4().hex+'.service';units.append(unit)
-  props={'Slice':'agc-worker-jobs.slice','MemoryMax':'1G','MemorySwapMax':'0','CPUQuota':'100%','CPUWeight':'10','IOWeight':'10','Nice':'10','TasksMax':'128','RuntimeMaxSec':'60','TimeoutStopSec':'5','KillMode':'control-group','OOMPolicy':'kill','NoNewPrivileges':'yes','PrivateTmp':'yes','PrivateDevices':'yes','ProtectSystem':'strict','ProtectHome':'yes','ReadWritePaths':str(base/'workspace')+' '+str(base/'output'),'WorkingDirectory':str(base/'workspace'),'Environment':'HOME='+str(base/'workspace')+' TMPDIR='+str(base/'workspace')+' PLAYWRIGHT_BROWSERS_PATH=/usr/local/lib/agc-worker-adapters/browsers','UnsetEnvironment':'DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS SSH_AUTH_SOCK'}
-  props.update(w.toolchain_properties({'root_directory':'/var/lib/agc-worker/toolchains/'+toolchain},base))
-  command=['systemd-run','--wait','--pipe','--collect','--unit='+unit,'--uid=agcjob']+['--property='+k+'='+v for k,v in props.items()]+['--','/usr/bin/python3',str(probe),toolchain]
+  props={'Slice':'agc-worker-jobs.slice','MemoryMax':'1G','MemorySwapMax':'0','CPUQuota':'100%','CPUWeight':'10','IOWeight':'10','Nice':'10','TasksMax':'128','RuntimeMaxSec':'60','TimeoutStopSec':'5','KillMode':'control-group','OOMPolicy':'kill','NoNewPrivileges':'yes','PrivateTmp':'yes','PrivateDevices':'yes','ProtectSystem':'strict','ProtectHome':'yes','UnsetEnvironment':'DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS SSH_AUTH_SOCK'}
+  props.update(w.toolchain_properties({'root_directory':'/var/lib/agc-worker/toolchains/'+toolchain},job))
+  props['UMask']='0077'
+  command=['systemd-run','--wait','--pipe','--collect','--unit='+unit,'--uid=agcjob','--gid='+str(user.pw_gid)]+['--property='+k+'='+v for k,v in props.items()]+['--','/usr/bin/python3','/run/agc-job/probe.py',toolchain]
   result=subprocess.run(command,text=True,capture_output=True,timeout=85)
   print(result.stdout,flush=True)
   if result.returncode:raise RuntimeError('Toolchain qualification failed: '+toolchain+' '+result.stderr[-3000:])

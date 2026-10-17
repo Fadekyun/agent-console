@@ -41,6 +41,7 @@ RUNTIME_ROOT = Path("/run/agc-worker")
 JOB_SLICE = "agc-worker-jobs.slice"
 CONTROL_SLICE = "system.slice"
 JOB_USER = "agcjob"
+JOB_VIEW = Path("/run/agc-job")
 SLICE_CPU_QUOTA = "1200%"
 PRESSURE_CPU_QUOTA = "100%"
 CRITICAL_HOST_MEMORY_BYTES = 5_000_000_000
@@ -99,14 +100,19 @@ def install_object(objects, digest, size, stream):
             temporary.unlink()
 
 
-def atomic_json(path, value):
+def atomic_json(path, value, *, mode=0o600, group=None):
     path = Path(path)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("wb") as stream:
         stream.write(canonical(value) + b"\n")
         stream.flush()
+        # Set access before replacement: a heartbeat must never briefly publish
+        # an unreadable lease inode to the unprivileged adapter. Fsync metadata
+        # together with content before publishing the new inode.
+        if group is not None:
+            os.fchown(stream.fileno(), -1, group)
+        os.fchmod(stream.fileno(), mode)
         os.fsync(stream.fileno())
-    os.chmod(tmp, 0o600)
     os.replace(tmp, path)
     fsync_directory(path.parent)
 
@@ -195,11 +201,26 @@ def validate_manifest(manifest, binding, adapters):
     return adapter
 
 
+def job_namespace_properties(job):
+    """Expose only this job, without granting traversal of host worker state."""
+    job = Path(job)
+    if not job.is_absolute() or any(char.isspace() or char in ':%' for char in str(job)):
+        raise ValueError("invalid_private_job_path")
+    work, output = JOB_VIEW / "workspace", JOB_VIEW / "output"
+    return {"BindReadOnlyPaths": str(job) + ":" + str(JOB_VIEW),
+            "BindPaths": str(job / "workspace") + ":" + str(work) + " " + str(job / "output") + ":" + str(output),
+            "ReadWritePaths": str(work) + " " + str(output), "WorkingDirectory": str(work),
+            "Environment": " ".join(("HOME=" + str(work / ".home"), "TMPDIR=" + str(work / ".tmp"),
+                "XDG_CACHE_HOME=" + str(work / ".cache"), "npm_config_cache=" + str(work / ".cache/npm"),
+                "PLAYWRIGHT_BROWSERS_PATH=/usr/local/lib/agc-worker-adapters/browsers"))}
+
+
 def toolchain_properties(adapter, job):
     """Only a locally installed root-owned toolchain, never caller root mounts."""
+    properties = job_namespace_properties(job)
     value = adapter.get("root_directory")
     if value is None:
-        return {}
+        return properties
     root = Path(value)
     prefix = Path("/var/lib/agc-worker/toolchains")
     if not root.is_absolute() or root.resolve() != root or root.parent != prefix:
@@ -217,9 +238,9 @@ def toolchain_properties(adapter, job):
         raise ValueError("untrusted_adapter_directory")
     # Whole job is mounted read-only so atomic lease-file replacements remain
     # visible. Only source workspace/output get writable nested bind mounts.
-    return {"RootDirectory": str(root), "MountAPIVFS": "yes", "PrivateDevices": "yes",
-            "BindReadOnlyPaths": " ".join((str(job), str(adapters), "/etc/resolv.conf")),
-            "BindPaths": str(job / "workspace") + " " + str(job / "output")}
+    properties.update({"RootDirectory": str(root), "MountAPIVFS": "yes", "PrivateDevices": "yes",
+                       "BindReadOnlyPaths": properties["BindReadOnlyPaths"] + " " + str(adapters) + " /etc/resolv.conf"})
+    return properties
 
 
 def credential_properties(kind, adapter):
@@ -311,6 +332,10 @@ class Worker:
         self.fences = read_json(self.state / "fences.json") if (self.state / "fences.json").exists() else {}
         for name in ("objects", "incoming", "receipts", "jobs"):
             (self.state / name).mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Root opens sources for the unit's private bind mounts. Job code never
+        # needs to traverse state or sibling jobs in the host namespace.
+        os.chmod(self.state, 0o700)
+        os.chmod(self.state / "jobs", 0o700)
         # A reboot or daemon crash never licenses replay. Kill any old cgroup;
         # preserve unknown receipts for central reconciliation even if now empty.
         for path in (self.state / "receipts").glob("*.json"):
@@ -434,7 +459,7 @@ class Worker:
         if not isinstance(argv, list) or not argv or any(not isinstance(x, str) for x in argv) or not argv[0].startswith("/"):
             raise ValueError("invalid_adapter_command")
         job = self.state / "jobs" / self.key(binding)
-        job.mkdir(mode=0o755)
+        job.mkdir(mode=0o700)
         work = job / "workspace"
         work.mkdir(mode=0o755)
         disk_budget = max(0, int(self.host["disk_free_bytes"] - max(6_000_000_000, self.host["disk_total_bytes"] * 0.15) - 512 * 1024**2))
@@ -453,20 +478,18 @@ class Worker:
         for name in (".home", ".tmp", ".cache"):
             (work / name).mkdir(mode=0o750)
         account = pwd.getpwnam(JOB_USER)
+        os.chown(job, 0, account.pw_gid)
+        os.chmod(job, 0o710)
         for root in (work, output):
             shutil.chown(root, user=account.pw_uid, group=account.pw_gid)
             for path in root.rglob("*"):
                 shutil.chown(path, user=account.pw_uid, group=account.pw_gid)
-        # Parent folders must be traversable but not writable by job code.
-        os.chmod(self.state, 0o711)
-        os.chmod(self.state / "jobs", 0o711)
         lease = job / "lease.json"
         atomic_json(lease, {"boot_id": self.boot_id, "lease_generation": binding["lease_generation"],
-                            "last_heartbeat_monotonic": time.monotonic()})
-        os.chmod(lease, 0o644)
+                            "last_heartbeat_monotonic": time.monotonic()}, mode=0o640, group=account.pw_gid)
         manifest_path = job / "manifest.json"
-        atomic_json(manifest_path, {**manifest, "worker_binding": binding, "worker_lease_file": str(lease)})
-        os.chmod(manifest_path, 0o644)
+        atomic_json(manifest_path, {**manifest, "worker_binding": binding,
+                    "worker_lease_file": str(JOB_VIEW / "lease.json")}, mode=0o640, group=account.pw_gid)
         unit = "agc-job-" + self.key(binding)[:32] + ".service"
         receipt = {**binding, "state": "starting", "unit": unit, "boot_id": self.boot_id,
                    "started_at": time.time(), "last_heartbeat_monotonic": time.monotonic(),
@@ -492,18 +515,15 @@ class Worker:
                       "RuntimeMaxSec": str(timeout), "TimeoutStopSec": "5", "KillMode": "control-group",
                       "OOMPolicy": "kill", "NoNewPrivileges": "yes",
                       "PrivateTmp": "yes", "PrivateDevices": "yes", "ProtectSystem": "strict", "ProtectHome": "yes",
-                      "ReadWritePaths": str(work) + " " + str(output), "WorkingDirectory": str(work),
                       "StandardOutput": "null", "StandardError": "null", "UMask": "0077",
-                      "Environment": " ".join(("HOME=" + str(work / ".home"), "TMPDIR=" + str(work / ".tmp"),
-                                                  "XDG_CACHE_HOME=" + str(work / ".cache"),
-                                                  "npm_config_cache=" + str(work / ".cache/npm"),
-                                                  "PLAYWRIGHT_BROWSERS_PATH=/usr/local/lib/agc-worker-adapters/browsers")),
                       "UnsetEnvironment": "DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS SSH_AUTH_SOCK"}
         properties.update(toolchain_properties(adapter, job))
         properties.update(credential_properties(binding["kind"], adapter))
-        command = ["systemd-run", "--quiet", "--unit=" + unit, "--service-type=exec", "--uid=" + JOB_USER]
+        command = ["systemd-run", "--quiet", "--unit=" + unit, "--service-type=exec", "--uid=" + JOB_USER,
+                   "--gid=" + str(account.pw_gid)]
         command += ["--property=" + key + "=" + value for key, value in properties.items()]
-        command += ["--", *argv, "--manifest", str(manifest_path), "--workspace", str(work), "--output", str(output)]
+        command += ["--", *argv, "--manifest", str(JOB_VIEW / "manifest.json"),
+                    "--workspace", str(JOB_VIEW / "workspace"), "--output", str(JOB_VIEW / "output")]
         try:
             # A root-owned timer survives a stalled/crashed supervisor and
             # accepts no notifications from job code. Its only fixed action
@@ -765,8 +785,8 @@ class Worker:
                         self.persist(self.active)
                         lease = self.state / "jobs" / self.key(binding) / "lease.json"
                         atomic_json(lease, {"boot_id": self.boot_id, "lease_generation": binding["lease_generation"],
-                                            "last_heartbeat_monotonic": self.active["last_heartbeat_monotonic"]})
-                        os.chmod(lease, 0o644)
+                                            "last_heartbeat_monotonic": self.active["last_heartbeat_monotonic"]},
+                                    mode=0o640, group=lease.parent.stat().st_gid)
                     elif action == "stop":
                         self.terminate("central_stop")
                 result = self.bound_receipt(binding)
