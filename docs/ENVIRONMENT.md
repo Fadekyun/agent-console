@@ -1,6 +1,18 @@
 # Managed environment variables
 
-Open **Settings → Environment variables** (or `/environment`). Choose global defaults or a project. Enter a name and a value, then save. Values are write-only: replacement requires a new value. Enable multiline entry for certificates or other values containing newlines; only newly entered text is shown, and it clears on submission. Each harness launched for that project receives the same effective environment; selected native MCP configuration is generated from that environment too.
+Open **Settings → Environment variables** (or `/environment`). Choose global defaults or a project. Enter a name and a value, then save. Values are write-only: replacement requires a new value. Enable multiline entry for ordinary variables containing newlines; only newly entered text is shown, and it clears on successful submission.
+
+## Protected keys
+
+With the optional [credential broker](CREDENTIAL_BROKER.md) enabled, `N8N_MCP_TOKEN`, `DIRECTUS_MCP_TOKEN`, `BUSHI_MCP_TOKEN`, `OPENROUTER_API_KEY`, and `CMD_API_KEY` are stored under the broker's separate Unix user. Use the same form and global/project controls. Their rows say **protected · applies on next request**. Values must be nonempty ASCII bearer keys without whitespace. Session snapshots and generated native configurations contain broker references, not these upstream values.
+
+The broker resolves its own host/account defaults, then global and project overrides, on every request. Disable/delete restores inheritance; project suppression blocks that connection. Broker edits do not change ordinary environment revisions or require a restart of an already broker-connected session. Existing direct sessions adopt broker routing only on an explicit restart. A missing key or unavailable broker fails closed, without reading legacy protected account files. Deleting a project also revokes its broker contexts. No existing keys are imported, erased or rotated.
+
+Broker metadata adds `protected`, `immediate`, `broker_enabled`, `protected_names`, and `broker_revision` to the existing description. The operator APIs still accept the same key/value payload. The raw key goes only to broker storage, never to the ordinary variable store, session snapshots, responses or audit records. Old files/processes retain whatever values were already present; enabling the broker does not change their permissions or erase their contents.
+
+## Ordinary variables and installations without a broker
+
+Each harness launched for a project receives that project's effective environment; selected native MCP configuration is generated from that environment too. These rules continue to apply to ordinary variables. With the broker disabled, they also describe the legacy handling of the five names above.
 
 Precedence is host process environment, selected account's credential file, global managed values, project managed values, then reserved Console identity/provider controls. A disabled override permits inheritance again. Project suppression removes the variable entirely. Deleting an override also restores inheritance. Explicit project deletion clears that project’s private variable scope; global settings and other projects remain untouched. Concurrent project edits recheck existence before writing. Empty strings are valid values. Existing account setup and host-managed credentials are preserved.
 
@@ -12,4 +24,4 @@ Files are private data (0600), inside private directories (0700): `<config-dir>/
 
 Names use shell-style identifiers. Console identity, executable search paths, dynamic loaders, interpreter startup controls, and harness-home variables are reserved. Limits are 32 KiB per value, 128 entries / 64 KiB per scope, 1 MiB total store, and 128 KiB effective environment. Invalid input and malformed/insecure files fail closed without returning submitted values. Existing credential files support literal `KEY=value` / `export KEY='value'`; shell commands and expansion are intentionally not executed.
 
-No database migration is needed. For rollback, leave private settings files in place and select the prior release; older releases ignore managed settings. New bootstrap launchers reference this release's bootstrap, so preserve its files until those sessions finish or are replaced. Rollback does not remove variables from processes already running.
+No database migration is needed. For rollback, leave private settings files in place and select the prior release; older releases ignore managed settings. New bootstrap launchers reference this release's bootstrap, so preserve its files until those sessions finish or are replaced. Rollback does not remove variables from processes already running. Follow the separate [broker rollback steps](CREDENTIAL_BROKER.md#verification-and-rollback) for broker-connected sessions; disabling broker mode does not convert their native configuration back to direct keys.

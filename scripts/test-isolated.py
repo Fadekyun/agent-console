@@ -10,7 +10,9 @@ root = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix='agent-console-tests-') as directory:
     scratch = Path(directory)
     env = {key: value for key, value in os.environ.items()
-           if not key.startswith(('AGENT_CONSOLE_', 'AGCONSOLE_'))}
+           if not key.startswith(('AGENT_CONSOLE_', 'AGCONSOLE_'))
+           and key not in {'N8N_MCP_TOKEN', 'DIRECTUS_MCP_TOKEN', 'BUSHI_MCP_TOKEN',
+                          'OPENROUTER_API_KEY', 'CMD_API_KEY'}}
     # Exercise actual executable discovery/identity checks without requiring paid
     # harness installations or accidentally starting an operator's real agent.
     # Tests of native task protocols supply their own protocol-aware executables.
