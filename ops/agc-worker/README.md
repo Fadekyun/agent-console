@@ -364,6 +364,14 @@ I/O some PSI >=10, thin-pool data >=80%, metadata >=70%, stale samples, or local
 guest/scratch pressure. This policy runs on any day and never starts the laptop.
 
 Installation leaves both `/etc/bushi-emergency/hold` and `policy.json` enabled=false.
+`qualify-emergency-native.py` exercises the installed shared launcher under the
+real 0077 umask using a private fixture and the emergency job identity. Keep
+authenticated CT115 host samples flowing every 10–15 seconds during the run.
+It checks a network-isolated local browser page, current-job mounts, inaccessible
+fixture secrets and sibling state, atomic lease visibility, duplicate suppression,
+and the independent 80-second kill timer. Real credential files are checked by
+metadata only and are never loaded. Production policy and queue stay held; this
+is native launcher evidence, not organizer or end-to-end workload acceptance.
 Root must qualify the actual CT102 cgroup/source/credential behavior and global
 organizer fence before explicitly enabling and removing the hold. The central
 queue independently requires warmup and headroom. For rollback, hold the queue,
