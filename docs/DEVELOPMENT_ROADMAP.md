@@ -1,3 +1,9 @@
+## Cache-aware CT115 launch admission — 2026-10-10 (#191)
+
+- [x] Discount bounded inactive file cache at each actual finite-limit cgroup, preserving raw counters and the existing admission JSON key.
+- [x] Veto admission on container full PSI avg10 above 5 or missing/invalid readings; preserve host, disk, freshness and maintenance checks.
+- [x] Cover the calculation with lightweight filesystem fixtures and advance source/package/UI metadata to 0.30.1. Host sampler deployment is separate from application deployment; no session or service budget changes are included.
+
 ## Native workflow permission recording — 2026-10-17 (#193)
 
 - [x] Reuse PR #200's effective native permission derivation so automatic-review commands do not require a conflicting sandbox flag.
