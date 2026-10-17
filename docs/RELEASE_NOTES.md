@@ -1,3 +1,13 @@
+## 0.30.4 — unreleased, 2026-10-17 (#191)
+
+- Impact: fix false low-memory launch blocks when CT115 holds reclaimable inactive file cache. Each finite parent/namespace memory limit is evaluated against its own usage and cache counters; the tightest adjusted headroom wins. Anonymous, active-file and kernel memory stay charged.
+- Safety: retain raw usage, limit, inactive-file cache, raw margin and container full PSI in the snapshot. Container full PSI avg10 above 5 forces headroom to zero. Missing, malformed or inconsistent readings also publish zero headroom immediately. The existing host pressure, disk, freshness and maintenance checks remain in force.
+- Configuration/migration: none. Preserve `ct115_memory_headroom_bytes` for the currently installed consumer. The host sampler can be updated independently; no application/session restart, cache flush, budget change or database migration is required.
+- Verification: six small filesystem-fixture tests cover cache versus noncache usage, nested finite limits, pressure vetoes and missing/negative/oversized/malformed readings. Version consistency and whitespace checks pass. Tests run without host probes, provider launches or full suites; deployment verification is separate.
+- Rollback: restore the retained `/usr/local/sbin/n100-resource-sampler` backup on n100. The next scheduled sample returns to raw cache-inclusive headroom; keep snapshots root-owned. No state rollback is required.
+
+- Integration: reapplied issue #191 on the current private release, preserving the fullscreen repair and workflow permission correction.
+
 ## 0.30.3 — unreleased, 2026-10-17 (#193)
 
 - Impact: writable Codex Pro workflow tasks launch with native automatic review when their prepared command omits `--sandbox`. Record the actual native permission mode in both the launch receipt and session metadata; Plan and read actions remain read-only. Missing or conflicting native permissions fail before task startup.
