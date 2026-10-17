@@ -1,3 +1,10 @@
+## 0.30.3 — unreleased, 2026-10-17 (#193)
+
+- Impact: writable Codex Pro workflow tasks launch with native automatic review when their prepared command omits `--sandbox`. Record the actual native permission mode in both the launch receipt and session metadata; Plan and read actions remain read-only. Missing or conflicting native permissions fail before task startup.
+- Configuration/migration: none. Launch arguments, approval policy, and existing sessions are unchanged. This private integration reuses the permission fix from PR #200 (`b730ecf4`) on the deployed 0.30.2 source, preserving both terminal resize repairs.
+- Verification: `scripts/test-isolated.py -q tests/test_native_permissions.py tests/test_workflow_engine.py tests/test_providers.py tests/test_version.py` passed 46 tests and 13 subtests. Fake agents, private databases, and private tmux sockets verify automatic-review completion, read-only metadata, and rejection before native startup; no real model requests. Whitespace checks passed.
+- Rollback: select the retained 0.30.2 release through the guarded release process and restart web only. No schema migration or agent restart is needed; the writable workflow launch failure returns.
+
 ## 0.30.2 — unreleased, 2026-10-15 (#196)
 
 - Impact: extend the pinned xterm resize guard to allocate missing visible rows in initialized buffers before redraw. This prevents the missing-row parser failure associated with a stranded status bar and repeated output. Existing text, normal scrollback, drafts, and the terminal connection are preserved.

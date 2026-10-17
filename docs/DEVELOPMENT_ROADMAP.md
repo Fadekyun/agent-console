@@ -1,3 +1,9 @@
+## Native workflow permission recording — 2026-10-17 (#193)
+
+- [x] Reuse PR #200's effective native permission derivation so automatic-review commands do not require a conflicting sandbox flag.
+- [x] Keep session metadata and launch receipts aligned with read-only Plan/read actions and writable workflows; reject missing or conflicting policy before native startup.
+- [x] Cover actual isolated workflow completion, permission receipts, stored session metadata, and failure before native launch; preserve the deployed terminal fixes in this private integration.
+
 ## Terminal maximize redraw correction — 2026-10-15 (#196)
 
 - [x] Reproduce stale prompt rows after a short terminal grows; distinguish browser redraw corruption from resubmitted input.
