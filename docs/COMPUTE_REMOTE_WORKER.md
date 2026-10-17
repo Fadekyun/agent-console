@@ -7,6 +7,8 @@ casting controller change is part of these queue APIs.
 
 ## Enablement and identity
 
+Authenticated owners can pause or resume dispatch on `/compute`; the page uses the same protected owner API. Managed agents and producer identities cannot use these controls.
+
 Dispatch still requires `AGENT_CONSOLE_COMPUTE_ENABLED=1` and the durable owner hold
 to be released. `AGENT_CONSOLE_COMPUTE_LAPTOP_CONFIG` points to a root-owned JSON
 file, non-writable by group/other, containing:
@@ -156,7 +158,7 @@ transaction/idempotency contract and does not make a multi-system write atomic.
 
 Set the durable owner hold first. Existing remote work is stopped/inspected; no
 new job starts. Disable the worker configuration only after termination receipts
-are confirmed. Preserve unknown reservations and the database. Schema version 3
+are confirmed. Preserve unknown reservations and the database. Schema version 4
 is additive but older queue code rejects it intentionally, so a code rollback
 must keep the compatible queue modules or restore a pre-migration database only
 when no post-migration receipts would be lost. Never blindly replay old timers.

@@ -337,3 +337,13 @@ qualification is implied by the source tests.
 ### Reviewed adapter upgrades
 
 `prepare-adapter-install.py --previous-install-receipt` validates the exact prior receipt, all installed file hashes and fixed dependency links before replacing a held, drained adapter tree. It retains the previous directory and fsyncs files/directories before success. The two directory renames and registry replacement are separate operations: an interrupted upgrade remains held and requires explicit reconciliation using the retained tree. Never unhold solely because setup stopped. `Verify-WorkerPolicy.ps1` records completed native failure/quota/isolation checks and preserves that hold.
+
+
+TV release test support uses `install-tv-test-runtime.sh` through the existing
+held setup task. It installs python3-venv only inside the Debian12 worker root;
+the repository builder creates a disposable pinned Cast test environment.
+`Provision-OrganizerCredential.ps1` accepts only the separately authorized
+Bushi automation session on stdin. Its dedicated limited task installs a private
+Linux credential while held. Verify its success receipt and remove
+`code/organizer-input.json` and the one-time credential task after completion.
+Never supply credential values in script arguments, transcripts or source.

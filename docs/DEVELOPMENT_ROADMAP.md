@@ -1,5 +1,7 @@
 ## AGC laptop workload migration — 2026-10-17 (#203)
 
+Temporary artifact capacity now defers safely, and authenticated owners have a compute-page pause/resume control. Dedicated organizer credential provisioning and isolated TV Python test support are included.
+
 Provisioning now includes fixed per-workload SSH identities, independently checked worker policy sealing, and exact-prior-receipt adapter upgrades. Native qualification passed real OOM, timeout and both lease-loss stop paths within90seconds; production workload cutovers remain pending acceptance.
 
 - [x] Add scoped producers, immutable transfers, dependencies/deadlines and central publication fencing to the existing durable queue.

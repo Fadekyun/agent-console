@@ -92,7 +92,7 @@ PY
     test -e "$root/dev/$device" || mknod -m 0666 "$root/dev/$device" c "$major" "$minor"
   done
   chroot "$root" /usr/bin/apt-get update -qq
-  chroot "$root" /usr/bin/apt-get install -y --no-install-recommends ca-certificates curl xz-utils git python3 build-essential pkg-config sqlite3
+  chroot "$root" /usr/bin/apt-get install -y --no-install-recommends ca-certificates curl xz-utils git python3 python3-venv build-essential pkg-config sqlite3
   # Match the supervisor's numeric identity inside each chroot, without any
   # staff account/profile. Node and browser libraries can resolve their home.
   worker_uid=$(id -u agcjob)

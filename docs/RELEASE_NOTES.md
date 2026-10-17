@@ -1,3 +1,10 @@
+## 0.32.1 — unreleased, 2026-10-17 (#203 / #204)
+
+- Impact: temporarily full central artifact storage now defers transfers without abandoning the job or its reservation. Authenticated owners can pause/resume dispatch from the compute page. Managed sessions and producers retain no owner-control authority.
+- Configuration/migration: no schema change. Add Python venv support to the isolated TV toolchain for its complete lint/test/package path. Dedicated Bushi session provisioning uses protected stdin and an explicit separately approved destination; remove temporary transfer material after verified installation.
+- Verification: 140 bounded compute tests passed, including capacity recovery and authorization regressions; UI module syntax passed. Native worker/toolchain receipts remain required for workload cutover.
+- Rollback: select the retained compatible schema4 release and restart only the web service; preserve all active and unknown receipts. Artifact pressure may again surface as a rejected request on the older code, so hold new dispatch while correcting capacity.
+
 ## 0.32.0 — unreleased, 2026-10-17 (#203)
 
 - Impact: extend the durable compute queue with an independently isolated AGC laptop worker, scoped service producers, immutable source/result transfer, deadline/dependency admission, shared Bushi reservations and single-use central publication receipts. The Windows worker uses a separate standard account, its own WSL VM, headless adapters, one job at a time and staff-priority throttling. Persistent services and databases remain central.
