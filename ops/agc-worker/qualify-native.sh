@@ -27,7 +27,7 @@ base = Path('/var/lib/agc-worker-qualification-' + run_id)
 results = Path('/var/lib/agc-worker-qualification-results')
 source = Path('/usr/local/lib/agc-worker/worker.py')
 qual_slice = 'agcqualification' + run_id + '.slice'
-units, launch_count = set(), {}
+units, auxiliary_units, launch_count = set(), set(), {}
 evidence = {'version': 1, 'run_id': run_id, 'state': 'running', 'cases': [],
             'worker_source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
             'scope': 'isolated real systemd/cgroup behavior; not end-to-end queue or admission proof',
@@ -70,9 +70,13 @@ def scoped_run(args, check=True):
     args = list(args)
     if args[0] == 'systemd-run':
         unit = next(value.split('=', 1)[1] for value in args if value.startswith('--unit='))
-        assert unit.startswith('agc-job-') and unit.endswith('.service')
-        units.add(unit)
-        launch_count[unit] = launch_count.get(unit, 0) + 1
+        if unit.startswith('agc-lease-'):
+            auxiliary_units.update({unit + '.timer', unit + '.service'})
+            args = [value.replace('--property=Slice=system.slice', '--property=Slice=' + qual_slice) for value in args]
+        else:
+            assert unit.startswith('agc-job-') and unit.endswith('.service')
+            units.add(unit)
+            launch_count[unit] = launch_count.get(unit, 0) + 1
     # Redirect only this isolated module's slice operations; never change the
     # production jobs slice. Every child is <=128MiB and the test slice <=256MiB.
     args = [value.replace('agc-worker-jobs.slice', qual_slice) for value in args]
@@ -98,7 +102,7 @@ def process(pid):
 def checkpoint(*unused): save('checkpoint.json',{'checkpoint':True,'pid':os.getpid()})
 signal.signal(signal.SIGUSR1,checkpoint)
 processes=[process(os.getpid())]
-if a.mode in ('timeout','lease'):
+if a.mode in ('timeout','lease','timer'):
     signal.signal(signal.SIGTERM,signal.SIG_IGN)
     child=subprocess.Popen([sys.executable,'-c','import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(300)'])
     processes.append(process(child.pid))
@@ -119,10 +123,10 @@ adapter.chmod(0o644)
 config = base / 'config'
 config.mkdir(mode=0o700)
 registry = {}
-for mode in ('success', 'oom', 'timeout', 'lease'):
+for mode in ('success', 'oom', 'timeout', 'lease', 'timer'):
     registry['qual.' + mode] = {'enabled': True, 'argv': ['/usr/bin/python3', str(adapter), '--mode', mode],
-        'parameter_keys': [], 'production_writes': mode == 'lease', 'supports_checkpoint': mode == 'lease',
-        'memory_bytes': 128 * 1024**2, 'cpus': 1, 'timeout_seconds': 150 if mode == 'lease' else (8 if mode == 'timeout' else 30)}
+        'parameter_keys': [], 'production_writes': mode in ('lease', 'timer'), 'supports_checkpoint': mode == 'lease',
+        'memory_bytes': 128 * 1024**2, 'cpus': 1, 'timeout_seconds': 150 if mode in ('lease', 'timer') else (8 if mode == 'timeout' else 30)}
 (config / 'adapters.json').write_text(json.dumps(registry))
 instance = None
 
@@ -158,7 +162,7 @@ try:
     archive_bytes = archive_buffer.getvalue()
     source_digest = hashlib.sha256(archive_bytes).hexdigest()
     worker.install_object(instance.state / 'objects', source_digest, len(archive_bytes), io.BytesIO(archive_bytes))
-    for mode, expected in [('success', 'succeeded'), ('oom', 'oom'), ('timeout', 'timeout'), ('lease', 'unknown')]:
+    for mode, expected in [('success', 'succeeded'), ('oom', 'oom'), ('timeout', 'timeout'), ('lease', 'unknown'), ('timer', 'unknown')]:
         production_drained()
         instance.host = worker.read_json('/run/agc-worker/host.json')
         holds = qualification_admission(instance.host, required_memory=128 * 1024**2)
@@ -166,7 +170,7 @@ try:
         manifest = {'version': 1, 'kind': 'qual.' + mode, 'source_sha': '0' * 40,
                     'input_sha256': hashlib.sha256(b'').hexdigest(), 'parameters': {},
                     'source_artifact': {'sha256': source_digest, 'size': len(archive_bytes)},
-                    'production_writes': mode == 'lease'}
+                    'production_writes': mode in ('lease', 'timer')}
         request = {'protocol_version': 1, 'action': 'start', 'job_id': 'qual-' + run_id + '-' + mode,
                    'attempt_id': 'attempt-1', 'lease_generation': 1, 'kind': manifest['kind'],
                    'source_sha': manifest['source_sha'], 'input_sha256': manifest['input_sha256'],
@@ -192,6 +196,15 @@ try:
                 'processes': processes, 'began_monotonic': time.monotonic()}
         evidence['cases'].append(case)
         (job / 'workspace/release').touch()
+        if mode == 'timer':
+            # Deliberately do not call the Python watchdog or heartbeat for
+            # this one case. The independent root-owned timer must kill every
+            # process even while the supervisor makes no progress.
+            time.sleep(84)
+            case['timer_stopped_without_watchdog'] = instance.unit_empty(unit)
+            case['timer_unit_result'] = real_properties(started['lease_timer'].replace('.timer', '.service'))
+            assert case['timer_stopped_without_watchdog'], 'independent lease timer left a live cgroup'
+            assert not any(current_process(entry) for entry in processes), 'lease timer left a child alive'
         deadline = time.monotonic() + (130 if mode == 'lease' else 45)
         while time.monotonic() < deadline:
             instance.tick()
@@ -207,6 +220,8 @@ try:
             assert receipt['reason'] == 'lease_lost' and receipt.get('checkpoint_requested'), receipt
             assert receipt.get('checkpoint_sha256'), 'checkpoint artifact not captured before lease stop'
             assert 79 <= case['elapsed_seconds'] <= 90, 'real lease-loss stop exceeded its 90-second total budget'
+        if mode == 'timer':
+            assert 83 <= case['elapsed_seconds'] <= 90, 'independent lease timer exceeded its stop budget'
         inventory = receipt['result']['inventory_artifact']
         inventory_path = instance.state / 'objects' / inventory['sha256']
         assert worker.digest_file(inventory_path) == inventory['sha256']
@@ -230,6 +245,13 @@ except BaseException as error:
     evidence.update(state='failed', error_type=type(error).__name__, error=str(error), traceback=traceback.format_exc(limit=8))
 finally:
     cleanup = []
+    for auxiliary in sorted(auxiliary_units, reverse=True):
+        try:
+            command(['systemctl', 'stop', auxiliary], check=False)
+            command(['systemctl', 'reset-failed', auxiliary], check=False)
+        except BaseException as error:
+            cleanup.append({'auxiliary_unit': auxiliary, 'error_type': type(error).__name__})
+            evidence['state'] = 'failed'
     for unit in sorted(units):
         try:
             command(['systemctl', 'stop', unit], check=False)

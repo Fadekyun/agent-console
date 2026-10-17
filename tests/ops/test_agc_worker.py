@@ -5,9 +5,11 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tarfile
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -36,6 +38,20 @@ def request():
 
 
 class ValidationTests(unittest.TestCase):
+    def test_rpc_input_has_total_deadline_and_one_frame(self):
+        source, sink = os.pipe()
+        try:
+            os.write(sink, b'{"ok":true}\n')
+            self.assertEqual(worker.read_line(source, 32, .1), b'{"ok":true}\n')
+            os.write(sink, b'{')
+            with self.assertRaisesRegex(ValueError, 'request_deadline'):
+                worker.read_line(source, 32, .02)
+            os.write(sink, b'{}\n{}\n')
+            with self.assertRaisesRegex(ValueError, 'request_size'):
+                worker.read_line(source, 32, .1)
+        finally:
+            os.close(source); os.close(sink)
+
     def test_schedule_never_monday_tuesday_and_drains_sunday(self):
         tz = ZoneInfo("Asia/Singapore")
         self.assertFalse(worker.schedule_open(dt.datetime(2026, 10, 19, 12, tzinfo=tz)))
@@ -278,6 +294,49 @@ class ReceiptTests(unittest.TestCase):
             (output / "large").write_bytes(b"12345")
             with patch.object(worker, "MAX_ARTIFACT", 4), self.assertRaisesRegex(ValueError, "result_limit"):
                 instance.collect_result({**binding, "production_writes": False})
+
+    def test_fenced_heartbeat_renews_root_timer_only_after_successful_control(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = self.make_worker(tmp)
+            binding = worker.validate_binding(request())
+            instance.active = {**binding, "state": "running", "unit": "agc-job-test.service",
+                               "last_heartbeat_monotonic": 90, "lease_timer": "agc-lease-test.timer"}
+            (instance.state / "jobs" / instance.key(binding)).mkdir()
+            with patch.object(worker.time, "monotonic", return_value=100), patch.object(worker, "run") as command:
+                instance.dispatch({**request(), "action": "heartbeat"})
+            command.assert_called_once_with(["systemctl", "restart", "agc-lease-test.timer"])
+            self.assertEqual(instance.active["last_heartbeat_monotonic"], 100)
+            with patch.object(worker.time, "monotonic", return_value=110), patch.object(worker, "run", side_effect=ValueError("control_failed")):
+                with self.assertRaises(ValueError): instance.dispatch({**request(), "action": "heartbeat"})
+            self.assertEqual(instance.active["last_heartbeat_monotonic"], 100)
+
+    def test_blocked_fetch_does_not_own_watchdog_state_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = self.make_worker(tmp)
+            entered, release = threading.Event(), threading.Event()
+            def fetch(_):
+                entered.set(); release.wait(2)
+                return {"eof": True}
+            with patch.object(instance, "fetch", side_effect=fetch):
+                thread = threading.Thread(target=instance.dispatch, args=({"protocol_version": 1, "action": "fetch"},))
+                thread.start()
+                try:
+                    self.assertTrue(entered.wait(1))
+                    acquired = instance.lock.acquire(timeout=.2)
+                    self.assertTrue(acquired)
+                    if acquired: instance.lock.release()
+                finally:
+                    release.set(); thread.join(1)
+
+    def test_late_heartbeat_cannot_renew_expired_local_lease(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = self.make_worker(tmp)
+            binding = worker.validate_binding(request())
+            instance.active = {**binding, "state": "running", "last_heartbeat_monotonic": 0}
+            with patch.object(worker.time, "monotonic", return_value=76), patch.object(instance, "terminate") as stop, patch.object(worker, "run") as command:
+                instance.dispatch({**request(), "action": "heartbeat"})
+            stop.assert_called_once_with("lease_lost")
+            command.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -15,13 +15,16 @@ import os
 from pathlib import Path, PurePosixPath
 import pwd
 import re
+import select
 import shutil
+import signal
 import socket
 import socketserver
 import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 from zoneinfo import ZoneInfo
@@ -30,6 +33,17 @@ MAX_RPC = 512 * 1024
 CHUNK = 256 * 1024
 # Match the central queue object contract, including source/input blobs.
 MAX_ARTIFACT = 2 * 1024**3
+LEASE_STOP_SECONDS = 75
+LEASE_TIMER_SECONDS = 80
+STATE_ROOT = Path("/var/lib/agc-worker")
+CONFIG_ROOT = Path("/etc/agc-worker")
+RUNTIME_ROOT = Path("/run/agc-worker")
+JOB_SLICE = "agc-worker-jobs.slice"
+CONTROL_SLICE = "system.slice"
+JOB_USER = "agcjob"
+SLICE_CPU_QUOTA = "1200%"
+PRESSURE_CPU_QUOTA = "100%"
+CRITICAL_HOST_MEMORY_BYTES = 5_000_000_000
 BINDING = ("job_id", "attempt_id", "lease_generation", "kind", "source_sha",
            "input_sha256", "manifest_sha256")
 TERMINAL = {"succeeded", "failed", "oom", "timeout", "interrupted", "unknown"}
@@ -60,7 +74,9 @@ def install_object(objects, digest, size, stream):
     target = Path(objects) / digest
     if target.exists() and target.stat().st_size == size and digest_file(target) == digest:
         return target
-    temporary = target.with_suffix(".tmp")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=digest + ".", suffix=".tmp", dir=objects)
+    os.close(descriptor)
+    temporary = Path(temporary_name)
     hasher, written = hashlib.sha256(), 0
     try:
         with temporary.open("wb") as output:
@@ -99,8 +115,29 @@ def read_json(path):
     return json.loads(Path(path).read_text())
 
 
+def read_line(fd, limit, timeout):
+    """One bounded frame with a total deadline, including slow partial input."""
+    deadline, data = time.monotonic() + timeout, bytearray()
+    while len(data) <= limit:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+            raise ValueError("request_deadline")
+        chunk = os.read(fd, min(65536, limit + 1 - len(data)))
+        if not chunk:
+            raise ValueError("request_incomplete")
+        data.extend(chunk)
+        if b"\n" in data:
+            if len(data) > limit or not data.endswith(b"\n") or data.count(b"\n") != 1:
+                raise ValueError("request_size")
+            return bytes(data)
+    raise ValueError("request_size")
+
+
 def run(args, check=True):
-    result = subprocess.run(args, capture_output=True, text=True, timeout=20,
+    timeout = 20
+    if args and args[0] == "systemctl":
+        timeout = 8 if len(args) > 1 and args[1] == "stop" else 2
+    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
                             env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"})
     if check and result.returncode:
         raise ValueError("control_command_failed:" + Path(args[0]).name)
@@ -189,9 +226,9 @@ def credential_properties(kind, adapter):
     ids = adapter.get("credential_ids", [])
     if not ids:
         return {}
-    if kind != "bushi.run" or ids != ["agc-bushi-organizer-state.json"]:
+    if kind not in {"bushi.run", "bushi.emergency"} or ids != ["agc-bushi-organizer-state.json"]:
         raise ValueError("credential_not_allowed_for_adapter")
-    parent = Path("/etc/agc-worker/credentials")
+    parent = CONFIG_ROOT / "credentials"
     source = parent / ids[0]
     info, directory = source.lstat(), parent.lstat()
     if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077
@@ -260,8 +297,9 @@ def admission_holds(host, now=None, required_memory=0):
 
 
 class Worker:
-    def __init__(self, state=Path("/var/lib/agc-worker"), config=Path("/etc/agc-worker")):
-        self.state, self.config = Path(state), Path(config)
+    def __init__(self, state=None, config=None):
+        self.state = Path(state) if state is not None else STATE_ROOT
+        self.config = Path(config) if config is not None else CONFIG_ROOT
         self.lock = threading.RLock()
         self.active = None
         self.boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
@@ -285,6 +323,8 @@ class Worker:
                 atomic_json(path, receipt)
                 if not receipt["termination_confirmed"]:
                     self.active = receipt
+                else:
+                    self.stop_lease_timer(receipt)
             elif receipt.get("unit_cleanup_pending"):
                 # A crash after persisting completion must not discard its
                 # result merely because the retained transient unit remains.
@@ -325,6 +365,14 @@ class Worker:
             return True
         event_file = Path("/sys/fs/cgroup") / group.lstrip("/") / "cgroup.events"
         return not event_file.exists() or "populated 0" in event_file.read_text()
+
+    def stop_lease_timer(self, receipt):
+        timer = receipt.get("lease_timer")
+        if timer:
+            try:
+                run(["systemctl", "stop", timer], check=False)
+            except (ValueError, subprocess.TimeoutExpired):
+                pass  # Target cgroup is already empty; no replay is permitted.
 
     def status(self):
         holds = admission_holds(self.host)
@@ -374,8 +422,9 @@ class Worker:
         adapter = validate_manifest(manifest, binding, self.adapters)
         memory = int(adapter.get("memory_bytes", 2 * 1024**3))
         cpus = int(adapter.get("cpus", 1))
+        cpu_quota = int(adapter.get("cpu_quota_percent", cpus * 100))
         timeout = int(adapter.get("timeout_seconds", 3600))
-        if not (128 * 1024**2 <= memory <= 8 * 1024**3 and 1 <= cpus <= 12 and 1 <= timeout <= 21600):
+        if not (128 * 1024**2 <= memory <= 8 * 1024**3 and 1 <= cpus <= 12 and 1 <= cpu_quota <= cpus * 100 and 1 <= timeout <= 21600):
             raise ValueError("invalid_adapter_limits")
         status = self.status()
         holds = status["admission"]["holds"] + admission_holds(self.host, required_memory=memory)
@@ -403,7 +452,7 @@ class Worker:
         output.mkdir(mode=0o750)
         for name in (".home", ".tmp", ".cache"):
             (work / name).mkdir(mode=0o750)
-        account = pwd.getpwnam("agcjob")
+        account = pwd.getpwnam(JOB_USER)
         for root in (work, output):
             shutil.chown(root, user=account.pw_uid, group=account.pw_gid)
             for path in root.rglob("*"):
@@ -422,12 +471,13 @@ class Worker:
         receipt = {**binding, "state": "starting", "unit": unit, "boot_id": self.boot_id,
                    "started_at": time.time(), "last_heartbeat_monotonic": time.monotonic(),
                    "termination_confirmed": False, "production_writes": manifest["production_writes"]}
+        receipt["lease_timer"] = unit.replace("agc-job-", "agc-lease-").replace(".service", ".timer")
         self.persist(receipt)  # Persist intent BEFORE the executable can run.
         self.fences[binding["job_id"]] = binding["lease_generation"]
         atomic_json(self.state / "fences.json", self.fences)
         self.active = receipt
         try:
-            self.host = read_json("/run/agc-worker/host.json")
+            self.host = read_json(RUNTIME_ROOT / "host.json")
         except (OSError, ValueError):
             self.host = {}
         if time.monotonic() - preparation_started > 45 or admission_holds(self.host, required_memory=memory):
@@ -435,9 +485,9 @@ class Worker:
             self.persist(receipt)
             self.active = None
             return receipt
-        properties = {"Slice": "agc-worker-jobs.slice", "MemoryHigh": str(memory * 9 // 10),
+        properties = {"Slice": JOB_SLICE, "MemoryHigh": str(memory * 9 // 10),
                       "RemainAfterExit": "yes",
-                      "MemoryMax": str(memory), "MemorySwapMax": "0", "CPUQuota": str(cpus * 100) + "%",
+                      "MemoryMax": str(memory), "MemorySwapMax": "0", "CPUQuota": str(cpu_quota) + "%",
                       "CPUWeight": "10", "IOWeight": "10", "Nice": "10", "TasksMax": "512",
                       "RuntimeMaxSec": str(timeout), "TimeoutStopSec": "5", "KillMode": "control-group",
                       "OOMPolicy": "kill", "NoNewPrivileges": "yes",
@@ -451,10 +501,20 @@ class Worker:
                       "UnsetEnvironment": "DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS SSH_AUTH_SOCK"}
         properties.update(toolchain_properties(adapter, job))
         properties.update(credential_properties(binding["kind"], adapter))
-        command = ["systemd-run", "--quiet", "--unit=" + unit, "--service-type=exec", "--uid=agcjob"]
+        command = ["systemd-run", "--quiet", "--unit=" + unit, "--service-type=exec", "--uid=" + JOB_USER]
         command += ["--property=" + key + "=" + value for key, value in properties.items()]
         command += ["--", *argv, "--manifest", str(manifest_path), "--workspace", str(work), "--output", str(output)]
         try:
+            # A root-owned timer survives a stalled/crashed supervisor and
+            # accepts no notifications from job code. Its only fixed action
+            # kills this exact job cgroup; valid heartbeats restart the timer.
+            lease_unit = receipt["lease_timer"].removesuffix(".timer")
+            run(["systemd-run", "--quiet", "--unit=" + lease_unit,
+                 "--on-active=" + str(LEASE_TIMER_SECONDS) + "s",
+                 "--timer-property=AccuracySec=1s", "--timer-property=RandomizedDelaySec=0",
+                 "--property=Slice=" + CONTROL_SLICE, "--property=Type=oneshot",
+                 "--property=TimeoutStartSec=5", "--property=MemoryMax=32M", "--property=CPUQuota=10%",
+                 "--", "/usr/bin/systemctl", "kill", "--kill-whom=all", "--signal=SIGKILL", unit])
             run(command)
             receipt["state"] = "running"
         except (ValueError, subprocess.TimeoutExpired):
@@ -465,6 +525,7 @@ class Worker:
             receipt["termination_confirmed"] = self.unit_empty(unit)
         self.persist(receipt)
         if receipt["state"] in TERMINAL and receipt["termination_confirmed"]:
+            self.stop_lease_timer(receipt)
             self.active = None
         return receipt
 
@@ -476,6 +537,7 @@ class Worker:
         receipt.update(state="unknown" if receipt["production_writes"] else "interrupted",
                        reason=reason, termination_confirmed=self.unit_empty(receipt["unit"]))
         if receipt["termination_confirmed"]:
+            self.stop_lease_timer(receipt)
             try:
                 receipt["result"] = self.collect_result(receipt)
             except (OSError, ValueError):
@@ -495,7 +557,7 @@ class Worker:
     def tick(self):
         with self.lock:
             try:
-                self.host = read_json(Path("/run/agc-worker/host.json"))
+                self.host = read_json(RUNTIME_ROOT / "host.json")
             except (OSError, ValueError):
                 self.host = {}
             holds = admission_holds(self.host)
@@ -509,7 +571,7 @@ class Worker:
             idle = time.monotonic() - receipt["last_heartbeat_monotonic"]
             # Start graceful stop early; the five-second cgroup kill grace must
             # fit inside the 90-second termination budget, not follow it.
-            if idle >= 80:
+            if idle >= LEASE_STOP_SECONDS:
                 self.terminate("lease_lost")
                 return
             if idle >= 60:
@@ -524,13 +586,13 @@ class Worker:
             else:
                 self.staff_pressure_since = None
             critical = set(holds) - {"staff_cpu_pressure", "staff_memory_reserve"}
-            if self.host.get("memory_available_bytes", 0) < 5_000_000_000:
+            if self.host.get("memory_available_bytes", 0) < CRITICAL_HOST_MEMORY_BYTES:
                 critical.add("staff_memory_critical")
             if critical:
                 self.terminate(",".join(sorted(critical)))
                 return
-            quota = "100%" if holds else "1200%"
-            run(["systemctl", "set-property", "--runtime", "agc-worker-jobs.slice", "CPUQuota=" + quota])
+            quota = PRESSURE_CPU_QUOTA if holds else SLICE_CPU_QUOTA
+            run(["systemctl", "set-property", "--runtime", JOB_SLICE, "CPUQuota=" + quota])
             info = self.unit_info(receipt["unit"])
             retained_exit = info.get("ActiveState") == "active" and info.get("SubState") == "exited"
             if (info.get("ActiveState") in {"inactive", "failed"} or retained_exit) and self.unit_empty(receipt["unit"]):
@@ -550,6 +612,7 @@ class Worker:
                                    reason="invalid_result_artifacts")
                 self.persist(receipt)
                 self.active = None
+                self.stop_lease_timer(receipt)
                 # Keep successful transient units until their Result and
                 # immutable artifacts are durable. Only then permit unit GC.
                 try:
@@ -585,7 +648,7 @@ class Worker:
         if checkpoints:
             receipt["checkpoint_sha256"] = checkpoints[0]["sha256"]
         domain_response = output / "response.json"
-        if receipt["kind"] == "bushi.run" and receipt["production_writes"] and domain_response.is_file():
+        if receipt["kind"] in {"bushi.run", "bushi.emergency"} and receipt["production_writes"] and domain_response.is_file():
             if domain_response.stat().st_size > 1024**2:
                 raise ValueError("domain_receipt_limit")
             response = read_json(domain_response)
@@ -648,22 +711,34 @@ class Worker:
                 "data": base64.b64encode(data).decode(), "eof": offset + len(data) >= target.stat().st_size}
 
     def acknowledge(self, request):
-        binding = validate_binding(request)
-        receipt = self.bound_receipt(binding)
-        inventory = receipt.get("result", {}).get("inventory_artifact", {})
-        if (receipt["state"] not in TERMINAL or receipt["state"] == "unknown"
-                or not receipt.get("termination_confirmed")
-                or not inventory.get("sha256")
-                or request.get("inventory_sha256") != inventory["sha256"]):
-            raise ValueError("archive_ack_rejected")
-        receipt.update(centrally_archived=True, archived_at=time.time())
-        self.persist(receipt)  # Archive proof is durable before scratch deletion.
-        job = self.state / "jobs" / self.key(binding)
+        with self.lock:
+            binding = validate_binding(request)
+            receipt = self.bound_receipt(binding)
+            inventory = receipt.get("result", {}).get("inventory_artifact", {})
+            if (receipt["state"] not in TERMINAL or receipt["state"] == "unknown"
+                    or not receipt.get("termination_confirmed")
+                    or not inventory.get("sha256")
+                    or request.get("inventory_sha256") != inventory["sha256"]):
+                raise ValueError("archive_ack_rejected")
+            receipt.update(centrally_archived=True, archived_at=time.time())
+            self.persist(receipt)  # Archive proof is durable before scratch deletion.
+            job = self.state / "jobs" / self.key(binding)
+        # Pruning a large old build must not block the active job's watchdog.
         if job.exists():
             shutil.rmtree(job)
         return {**receipt, "acknowledged": True, "workspace_pruned": True}
 
     def dispatch(self, request):
+        if not isinstance(request, dict) or request.get("protocol_version") != 1:
+            raise ValueError("unsupported_protocol")
+        action = request.get("action")
+        # The RPC server handles requests serially. Bulk transfer and old-job
+        # pruning need not hold the active state lock against the watchdog.
+        if action in {"fetch", "stage", "ack"}:
+            result = {"fetch": self.fetch, "stage": self.stage, "ack": self.acknowledge}[action](request)
+            if all(key in result for key in BINDING):
+                result = {**result, "binding": {key: result[key] for key in BINDING}}
+            return {"protocol_version": 1, "ok": True, **result}
         with self.lock:
             if request.get("protocol_version") != 1:
                 raise ValueError("unsupported_protocol")
@@ -676,7 +751,17 @@ class Worker:
                 binding = validate_binding(request)
                 if self.active and all(self.active[k] == binding[k] for k in BINDING):
                     if action == "heartbeat":
-                        self.active["last_heartbeat_monotonic"] = time.monotonic()
+                        now = time.monotonic()
+                        if now - self.active["last_heartbeat_monotonic"] >= LEASE_STOP_SECONDS:
+                            self.terminate("lease_lost")
+                            result = self.bound_receipt(binding)
+                            return {"protocol_version": 1, "ok": True, **result, "binding": binding}
+                        if self.active["state"] == "running":
+                            # Renew the independent root timer BEFORE recording
+                            # the accepted heartbeat. Failed renewal cannot
+                            # extend the supervisor's local lease.
+                            run(["systemctl", "restart", self.active["lease_timer"]])
+                        self.active["last_heartbeat_monotonic"] = now
                         self.persist(self.active)
                         lease = self.state / "jobs" / self.key(binding) / "lease.json"
                         atomic_json(lease, {"boot_id": self.boot_id, "lease_generation": binding["lease_generation"],
@@ -700,11 +785,9 @@ class Worker:
 
 class Handler(socketserver.StreamRequestHandler):
     def handle(self):
-        self.connection.settimeout(20)
+        self.connection.settimeout(2)
         try:
-            line = self.rfile.readline(MAX_RPC + 1)
-            if len(line) > MAX_RPC or not line.endswith(b"\n"):
-                raise ValueError("request_size")
+            line = read_line(self.connection.fileno(), MAX_RPC, 2)
             response = self.server.worker.dispatch(json.loads(line))
         except (ValueError, KeyError, TypeError, OSError, subprocess.TimeoutExpired):
             # Avoid reflecting file paths, command output or secrets in errors.
@@ -712,21 +795,35 @@ class Handler(socketserver.StreamRequestHandler):
         self.wfile.write(canonical(response) + b"\n")
 
 
+def watchdog_loop(instance, stopping):
+    """Lease enforcement does not depend on an RPC finishing its input/output."""
+    while not stopping.is_set():
+        try:
+            instance.tick()
+        except (ValueError, KeyError, TypeError, OSError, subprocess.TimeoutExpired) as error:
+            # Do not silently lose the watchdog after a control/telemetry
+            # failure. The separately renewed root-owned systemd timer still
+            # kills the group if control calls or this process stop progressing.
+            sys.stderr.write("worker_watchdog_error:" + type(error).__name__ + "\n")
+            try:
+                with instance.lock:
+                    instance.terminate("watchdog_control_error")
+            except (ValueError, KeyError, OSError, subprocess.TimeoutExpired):
+                pass
+        stopping.wait(0.5)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("serve", "rpc", "host-sample"))
     args = parser.parse_args()
-    sock = Path("/run/agc-worker/rpc.sock")
+    sock = RUNTIME_ROOT / "rpc.sock"
     if args.mode == "host-sample":
         # Only root can replace this file; not an exposed network RPC action.
-        raw = sys.stdin.buffer.readline(16385)
-        if len(raw) > 16384:
-            raise SystemExit(2)
-        atomic_json("/run/agc-worker/host.json", json.loads(raw))
+        raw = read_line(sys.stdin.fileno(), 16384, 20)
+        atomic_json(RUNTIME_ROOT / "host.json", json.loads(raw))
     elif args.mode == "rpc":
-        data = sys.stdin.buffer.readline(MAX_RPC + 1)
-        if len(data) > MAX_RPC:
-            raise SystemExit(2)
+        data = read_line(sys.stdin.fileno(), MAX_RPC, 20)
         with socket.socket(socket.AF_UNIX) as client:
             client.settimeout(30)
             client.connect(str(sock))
@@ -737,14 +834,28 @@ def main():
         sock.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         if sock.exists():
             sock.unlink()
-        worker = Worker()
+        instance = Worker()
+        stopping = threading.Event()
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(signum, lambda *_: stopping.set())
         with socketserver.UnixStreamServer(str(sock), Handler) as server:
             os.chmod(sock, 0o600)
-            server.worker = worker
+            server.worker = instance
             server.timeout = 1
-            while True:
-                server.handle_request()
-                worker.tick()
+            watchdog = threading.Thread(target=watchdog_loop, args=(instance, stopping),
+                                        name="agc-worker-watchdog", daemon=True)
+            watchdog.start()
+            try:
+                while not stopping.is_set():
+                    server.handle_request()
+            finally:
+                stopping.set()
+                watchdog.join(timeout=3)
+                if instance.lock.acquire(timeout=1):
+                    try:
+                        instance.terminate("supervisor_shutdown")
+                    finally:
+                        instance.lock.release()
 
 
 if __name__ == "__main__":
