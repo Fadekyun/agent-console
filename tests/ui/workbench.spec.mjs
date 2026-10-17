@@ -618,7 +618,7 @@ test('collapsible branches and full-screen tree navigate every layer without los
   await expect(page.locator('#session-tree')).not.toContainText('session-child');
   const before=(await page.locator('.session-main').boundingBox()).width;
   await page.locator('#tree-panel > summary').click();
-  if(info.project.name==='desktop')expect((await page.locator('.session-main').boundingBox()).width-before).toBeGreaterThan(100);
+  if(info.project.name==='desktop')await expect.poll(async()=>(await page.locator('.session-main').boundingBox()).width-before).toBeGreaterThan(100);
   await ensureTerminal(page);
   const frame=page.frameLocator('iframe:not([hidden])');await openInput(frame);await frame.locator('#composer').fill('Root draft');
   await frame.locator('#toggle-composer').click();
