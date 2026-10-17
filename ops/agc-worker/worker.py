@@ -46,6 +46,42 @@ def digest_file(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def fsync_directory(path):
+    fd = os.open(path, os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def install_object(objects, digest, size, stream):
+    """A named object is durable and hash-verified, or does not exist yet."""
+    target = Path(objects) / digest
+    if target.exists() and target.stat().st_size == size and digest_file(target) == digest:
+        return target
+    temporary = target.with_suffix(".tmp")
+    hasher, written = hashlib.sha256(), 0
+    try:
+        with temporary.open("wb") as output:
+            while chunk := stream.read(1024 * 1024):
+                written += len(chunk)
+                if written > size:
+                    raise ValueError("object_size_mismatch")
+                hasher.update(chunk)
+                output.write(chunk)
+            if written != size or hasher.hexdigest() != digest:
+                raise ValueError("object_digest_mismatch")
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, target)
+        fsync_directory(target.parent)
+        return target
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def atomic_json(path, value):
     path = Path(path)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -55,11 +91,7 @@ def atomic_json(path, value):
         os.fsync(stream.fileno())
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)
-    fd = os.open(path.parent, os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    fsync_directory(path.parent)
 
 
 def read_json(path):
@@ -191,7 +223,8 @@ def admission_holds(host, now=None, required_memory=0):
         holds.append("policy_unverified")
     if host.get("on_ac") is not True:
         holds.append("not_on_ac")
-    if host.get("memory_available_bytes", 0) < 6_000_000_000 + required_memory:
+    staff_reserve = max(8 * 1024**3, int(host.get("memory_total_bytes", 0) * 0.25))
+    if host.get("memory_available_bytes", 0) < staff_reserve + required_memory:
         holds.append("staff_memory_reserve")
     if host.get("worker_memory_bytes", 16_000_000_001) > 16_000_000_000:
         holds.append("worker_memory_ceiling")
@@ -215,6 +248,7 @@ class Worker:
         self.started = time.monotonic()
         self.healthy_since = None
         self.host = {}
+        self.staff_pressure_since = None
         self.adapters = read_json(self.config / "adapters.json")
         self.fences = read_json(self.state / "fences.json") if (self.state / "fences.json").exists() else {}
         for name in ("objects", "incoming", "receipts", "jobs"):
@@ -411,6 +445,14 @@ class Worker:
         if receipt["termination_confirmed"]:
             self.active = None
 
+    def checkpoint(self, receipt):
+        if receipt.get("checkpoint_requested"):
+            return
+        if self.adapters[receipt["kind"]].get("supports_checkpoint"):
+            run(["systemctl", "kill", "--kill-whom=main", "--signal=SIGUSR1", receipt["unit"]], check=False)
+        receipt["checkpoint_requested"] = True
+        self.persist(receipt)
+
     def tick(self):
         with self.lock:
             try:
@@ -429,12 +471,17 @@ class Worker:
             if idle >= 90:
                 self.terminate("lease_lost")
                 return
-            if idle >= 60 and not receipt.get("checkpoint_requested"):
-                adapter = self.adapters[receipt["kind"]]
-                if adapter.get("supports_checkpoint"):
-                    run(["systemctl", "kill", "--kill-whom=main", "--signal=SIGUSR1", receipt["unit"]], check=False)
-                receipt["checkpoint_requested"] = True
-                self.persist(receipt)
+            if idle >= 60:
+                self.checkpoint(receipt)
+            if "staff_memory_reserve" in holds:
+                if self.staff_pressure_since is None:
+                    self.staff_pressure_since = time.monotonic()
+                    self.checkpoint(receipt)
+                elif time.monotonic() - self.staff_pressure_since >= 60:
+                    self.terminate("staff_memory_pressure")
+                    return
+            else:
+                self.staff_pressure_since = None
             critical = set(holds) - {"staff_cpu_pressure", "staff_memory_reserve"}
             if self.host.get("memory_available_bytes", 0) < 5_000_000_000:
                 critical.add("staff_memory_critical")
@@ -474,20 +521,19 @@ class Worker:
             if path.stat().st_size > MAX_ARTIFACT or len(inventory) >= 4096:
                 raise ValueError("result_limit")
             digest = digest_file(path)
-            target = self.state / "objects" / digest
-            if not target.exists():
-                shutil.copyfile(path, target)
-                os.chmod(target, 0o600)
+            with path.open("rb") as stream:
+                install_object(self.state / "objects", digest, path.stat().st_size, stream)
             inventory.append({"path": path.relative_to(output).as_posix(), "sha256": digest, "size": path.stat().st_size})
         result = {"version": 1, "binding": {k: receipt[k] for k in BINDING}, "files": inventory}
         data = canonical(result)
         if len(data) > 2 * 1024**2:
             raise ValueError("inventory_limit")
         digest = hashlib.sha256(data).hexdigest()
-        target = self.state / "objects" / digest
-        if not target.exists():
-            target.write_bytes(data)
-            os.chmod(target, 0o600)
+        import io
+        install_object(self.state / "objects", digest, len(data), io.BytesIO(data))
+        checkpoints = [entry for entry in inventory if entry["path"] == "checkpoint.json"]
+        if checkpoints:
+            receipt["checkpoint_sha256"] = checkpoints[0]["sha256"]
         return {"manifest_sha256": digest, "manifest_size": len(data), "artifact_count": len(inventory),
                 "artifacts": [{"sha256": digest, "size": len(data)}],
                 "inventory_artifact": {"sha256": digest, "size": len(data)}}
@@ -503,7 +549,9 @@ class Worker:
             raise ValueError("stage_admission_held")
         target = self.state / "objects" / digest
         if target.exists():
-            return {"artifact_id": digest, "offset": target.stat().st_size, "complete": True}
+            if target.stat().st_size == size and digest_file(target) == digest:
+                return {"artifact_id": digest, "offset": target.stat().st_size, "complete": True}
+            target.unlink()  # Corrupt cache is never advertised as completed.
         chunk = base64.b64decode(request.get("data", ""), validate=True)
         if len(chunk) > CHUNK or offset + len(chunk) > size:
             raise ValueError("invalid_chunk")
@@ -523,6 +571,7 @@ class Worker:
                 partial.unlink()
                 raise ValueError("artifact_digest_mismatch")
             os.replace(partial, target)
+            fsync_directory(target.parent)
         return {"artifact_id": digest, "offset": offset + len(chunk), "complete": complete}
 
     def fetch(self, request):

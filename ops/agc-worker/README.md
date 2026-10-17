@@ -35,10 +35,13 @@ for hostile code: only reviewed source and fixed adapters may execute here.
 * Wednesday–Sunday, AC only, Singapore time; Sunday 23:45 drain. No wake timer
   or power-on change. The startup task exits before WSL on Monday/Tuesday or
   battery. Two minutes startup and three healthy minutes precede admission.
-* CPU over 85% or available memory below 6 GB reduces the jobs slice to one
-  CPU equivalent. Below 5 GB, stale telemetry, battery, disk pressure or schedule
-  closure stops the worker. New jobs additionally reserve their full memory
-  allowance plus 6 GB for staff. Samples are every five seconds and expire at 30.
+* CPU over 85% or available memory below max(8 GiB, 25% of host RAM) reduces
+  the jobs slice to one CPU equivalent. Sustained memory pressure requests a
+  checkpoint immediately, stops the job at 60 seconds, and stops only the worker
+  VM at 75 seconds to reclaim cache. Below 5 GB, stale telemetry, battery, disk
+  pressure or schedule closure stops immediately. New jobs additionally reserve
+  their full memory allowance plus the staff reserve. Samples are every five
+  seconds and expire at 30.
 * GPU is **unqualified and disabled for admission**. Existing AMD `/dev/dxg` is
   evidence of a device, not a functioning compute backend. Any future GPU
   qualification must account shared GPU allocations in the same 16 GB Windows
@@ -160,7 +163,7 @@ is additionally required by each central publisher.
 
 CT115 invokes SSH command `agc-worker rpc`; Windows ForceCommand ignores caller
 commands and accepts one JSON line, up to 512 KiB. `protocol_version:1` and one of
-`status/start/heartbeat/inspect/stop/stage/fetch` is required. No remote shell or
+`status/start/heartbeat/inspect/stop/stage/fetch/ack` is required. No remote shell or
 SFTP is exposed for this account. Every job action binds `job_id`, `attempt_id`,
 `lease_generation`, `kind`, `source_sha`, `input_sha256`, `manifest_sha256`.
 Responses have `ok`, a nested `binding`, and a fixed error code on rejection.
@@ -170,6 +173,14 @@ decoded maximum). Reply: accepted offset and `complete`. Offset mismatch returns
 the already stored offset; final content must match the digest. Fetch adds
 bounded `length`; response includes `data`, `size`, `offset`, `eof`. Object IDs
 never become caller-controlled paths.
+
+After central durable archival of every object, `ack` with the exact binding
+and `inventory_sha256` records archival and removes only that attempt's scratch
+workspace. Unknown outcomes cannot be acknowledged for automatic cleanup.
+Receipts, inventories and bulk object cache remain; future cache cleanup must
+preserve unacknowledged dependencies. Every object is hash checked, fsynced and
+atomically renamed before a receipt refers to it. Existing cache objects are
+revalidated before a stage response can report completion.
 
 Heartbeats every 15 seconds; at 60 seconds without one, a checkpoint-capable
 adapter receives SIGUSR1. At 90 seconds systemd stops its whole cgroup (10 second
@@ -192,6 +203,6 @@ Source verification: lightweight Python fault tests and installed PowerShell
 parser/C# declaration compilation. These do **not** qualify Windows scheduled
 task behavior, WSL launch/termination, enforced job limits, desktop impact or
 real workloads. The root coordinator owns those live checks and production
-cutovers. GPU execution remains unqualified. Automatic cache deletion requires
-a central artifact archival acknowledgement; until supported, full disks hold
-new work rather than discard unacknowledged output.
+cutovers. GPU execution remains unqualified. Automatic bulk cache retention is
+not yet implemented; full disks hold new work rather than discard unacknowledged
+output. Acknowledged build scratch is reclaimed immediately.

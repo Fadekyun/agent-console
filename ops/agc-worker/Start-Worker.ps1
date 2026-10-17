@@ -35,6 +35,7 @@ $keepAlive = $null
 $previousIdle = [uint64]0; $previousKernel = [uint64]0; $previousUser = [uint64]0
 [void][AgcHost]::GetSystemTimes([ref]$previousIdle,[ref]$previousKernel,[ref]$previousUser)
 $logical = [Environment]::ProcessorCount
+$staffPressureSince = $null
 try {
     $keepAlive = Start-Process -FilePath 'wsl.exe' -ArgumentList '-d AGC-Worker -u root --exec /usr/bin/sleep infinity' -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds 5
@@ -62,6 +63,15 @@ try {
         $sample = @{observed_at=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()/1000.0;cpu_count=$logical;memory_total_bytes=$memory.totalPhysical;memory_available_bytes=$memory.availablePhysical;commit_total_bytes=$memory.totalCommit;commit_available_bytes=$memory.availableCommit;worker_memory_bytes=$workerBytes;disk_total_bytes=$drive.TotalSize;disk_free_bytes=$drive.AvailableFreeSpace;worker_disk_used_bytes=$diskBytes;cpu_percent=[Math]::Max(0,[Math]::Min(100,$cpuPercent));on_ac=[AgcHost]::OnAC();policy_verified=$verified;gpu_qualified=$false;memory_accounting='all_wsl_private_commit_plus_watchdog'}
         $sample | ConvertTo-Json -Compress | & wsl.exe -d $Distro -u root --exec /usr/local/bin/agc-worker host-sample
         if ($LASTEXITCODE -ne 0) { throw 'Host telemetry delivery failed' }
+        $staffReserve = [Math]::Max(8GB, $sample.memory_total_bytes * .25)
+        if ($sample.memory_available_bytes -lt $staffReserve) {
+            if ($null -eq $staffPressureSince) { $staffPressureSince = [DateTimeOffset]::UtcNow }
+            elseif (([DateTimeOffset]::UtcNow - $staffPressureSince).TotalSeconds -ge 75) {
+                # Supervisor already checkpointed/throttled, then stopped at60s;
+                # worker-only VM termination now reclaims residual guest cache.
+                break
+            }
+        } else { $staffPressureSince = $null }
         if (-not $sample.on_ac -or $sample.worker_memory_bytes -gt 16000000000 -or $sample.memory_available_bytes -lt 5000000000 -or $sample.disk_free_bytes -lt ($sample.disk_total_bytes * .15)) {
             # Linux supervisor receives the pressure sample and stops the job.
             Start-Sleep -Seconds 15

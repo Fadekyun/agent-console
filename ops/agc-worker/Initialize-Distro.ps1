@@ -4,15 +4,20 @@ $OutputEncoding = [Text.UTF8Encoding]::new($false)
 if ([Security.Principal.WindowsIdentity]::GetCurrent().Name -notmatch '\\agc-worker$') { throw 'Wrong Windows account' }
 $Data = 'C:\ProgramData\AGC-Worker\data'
 $Distro = 'AGC-Worker'
+$stage = 'preflight'
+try {
+Start-Transcript -Path (Join-Path $Data 'bootstrap.log') -Force | Out-Null
 $inputSpec = Get-Content (Join-Path $Data 'bootstrap-input.json') -Raw | ConvertFrom-Json
 if ((Get-FileHash (Join-Path $Data 'rootfs.tar') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $inputSpec.rootfs_sha256) { throw 'Rootfs changed after staging' }
 $names = ((& wsl.exe --list --quiet) -replace "`0",'') | ForEach-Object { $_.Trim() }
 if ($names | Where-Object {$_ -and $_ -ne $Distro}) { throw 'Worker Windows account has an unexpected distribution' }
 if ($names -notcontains $Distro) {
+    $stage = 'import'
     & wsl.exe --import $Distro (Join-Path $Data 'distro') (Join-Path $Data 'rootfs.tar') --version 2
     if ($LASTEXITCODE -ne 0) { throw 'WSL import failed' }
 }
 # Initial import uses root. Copy via stdin; Windows-drive automount is never needed.
+$stage = 'worker_configuration'
 $wslConf = [IO.File]::ReadAllText('C:\ProgramData\AGC-Worker\code\wsl.conf')
 $wslConf | & wsl.exe -d $Distro -u root --exec /usr/bin/tee /etc/wsl.conf | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'WSL config copy failed' }
@@ -24,6 +29,7 @@ foreach ($name in @('worker.py','install-linux.sh','adapters.example.json')) {
 # Restart only this newly created worker distro to apply its own systemd config.
 & wsl.exe --terminate $Distro
 if ($LASTEXITCODE -ne 0) { throw 'Worker-only terminate failed' }
+$stage = 'linux_install'
 & wsl.exe -d $Distro -u root --exec /bin/bash /opt/agc-worker-bootstrap/install-linux.sh /opt/agc-worker-bootstrap
 if ($LASTEXITCODE -ne 0) { throw 'Linux worker setup failed' }
 $workerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -32,3 +38,10 @@ if ((Get-Acl -LiteralPath $vhd).GetOwner([Security.Principal.SecurityIdentifier]
 $receipt = @{version=1;distro=$Distro;identity=[Security.Principal.WindowsIdentity]::GetCurrent().Name;rootfs_sha256=$inputSpec.rootfs_sha256;state='held';imported_at=[DateTimeOffset]::UtcNow.ToString('o')}
 $receipt | ConvertTo-Json | Set-Content (Join-Path $Data 'distro-ready.json') -Encoding UTF8
 Remove-Item -LiteralPath (Join-Path $Data 'rootfs.tar')
+if (Test-Path (Join-Path $Data 'bootstrap-failure.json')) { Remove-Item -LiteralPath (Join-Path $Data 'bootstrap-failure.json') }
+} catch {
+    @{version=1;stage=$stage;exit_code=$LASTEXITCODE;error_type=$_.Exception.GetType().Name;message='Bootstrap failed; inspect the protected bootstrap.log and task result';failed_at=[DateTimeOffset]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content (Join-Path $Data 'bootstrap-failure.json') -Encoding UTF8
+    exit 1
+} finally {
+    Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+}

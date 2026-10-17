@@ -174,6 +174,42 @@ class ReceiptTests(unittest.TestCase):
             self.assertTrue(receipt["termination_confirmed"])
             self.assertIsNone(instance.active)
 
+    def test_object_crash_or_corruption_never_becomes_completed_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            value = b"verified artifact"
+            digest = hashlib.sha256(value).hexdigest()
+            target = Path(tmp) / digest
+            target.write_bytes(b"partial prior copy")
+            worker.install_object(tmp, digest, len(value), io.BytesIO(value))
+            self.assertEqual(target.read_bytes(), value)
+            missing = hashlib.sha256(b"different").hexdigest()
+            with self.assertRaises(ValueError):
+                worker.install_object(tmp, missing, len(value), io.BytesIO(value))
+            self.assertFalse((Path(tmp) / missing).exists())
+            self.assertFalse(list(Path(tmp).glob("*.tmp")))
+
+    def test_ack_prunes_only_exact_archived_attempt_and_preserves_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = self.make_worker(tmp)
+            binding = worker.validate_binding(request())
+            receipt = {**binding, "state": "succeeded", "termination_confirmed": True,
+                       "result": {"inventory_artifact": {"sha256": "e" * 64, "size": 42}}}
+            instance.persist(receipt)
+            job = instance.state / "jobs" / instance.key(binding)
+            job.mkdir()
+            (job / "scratch").write_text("disposable")
+            with self.assertRaises(ValueError):
+                instance.acknowledge({**binding, "inventory_sha256": "f" * 64})
+            self.assertTrue(job.exists())
+            result = instance.acknowledge({**binding, "inventory_sha256": "e" * 64})
+            self.assertTrue(result["acknowledged"])
+            self.assertFalse(job.exists())
+            self.assertTrue(instance.bound_receipt(binding)["centrally_archived"])
+            receipt["state"] = "unknown"
+            instance.persist(receipt)
+            with self.assertRaises(ValueError):
+                instance.acknowledge({**binding, "inventory_sha256": "e" * 64})
+
 
 if __name__ == "__main__":
     unittest.main()
