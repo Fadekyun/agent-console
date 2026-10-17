@@ -186,7 +186,9 @@ try:
         assert properties['MemorySwapMax'] == '0' and properties['CPUQuotaPerSecUSec'] == '1s', properties
         assert properties['Slice'] == qual_slice and properties['RemainAfterExit'] == 'yes', properties
         assert properties['KillMode'] == 'control-group', properties
-        case = {'mode': mode, 'expected_state': expected, 'unit': unit, 'properties': properties,
+        cgroup = Path('/sys/fs/cgroup') / properties['ControlGroup'].lstrip('/')
+        assert (cgroup / 'memory.oom.group').read_text().strip() == '1', 'OOMPolicy=kill must enable whole-cgroup OOM'
+        case = {'mode': mode, 'expected_state': expected, 'unit': unit, 'properties': properties, 'memory_oom_group': 1,
                 'processes': processes, 'began_monotonic': time.monotonic()}
         evidence['cases'].append(case)
         (job / 'workspace/release').touch()

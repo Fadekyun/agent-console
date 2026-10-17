@@ -440,7 +440,7 @@ class Worker:
                       "MemoryMax": str(memory), "MemorySwapMax": "0", "CPUQuota": str(cpus * 100) + "%",
                       "CPUWeight": "10", "IOWeight": "10", "Nice": "10", "TasksMax": "512",
                       "RuntimeMaxSec": str(timeout), "TimeoutStopSec": "10", "KillMode": "control-group",
-                      "OOMPolicy": "kill", "MemoryOOMGroup": "yes", "NoNewPrivileges": "yes",
+                      "OOMPolicy": "kill", "NoNewPrivileges": "yes",
                       "PrivateTmp": "yes", "PrivateDevices": "yes", "ProtectSystem": "strict", "ProtectHome": "yes",
                       "ReadWritePaths": str(work) + " " + str(output), "WorkingDirectory": str(work),
                       "StandardOutput": "null", "StandardError": "null", "UMask": "0077",
