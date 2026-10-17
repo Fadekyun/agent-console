@@ -12,6 +12,7 @@ import re
 import time
 
 from .compute_policy import PROFILES, admission
+from .compute_manifest import validate_manifest, business_key, validate_emergency
 from .workflow_store import WorkflowStore, bounded_text, canonical, identifier
 
 LEASE_SECONDS = 120
@@ -26,7 +27,7 @@ class ComputeQueue:
         with self.store.connect(write=True) as db:
             db.execute('CREATE TABLE IF NOT EXISTS compute_schema(version INTEGER NOT NULL)')
             row = db.execute('SELECT version FROM compute_schema').fetchone()
-            if row and row[0] != 1:
+            if row and row[0] not in (1, 2, 3, 4, 5):
                 raise ValueError('unsupported compute schema; preserve state')
             if not row:
                 db.execute('INSERT INTO compute_schema VALUES(1)')
@@ -54,6 +55,42 @@ class ComputeQueue:
                 'CREATE INDEX IF NOT EXISTS compute_pending ON compute_jobs(state,created_at)',
             ):
                 db.execute(sql)
+            # Additive migration, preserving v1 receipts and immutable specs.
+            columns = {r['name'] for r in db.execute('PRAGMA table_info(compute_jobs)')}
+            for name, definition in (
+                ('manifest_json', 'TEXT'), ('manifest_digest', 'TEXT'),
+                ('dependencies_json', "TEXT NOT NULL DEFAULT '[]'"),
+                ('priority', 'INTEGER NOT NULL DEFAULT 0'),
+                ('not_before', 'REAL'), ('deadline', 'REAL'),
+            ):
+                if name not in columns:
+                    db.execute(f'ALTER TABLE compute_jobs ADD COLUMN {name} {definition}')
+            attempt_columns = {r['name'] for r in db.execute('PRAGMA table_info(compute_attempts)')}
+            if 'remote_start_sent_at' not in attempt_columns:
+                db.execute('ALTER TABLE compute_attempts ADD COLUMN remote_start_sent_at REAL')
+            for name, definition in (('external_write_unknown', 'INTEGER NOT NULL DEFAULT 0'),
+                                     ('termination_confirmed_at', 'REAL')):
+                if name not in attempt_columns:
+                    db.execute(f'ALTER TABLE compute_attempts ADD COLUMN {name} {definition}')
+            db.execute('CREATE TABLE IF NOT EXISTS compute_resource_reservations(resource TEXT PRIMARY KEY, attempt_id TEXT NOT NULL REFERENCES compute_attempts(id))')
+            db.execute('CREATE TABLE IF NOT EXISTS compute_remote_acks(attempt_id TEXT PRIMARY KEY REFERENCES compute_attempts(id), inventory_digest TEXT NOT NULL, acknowledged_at REAL)')
+            db.execute('CREATE TABLE IF NOT EXISTS compute_business_claims(business_key TEXT PRIMARY KEY, job_id TEXT UNIQUE NOT NULL REFERENCES compute_jobs(id))')
+            db.execute('''CREATE TABLE IF NOT EXISTS compute_transfers(
+                id TEXT PRIMARY KEY, job_id TEXT UNIQUE NOT NULL REFERENCES compute_jobs(id),
+                request_key TEXT UNIQUE NOT NULL, request_hash TEXT NOT NULL,
+                original_spec_json TEXT NOT NULL, effective_spec_json TEXT NOT NULL,
+                original_manifest_json TEXT NOT NULL, receipt_json TEXT NOT NULL)''')
+            if not row or row[0] < 4:
+                # Claims survive completion/cancellation and migration. Never let
+                # an older laptop request acquire a second business identity on N100.
+                for job in db.execute("SELECT id,manifest_json FROM compute_jobs WHERE manifest_json IS NOT NULL"):
+                    claim = business_key(json.loads(job['manifest_json']))
+                    if claim:
+                        previous = db.execute('SELECT job_id FROM compute_business_claims WHERE business_key=?', (claim,)).fetchone()
+                        if previous and previous['job_id'] != job['id']:
+                            raise ValueError('historical paid business claims conflict; owner reconciliation required')
+                        db.execute('INSERT OR IGNORE INTO compute_business_claims VALUES(?,?)', (claim, job['id']))
+            db.execute('UPDATE compute_schema SET version=5')
             db.execute('INSERT OR IGNORE INTO compute_control VALUES(1,1)')
 
     def held(self):
@@ -77,7 +114,8 @@ class ComputeQueue:
             raise ValueError('expected a lowercase SHA-256 digest')
         return value
 
-    def enqueue(self, *, kind, execution_target, source_digest, input_digest, request_key, actor):
+    def enqueue(self, *, kind, execution_target, source_digest, input_digest, request_key, actor,
+                manifest=None, dependencies=None, priority=0, not_before=None, deadline=None):
         if kind not in PROFILES:
             raise ValueError('unsupported compute profile')
         profile = PROFILES[kind]
@@ -89,17 +127,62 @@ class ComputeQueue:
         bounded_text(actor, 'actor', 200, True)
         spec = dict(kind=kind, execution_target=execution_target,
                     source_digest=source_digest, input_digest=input_digest)
+        encoded = manifest_digest = None
+        if manifest is not None:
+            if kind == 'maintenance.report':
+                raise ValueError('local maintenance does not accept execution manifests')
+            encoded, manifest_digest = validate_manifest(manifest, kind=kind,
+                source_digest=source_digest, input_digest=input_digest)
+        dependencies = [] if dependencies is None else dependencies
+        if (not isinstance(dependencies, list) or len(dependencies) > 20
+                or any(not isinstance(item, str) or not 1 <= len(item) <= 100 for item in dependencies)
+                or len(set(dependencies)) != len(dependencies)):
+            raise ValueError('invalid dependency list')
+        if type(priority) is not int or not 0 <= priority <= 100:
+            raise ValueError('priority must be an integer from 0 to 100')
+        import math
+        for value in (not_before, deadline):
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                      or not math.isfinite(value) or value < 0):
+                raise ValueError('invalid scheduling timestamp')
+        if not_before is not None and deadline is not None and not_before >= deadline:
+            raise ValueError('admission window is empty')
+        # Preserve v1 idempotency hashes for jobs without new scheduling fields.
+        if manifest is not None or dependencies or priority or not_before is not None or deadline is not None:
+            spec.update(manifest_digest=manifest_digest, dependencies=dependencies,
+                        priority=priority, not_before=not_before, deadline=deadline)
+        claim = business_key(manifest) if manifest is not None else None
         spec_hash = hashlib.sha256(canonical(spec).encode()).hexdigest()
         with self.store.connect(write=True) as db:
             prior = db.execute('SELECT * FROM compute_jobs WHERE request_key=?', (request_key,)).fetchone()
             if prior:
+                if actor.startswith('producer:') and prior['actor'] != actor:
+                    raise PermissionError('request key belongs to a different actor')
                 if prior['spec_hash'] != spec_hash:
                     raise ValueError('request key already identifies a different immutable job')
-                return dict(prior)
+                return {**dict(prior), 'transfers': self._transfers(db, prior['id'])}
+            from .compute_bushi_series import action as series_action, accepted_claim
+            if manifest is not None and series_action(manifest):
+                from .compute_artifacts import ComputeArtifacts
+                claim = accepted_claim(db, manifest, actor, ComputeArtifacts(self.store.state))
+            if kind == 'bushi.emergency':
+                validate_emergency(manifest, priority=priority, deadline=deadline, now=self.clock())
+            if claim and db.execute('SELECT job_id FROM compute_business_claims WHERE business_key=?', (claim,)).fetchone():
+                raise ValueError('business action already has an immutable request on another target or attempt')
+            for dependency in dependencies:
+                prior_dependency = db.execute('SELECT actor FROM compute_jobs WHERE id=?', (dependency,)).fetchone()
+                if prior_dependency is None:
+                    raise ValueError('dependency must already exist')
+                if actor.startswith('producer:') and prior_dependency['actor'] != actor:
+                    raise PermissionError('producer dependencies must belong to the same producer')
             job_id, now = identifier('compute'), self.clock()
             db.execute('''INSERT INTO compute_jobs(id,kind,execution_target,source_digest,input_digest,
                 request_key,spec_hash,state,actor,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'queued',?,?,?)''',
                 (job_id, kind, execution_target, source_digest, input_digest, request_key, spec_hash, actor, now, now))
+            db.execute('UPDATE compute_jobs SET manifest_json=?,manifest_digest=?,dependencies_json=?,priority=?,not_before=?,deadline=? WHERE id=?',
+                       (encoded, manifest_digest, canonical(dependencies), priority, not_before, deadline, job_id))
+            if claim:
+                db.execute('INSERT INTO compute_business_claims VALUES(?,?)', (claim, job_id))
             self._event(db, 'queued', job_id, spec, actor)
             return dict(db.execute('SELECT * FROM compute_jobs WHERE id=?', (job_id,)).fetchone())
 
@@ -109,15 +192,26 @@ class ComputeQueue:
             if row is None:
                 raise ValueError('unknown compute job')
             result = dict(row)
+            result['transfers'] = self._transfers(db, job_id)
             result['attempts'] = [dict(a) for a in db.execute(
                 'SELECT * FROM compute_attempts WHERE job_id=? ORDER BY generation', (job_id,))]
             return result
+
+    @staticmethod
+    def _transfers(db, job_id):
+        return [json.loads(row['receipt_json']) for row in db.execute(
+            'SELECT receipt_json FROM compute_transfers WHERE job_id=?', (job_id,))]
+
+    def transfer_emergency(self, job_id, **request):
+        from .compute_transfer import transfer_emergency
+        return transfer_emergency(self, job_id, **request)
 
     def status(self):
         with self.store.connect() as db:
             return {'jobs': [dict(r) for r in db.execute(
                 'SELECT * FROM compute_jobs ORDER BY created_at DESC,id DESC LIMIT 100')],
                 'reservations': [dict(r) for r in db.execute('SELECT * FROM compute_reservations')],
+                'resource_reservations': [dict(r) for r in db.execute('SELECT * FROM compute_resource_reservations')],
                 'counts': {r['state']: r['n'] for r in db.execute(
                     'SELECT state,count(*) AS n FROM compute_jobs GROUP BY state')}}
 
@@ -143,9 +237,33 @@ class ComputeQueue:
             telemetry = {**(telemetry or {}), 'operator_hold': bool(db.execute(
                 'SELECT held FROM compute_control WHERE id=1').fetchone()[0]) or (telemetry or {}).get('operator_hold', True)}
             reservations = [dict(r) for r in db.execute('SELECT * FROM compute_reservations')]
-            for job in db.execute("SELECT * FROM compute_jobs WHERE state IN ('queued','blocked') ORDER BY (kind='maintenance.report') DESC,created_at,id LIMIT 100").fetchall():
+            # A disconnected laptop queue cannot starve the N100 report lane.
+            target = telemetry.get('physical_host', 'n100')
+            for job in db.execute("""SELECT * FROM compute_jobs WHERE state IN ('queued','blocked')
+                    AND execution_target=? ORDER BY priority DESC, deadline IS NULL, deadline,
+                    created_at,id LIMIT 100""", (target,)).fetchall():
                 profile = PROFILES[job['kind']]
-                reason = admission(profile, telemetry, reservations, now)
+                if profile.guest_id != telemetry.get('guest_id'):
+                    continue
+                reason = None
+                if job['deadline'] is not None and now >= job['deadline']:
+                    reason = 'deadline_passed_requires_review'
+                elif job['not_before'] is not None and now < job['not_before']:
+                    reason = 'not_before'
+                elif profile.physical_host == 'agc-laptop' and not job['manifest_json']:
+                    reason = 'manifest_required'
+                for dependency in json.loads(job['dependencies_json']):
+                    dep = db.execute('SELECT state FROM compute_jobs WHERE id=?', (dependency,)).fetchone()
+                    if dep is None or dep['state'] != 'completed':
+                        reason = reason or 'dependency_not_completed'
+                if job['kind'] == 'bushi.emergency':
+                    manifest = json.loads(job['manifest_json']) if job['manifest_json'] else {}
+                    if (telemetry.get('installed_source_sha') != manifest.get('source_sha')
+                            or telemetry.get('installed_source_artifact') != manifest.get('source_artifact')):
+                        reason = reason or 'emergency_source_not_qualified'
+                reason = reason or admission(profile, telemetry, reservations, now)
+                if not reason and any(db.execute('SELECT attempt_id FROM compute_resource_reservations WHERE resource=?', (resource,)).fetchone() for resource in profile.resources):
+                    reason = 'shared_resource_reserved'
                 if not reason and any(r['physical_host'] == profile.physical_host for r in reservations):
                     reason = 'physical_host_reserved'
                 if reason:
@@ -156,6 +274,8 @@ class ComputeQueue:
                     lease_until,heartbeat_at,started_at,profile_json) VALUES(?,?,?,?,?,'starting',?,?,?,?)''',
                     (attempt_id, job['id'], generation, profile.physical_host, profile.guest_id,
                      now + LEASE_SECONDS, now, now, canonical(asdict(profile))))
+                for resource in profile.resources:
+                    db.execute('INSERT INTO compute_resource_reservations VALUES(?,?)', (resource, attempt_id))
                 db.execute('INSERT INTO compute_reservations VALUES(?,?,?,?,?,?)',
                     (profile.physical_host, attempt_id, profile.guest_id, profile.memory_max_bytes, profile.scratch_bytes, profile.cpu_cores))
                 db.execute("UPDATE compute_jobs SET state='starting',reason=NULL,generation=?,updated_at=? WHERE id=?", (generation, now, job['id']))
@@ -200,18 +320,31 @@ class ComputeQueue:
                 (state, failure, now, encoded, hashlib.sha256(encoded.encode()).hexdigest() if encoded else None, attempt_id))
             db.execute('UPDATE compute_jobs SET state=?,reason=?,updated_at=? WHERE id=?', (state, failure, now, row['job_id']))
             db.execute('DELETE FROM compute_reservations WHERE attempt_id=?', (attempt_id,))
+            db.execute('DELETE FROM compute_resource_reservations WHERE attempt_id=?', (attempt_id,))
+            if report is not None and isinstance(report.get('inventory_artifact'), dict):
+                inventory_digest = self._digest(report['inventory_artifact'].get('sha256'))
+                db.execute('INSERT OR IGNORE INTO compute_remote_acks VALUES(?,?,NULL)', (attempt_id, inventory_digest))
             self._event(db, state, attempt_id, {'reason': failure})
 
-    def reconcile_terminated(self, attempt_id, *, evidence, actor):
+    def reconcile_terminated(self, attempt_id, *, evidence, actor, failure=None, write_not_started=False):
         bounded_text(evidence, 'termination evidence', 4000, True)
+        if failure not in (None, 'oom'):
+            raise ValueError('unsupported reconciled failure')
+        failure = failure or 'verified_terminated'
         with self.store.connect(write=True) as db:
             row = db.execute('SELECT * FROM compute_attempts WHERE id=?', (attempt_id,)).fetchone()
             if row is None or row['state'] != 'unknown':
                 raise ValueError('only unknown attempts require termination reconciliation')
+            job = db.execute('SELECT manifest_json FROM compute_jobs WHERE id=?', (row['job_id'],)).fetchone()
+            write_started = (job['manifest_json'] and json.loads(job['manifest_json']).get('production_writes')
+                             and row['remote_start_sent_at'] is not None)
+            if row['external_write_unknown'] or (write_started and not write_not_started):
+                raise ValueError('external write requires separate business outcome reconciliation')
             now = self.clock()
-            db.execute("UPDATE compute_attempts SET state='failed',reason='verified_terminated',ended_at=? WHERE id=?", (now, attempt_id))
-            db.execute("UPDATE compute_jobs SET state='failed',reason='verified_terminated',updated_at=? WHERE id=?", (now, row['job_id']))
+            db.execute("UPDATE compute_attempts SET state='failed',reason=?,ended_at=? WHERE id=?", (failure, now, attempt_id))
+            db.execute("UPDATE compute_jobs SET state='failed',reason=?,updated_at=? WHERE id=?", (failure, now, row['job_id']))
             db.execute('DELETE FROM compute_reservations WHERE attempt_id=?', (attempt_id,))
+            db.execute('DELETE FROM compute_resource_reservations WHERE attempt_id=?', (attempt_id,))
             self._event(db, 'termination_reconciled', attempt_id, {'evidence': evidence}, actor)
         return self.inspect(row['job_id'])
 
@@ -220,6 +353,10 @@ class ComputeQueue:
             row = db.execute('SELECT * FROM compute_jobs WHERE id=?', (job_id,)).fetchone()
             if row is None or row['state'] != 'failed' or row['reason'] == 'oom':
                 raise ValueError('retry requires confirmed termination without an unchanged OOM budget')
+            if db.execute('SELECT 1 FROM compute_attempts WHERE job_id=? AND external_write_unknown=1', (job_id,)).fetchone():
+                raise ValueError('external outcome requires a new explicitly reconciled request')
+            if row['manifest_json'] and json.loads(row['manifest_json']).get('production_writes'):
+                raise ValueError('production write jobs require a newly reconciled request; never replay')
             if row['generation'] >= 3:
                 raise ValueError('compute retry limit reached')
             delay = 300 if row['generation'] == 1 else 1800
@@ -237,3 +374,89 @@ class ComputeQueue:
             db.execute("UPDATE compute_jobs SET state='cancelled',reason='owner_cancelled',updated_at=? WHERE id=?", (self.clock(), job_id))
             self._event(db, 'cancelled', job_id, {}, actor)
         return self.inspect(job_id)
+
+
+    def active_attempts(self, physical_host):
+        with self.store.connect() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT * FROM compute_attempts WHERE physical_host=? AND state IN ('starting','running','unknown')",
+                (physical_host,))]
+
+    def mark_unknown(self, attempt_id, *, reason):
+        # Fixed reason codes only: no remote stderr or credentials in receipts.
+        if reason not in ('remote_state_uncertain', 'remote_protocol_invalid', 'remote_runtime_budget'):
+            raise ValueError('unsupported unknown reason')
+        with self.store.connect(write=True) as db:
+            row = db.execute('SELECT * FROM compute_attempts WHERE id=?', (attempt_id,)).fetchone()
+            if row is None or row['state'] not in ACTIVE:
+                raise ValueError('attempt is not active')
+            if row['external_write_unknown']:
+                return  # Protocol or lease errors must never erase the business fence.
+            db.execute("UPDATE compute_attempts SET state='unknown',reason=? WHERE id=?", (reason, attempt_id))
+            db.execute("UPDATE compute_jobs SET state='unknown',reason='reconciliation_required',updated_at=? WHERE id=?",
+                       (self.clock(), row['job_id']))
+            self._event(db, 'unknown', attempt_id, {'reason': reason})
+
+
+    def mark_external_unknown(self, attempt_id, generation, *, terminated=False, report=None):
+        encoded = canonical(report) if report is not None else None
+        if encoded is not None:
+            bounded_text(encoded, 'external evidence', 8192, True)
+        with self.store.connect(write=True) as db:
+            row = db.execute('SELECT * FROM compute_attempts WHERE id=? AND generation=?',
+                             (attempt_id, generation)).fetchone()
+            if row is None or row['state'] not in ACTIVE:
+                raise ValueError('external evidence requires the unresolved attempt')
+            if row['result_json'] and encoded is not None and row['result_json'] != encoded:
+                raise ValueError('external evidence cannot change immutable result')
+            db.execute("""UPDATE compute_attempts SET state='unknown',reason='external_write_unknown',
+                external_write_unknown=1,termination_confirmed_at=COALESCE(termination_confirmed_at,?),
+                result_json=COALESCE(result_json,?),result_digest=COALESCE(result_digest,?) WHERE id=?""",
+                (self.clock() if terminated else None, encoded,
+                 hashlib.sha256(encoded.encode()).hexdigest() if encoded else None, attempt_id))
+            db.execute("UPDATE compute_jobs SET state='unknown',reason='external_write_unknown',updated_at=? WHERE id=?",
+                       (self.clock(), row['job_id']))
+            if not row['external_write_unknown'] or (encoded and not row['result_json']):
+                self._event(db, 'external_write_unknown', attempt_id,
+                            {'termination_confirmed': terminated, 'evidence_archived': encoded is not None})
+            # No reservation deletion and no worker ack/GC outbox entry.
+
+    def reconcile_external(self, attempt_id, generation, *, outcome, evidence, actor):
+        bounded_text(evidence, 'external readback evidence', 4000, True)
+        if outcome not in ('applied', 'not_applied'):
+            raise ValueError('external outcome must be established by readback')
+        with self.store.connect(write=True) as db:
+            row = db.execute('SELECT * FROM compute_attempts WHERE id=? AND generation=?',
+                             (attempt_id, generation)).fetchone()
+            if (row is None or row['state'] != 'unknown' or not row['external_write_unknown']
+                    or row['termination_confirmed_at'] is None):
+                raise ValueError('external reconciliation requires confirmed process termination')
+            reason = 'external_write_verified_' + outcome
+            db.execute("UPDATE compute_attempts SET state='failed',reason=?,ended_at=? WHERE id=?",
+                       (reason, self.clock(), attempt_id))
+            db.execute("UPDATE compute_jobs SET state='failed',reason=?,updated_at=? WHERE id=?",
+                       (reason, self.clock(), row['job_id']))
+            db.execute('DELETE FROM compute_reservations WHERE attempt_id=?', (attempt_id,))
+            db.execute('DELETE FROM compute_resource_reservations WHERE attempt_id=?', (attempt_id,))
+            self._event(db, 'external_outcome_reconciled', attempt_id,
+                        {'outcome': outcome, 'evidence': evidence}, actor)
+        return self.inspect(row['job_id'])
+
+
+    def claim_remote_start(self, attempt_id, generation):
+        with self.store.connect(write=True) as db:
+            self._current(db, attempt_id, generation)
+            changed = db.execute('UPDATE compute_attempts SET remote_start_sent_at=? WHERE id=? AND remote_start_sent_at IS NULL',
+                                 (self.clock(), attempt_id)).rowcount
+            return changed == 1
+
+
+    def pending_remote_acks(self, physical_host=None):
+        with self.store.connect() as db:
+            return [dict(row) for row in db.execute(
+                'SELECT a.*,k.inventory_digest FROM compute_remote_acks k JOIN compute_attempts a ON a.id=k.attempt_id WHERE k.acknowledged_at IS NULL AND (? IS NULL OR a.physical_host=?) LIMIT 10', (physical_host, physical_host))]
+
+    def confirm_remote_ack(self, attempt_id):
+        with self.store.connect(write=True) as db:
+            db.execute('UPDATE compute_remote_acks SET acknowledged_at=? WHERE attempt_id=? AND acknowledged_at IS NULL',
+                       (self.clock(), attempt_id))

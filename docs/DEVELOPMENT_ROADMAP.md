@@ -1,3 +1,19 @@
+## AGC laptop workload migration — 2026-10-17 (#203)
+
+Temporary artifact capacity now defers safely, and authenticated owners have a compute-page pause/resume control. Dedicated organizer credential provisioning and isolated TV Python test support are included.
+
+Provisioning now includes fixed per-workload SSH identities, independently checked worker policy sealing, and exact-prior-receipt adapter upgrades. Native qualification passed real OOM, timeout and both lease-loss stop paths within90seconds; production workload cutovers remain pending acceptance.
+
+- [x] Add scoped producers, immutable transfers, dependencies/deadlines and central publication fencing to the existing durable queue.
+- [x] Implement independent Windows account/WSL provisioning, constrained headless runtime, staff-priority admission/throttling and durable lease receipts.
+- [x] Reserve the Bushi organizer account across physical hosts; leave emergency execution disabled pending qualification.
+- [x] Add owner-only atomic emergency transfer for zero-attempt paid laptop jobs, preserving the job/request/business identity and durable producer-verifiable routing receipt. Keep Tuesday routine work durable without inventing emergency deadlines.
+- [x] Map only the current worker job into a private systemd namespace under production 0077; keep host state private and publish readable fenced lease replacements atomically. Native/runtime qualification is required before admission resumes.
+- [x] Require explicit protected native/toolchain receipts and matching worker hashes for operator hold release; replace historical Windows setup/staff pins with exact reviewed inputs and a fresh observed staff baseline. Fresh laptop execution evidence remains pending.
+- [x] Verify emergency CT102's actual hidden Proxmox memory boundary with authenticated host sampling and a protected enrollment receipt; retain conservative local limits, stale-sample stops and cold-start holds.
+- [ ] Qualify the installed worker, pinned toolchains, interruption/resource behavior and all five workload adapters.
+- [ ] Cut over each old heavy timer after accepted artifacts and publisher rollback; preserve central databases, payment APIs and serving processes.
+
 ## Protected credentials and clear setup documentation — 2026-10-10 (#189)
 
 - [x] Keep the Environment key/value form and scope controls; route five protected names into a separate-user credential broker.
@@ -475,3 +491,5 @@ Verify recovery after rename, stopped-terminal recreation, concurrent resume, re
 ### 0.29.1 — issue #187 — 2026-10-10
 
 Recovery refreshes the Console bootstrap/interpreter when a historic release runtime has been retired, while preserving the native command, snapshot, UUID and permission settings. Configuration/migration: none. Verify recovery with a missing original Python path. Rollback: select the preceding release; keep native histories and immutable-ID bindings.
+
+- 2026-10-17 (#203): verified CT102 producer addresses and native-qualified worker hold release are installed; central owner activation and domain acceptance remain required.

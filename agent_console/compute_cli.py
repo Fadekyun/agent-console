@@ -14,9 +14,9 @@ def add_commands(commands):
         actions.add_parser(action)
     inspect = actions.add_parser('inspect')
     inspect.add_argument('identity')
-    for action in ('enqueue', 'hold', 'reconcile'):
+    for action in ('enqueue', 'hold', 'reconcile', 'transfer-emergency'):
         item = actions.add_parser(action)
-        if action == 'reconcile':
+        if action in ('reconcile', 'transfer-emergency'):
             item.add_argument('identity')
         source = item.add_mutually_exclusive_group(required=True)
         source.add_argument('--json-file', type=Path)
@@ -31,9 +31,10 @@ def run(args, settings_factory=None):
         raise PermissionError('compute controls are unsupported in managed sessions; use a local human owner terminal')
     from .compute_engine import ComputeEngine
     from .config import Settings
-    from .compute_api import JobRequest, HoldRequest, ReconcileRequest
+    from .compute_api import JobRequest, HoldRequest, ReconcileRequest, EmergencyTransferRequest
     from .operator_workflow_cli import payload
-    models = {'enqueue': JobRequest, 'hold': HoldRequest, 'reconcile': ReconcileRequest}
+    models = {'enqueue': JobRequest, 'hold': HoldRequest, 'reconcile': ReconcileRequest,
+              'transfer-emergency': EmergencyTransferRequest}
     args.workflow_request_model = models.get(args.compute_action)
     data = payload(args)
     engine = ComputeEngine((settings_factory or Settings.from_env)().state_dir,
@@ -57,6 +58,8 @@ def run(args, settings_factory=None):
             return engine.queue.retry(args.identity, actor=actor)
         if action == 'cancel':
             return engine.queue.cancel(args.identity, actor=actor)
+        if action == 'transfer-emergency':
+            return engine.queue.transfer_emergency(args.identity, **data, actor=actor)
     except (ValueError, TypeError, KeyError, OSError):
         raise ValueError('Compute request rejected; inspect the receipt, limits and termination evidence') from None
     raise ValueError('unsupported compute command')

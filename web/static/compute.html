@@ -27,6 +27,8 @@
       <h2 id="dispatch-heading">Dispatch</h2>
       <p id="compute-dispatch"></p>
       <p id="compute-counts"></p>
+      <button type="button" id="compute-hold" disabled>Loading controls…</button>
+      <p>Pausing stops admission and drains active work. Resuming still requires worker availability and resource checks.</p>
     </section>
     <section aria-labelledby="workers-heading">
       <h2 id="workers-heading">Workers</h2>
@@ -60,8 +62,14 @@
     let timer;
     let refreshing = false;
     let lastUpdated;
+    let held;
+    let updatingHold = false;
+    const holdButton = document.getElementById('compute-hold');
 
     function render(status) {
+      held = status.held;
+      holdButton.textContent = held ? 'Resume scheduled work' : 'Pause work';
+      holdButton.disabled = updatingHold || typeof held !== 'boolean' || (!status.enabled && held);
       document.getElementById('compute-dispatch').textContent =
         status.enabled ? (status.held ? 'Dispatch is on hold.' : 'Dispatch is enabled; admission checks apply.') : 'Dispatch is disabled.';
       document.getElementById('compute-counts').textContent =
@@ -101,6 +109,7 @@
         lastUpdated = new Date().toLocaleTimeString();
         message.textContent = `Updated ${lastUpdated}.`;
       } catch {
+        holdButton.disabled = true;
         message.textContent = lastUpdated ? `Status unavailable. Displayed data is stale; last updated ${lastUpdated}.` : 'Compute status is unavailable. Check your connection and operator access.';
       } finally {
         clearTimeout(deadline);
@@ -108,6 +117,28 @@
         if (!document.hidden) timer = setTimeout(refresh, 10000);
       }
     }
+    holdButton.addEventListener('click', async () => {
+      if (updatingHold || typeof held !== 'boolean') return;
+      updatingHold = true;
+      holdButton.disabled = true;
+      clearTimeout(timer);
+      const abort = new AbortController();
+      const deadline = setTimeout(() => abort.abort(), 8000);
+      try {
+        const response = await fetch('/api/compute/hold', {
+          method: 'POST', credentials: 'same-origin', signal: abort.signal,
+          headers: {'Content-Type': 'application/json'}, body: JSON.stringify({held: !held}),
+        });
+        if (!response.ok) throw new Error('Owner control unavailable');
+        message.textContent = 'Dispatch setting saved. Refreshing status…';
+      } catch {
+        message.textContent = 'Dispatch change was not confirmed. Checking current status before another action.';
+      } finally {
+        clearTimeout(deadline);
+        updatingHold = false;
+        await refresh();
+      }
+    });
     document.addEventListener('visibilitychange', () => {
       clearTimeout(timer);
       if (!document.hidden) refresh();

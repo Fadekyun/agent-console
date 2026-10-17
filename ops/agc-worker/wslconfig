@@ -1,0 +1,10 @@
+[wsl2]
+memory=14305MB
+processors=12
+swap=0
+guiApplications=false
+localhostForwarding=false
+defaultVhdSize=260GB
+
+[experimental]
+autoMemoryReclaim=gradual
