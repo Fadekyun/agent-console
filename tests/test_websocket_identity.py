@@ -188,7 +188,7 @@ class WebSocketIdentityTests(unittest.TestCase):
         with patch("agent_console.web.MAX_PTY_CLIENTS", 1):
             with patch.object(self.manager.tmux, "run", side_effect=invalid_id):
                 with self.client.websocket_connect('/ws/sessions/invalid-runtime-id', headers=self.headers) as ws:
-                    self.assertEqual(self.drain_closed(ws), 4001)
+                    self.assertEqual(self.drain_closed(ws), 1011)
             with self.client.websocket_connect('/ws/sessions/invalid-runtime-id', headers=self.headers) as ws:
                 ws.send_text(json.dumps({"type": "detach"}))
                 self.assertEqual(self.drain_closed(ws), 4000)

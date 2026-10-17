@@ -17,6 +17,7 @@ from agent_console.providers import LaunchSpec, TOOL_BINARIES
 from agent_console.skills import assign_skill
 from agent_console.tmux import Tmux
 from agent_console.validation import contained_path, validate_session_name
+from native_fixture import seed_native, THREAD
 
 
 class ValidationTests(unittest.TestCase):
@@ -1224,7 +1225,7 @@ class SessionIntegrationTests(unittest.TestCase):
                 TOOL_BINARIES["codex"] = original
 
     def test_delegated_codex_pin_survives_restart(self) -> None:
-        stub = Path(self.temp.name) / "codex-delegate-stub"
+        stub = Path(self.temp.name) / "codex"
         stub.write_text("#!/usr/bin/env bash\nsleep 60\n", encoding="utf-8")
         stub.chmod(0o755)
         parent = self.manager.create(tool="shell", profile="general", name="pin-parent",
@@ -1239,13 +1240,20 @@ class SessionIntegrationTests(unittest.TestCase):
             self.assertEqual(child["model"], "gpt-5.6-terra")
             launcher = Path(child["launcher_path"])
             before = launcher.read_text()
+            _, rollout = seed_native(child)
+            history = rollout.read_bytes()
             self.manager.restart("pin-child")
             after = launcher.read_text()
+            self.assertIn("resume " + THREAD, after)
+            self.assertEqual(rollout.read_bytes(), history)
             for value in ('model="gpt-5.6-terra"', 'model_reasoning_effort="medium"',
                           'plan_mode_reasoning_effort="high"'):
                 self.assertIn(value, before)
                 self.assertIn(value, after)
-            self.assertEqual(self.manager.inspect("pin-child")["agent_mode"], "plan")
+            restarted = self.manager.inspect("pin-child")
+            self.assertEqual(restarted["id"], child["id"])
+            self.assertEqual(restarted["agent_mode"], "plan")
+            self.assertTrue(restarted["resume_available"])
             self.manager.kill("pin-child")
 
     def test_codex_pro_default_and_plan_survive_restart_and_delegation(self) -> None:
@@ -1256,7 +1264,7 @@ class SessionIntegrationTests(unittest.TestCase):
             "git", "-C", str(self.workspace), "-c", "user.name=Fixture",
             "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"
         ], check=True)
-        stub = Path(self.temp.name) / "codex-pro-approval-stub"
+        stub = Path(self.temp.name) / "codex"
         stub.write_text(
             "#!/bin/sh\n"
             "case \" $* \" in\n"
@@ -1279,8 +1287,13 @@ class SessionIntegrationTests(unittest.TestCase):
             before = Path(child["launcher_path"]).read_text()
             self.assertIn("--approve-for-me", before)
             self.assertNotIn("--ask-for-approval", before)
+            _, rollout = seed_native(child)
+            history = rollout.read_bytes()
             self.manager.restart(child["tmux_name"])
-            self.assertIn("--approve-for-me", Path(child["launcher_path"]).read_text())
+            resumed = Path(child["launcher_path"]).read_text()
+            self.assertIn("--approve-for-me", resumed)
+            self.assertIn("resume " + THREAD, resumed)
+            self.assertEqual(rollout.read_bytes(), history)
             self.assertEqual(self.manager.inspect(child["tmux_name"])["id"], child["id"])
             # Existing intentional/legacy arguments remain pinned on restart.
             legacy_launcher = Path(child["launcher_path"])
@@ -1290,12 +1303,19 @@ class SessionIntegrationTests(unittest.TestCase):
             self.manager.restart(child["tmux_name"])
             self.assertNotIn("--approve-for-me", legacy_launcher.read_text())
             self.assertIn("--ask-for-approval on-request", legacy_launcher.read_text())
+            self.assertIn("resume " + THREAD, legacy_launcher.read_text())
+            self.assertEqual(rollout.read_bytes(), history)
             plan = self.manager.create(
                 tool="codex-pro", profile="coder", name="approval-plan", agent_mode="plan"
             )
             self.assertEqual(plan["permission_mode"], "read-only")
+            _, plan_rollout = seed_native(plan)
+            plan_history = plan_rollout.read_bytes()
             self.manager.restart(plan["tmux_name"])
             launcher = Path(plan["launcher_path"]).read_text()
+            self.assertIn("resume " + THREAD, launcher)
+            self.assertEqual(plan_rollout.read_bytes(), plan_history)
+            self.assertEqual(self.manager.inspect(plan["tmux_name"])["id"], plan["id"])
             self.assertNotIn("--approve-for-me", launcher)
             self.assertIn("--ask-for-approval never", launcher)
             self.assertIn("--sandbox read-only", launcher)
