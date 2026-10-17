@@ -27,7 +27,7 @@ if ($names -notcontains $Distro) {
 $stage = 'worker_configuration'
 Copy-WorkerFile 'C:\ProgramData\AGC-Worker\code\wsl.conf' '/etc/wsl.conf'
 & wsl.exe -d $Distro -u root --exec /usr/bin/mkdir -p /opt/agc-worker-bootstrap
-foreach ($name in @('worker.py','install-linux.sh','adapters.example.json')) {
+foreach ($name in @('worker.py','qualification_gate.py','release-qualified-hold.sh','install-linux.sh','adapters.example.json')) {
     Copy-WorkerFile "C:\ProgramData\AGC-Worker\code\$name" "/opt/agc-worker-bootstrap/$name"
 }
 # Restart only this newly created worker distro to apply its own systemd config.

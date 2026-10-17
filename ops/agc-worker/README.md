@@ -267,6 +267,64 @@ JSON evidence is retained in `/var/lib/agc-worker-qualification-results/`.
 It stops only its recorded test units and slice; successful scratch is removed,
 and failed scratch/receipts remain for investigation. No policy marker is set.
 
+### Explicit qualification receipts and hold release
+
+Historical receipt IDs and staff boot IDs are not release authority. While held
+and drained, install the reviewed `qualification_gate.py` and
+`release-qualified-hold.sh` together under `/usr/local/lib/agc-worker/` with root
+ownership, protected ancestry and modes0644/0755. Fresh bootstrap copies both;
+an existing worker uses an exact reviewed operator Setup wrapper. Update the
+Windows `Start-Worker.ps1` and `Verify-WorkerPolicy.ps1` as a pair in protected
+code storage. The watchdog must be running the updated source so its fresh host
+sample binds the Windows seal to `qualified_worker_sha256`. These are worker-only
+updates; no staff runtime/settings change is part of qualification.
+
+Run the current native and toolchain qualifiers separately through Setup with
+explicit reviewed source hashes. Inspect their complete outputs and retain the
+exact Linux receipt paths and SHA256 digests. Both root-owned regular receipts
+must live directly in `/var/lib/agc-worker-qualification-results/` beneath
+protected non-symlink ancestry. Native proof must contain all five distinct
+success/OOM/timeout/lease/timer cases, confirmed empty cgroups, no duplicate
+execution, actual0077/private namespace evidence, visible atomic lease replacement
+and the independent timer result. Toolchain proof must include both Debian12/13
+private namespace checks, actual0077 and the current installed worker hash.
+Old-format evidence is refused even when its state says passed.
+
+Immediately before Windows sealing, independently observe the existing staff
+`.wslconfig` hash and the boot ID of the **already-running** Ubuntu-24.04 distro.
+Supply that exact hash, boot ID and UTC observation time (at most five minutes
+old) to `Verify-WorkerPolicy.ps1` via mandatory `-StaffConfigSha256`, `-StaffBootId`
+and `-StaffObservedAt`. If the laptop or staff distro is unavailable, keep the
+hold; never start staff WSL or guess a baseline to satisfy this check. Also pass
+`-WorkerSha256` and the exact separately reviewed Windows Setup receipt paths,
+source hashes and receipt-byte hashes via `-NativeSetupReceipt`,
+`-NativeSetupSourceSha256`, `-NativeSetupReceiptSha256`, `-ToolchainSetupReceipt`,
+`-ToolchainSetupSourceSha256` and `-ToolchainSetupReceiptSha256`. No wildcard
+receipt discovery is used. Setup reports are worker-written and therefore
+require the operator's exact byte pins; their executable sources remain under
+administrator-protected `code/setup`. Account identity, nonadministrator status,
+NTFS quota and code ACL checks still run before the seal is written.
+
+After reviewing those receipts, the operator may invoke the installed Linux
+gate through an explicitly reviewed Setup wrapper (arguments are concrete
+reviewed values, not values derived from a caller RPC request):
+
+```sh
+/usr/local/lib/agc-worker/release-qualified-hold.sh \
+  --worker-sha256 <installed-reviewed-worker-sha256> \
+  --native-receipt /var/lib/agc-worker-qualification-results/<native>.json \
+  --native-sha256 <reviewed-native-receipt-sha256> \
+  --toolchain-receipt /var/lib/agc-worker-qualification-results/<toolchain>.json \
+  --toolchain-sha256 <reviewed-toolchain-receipt-sha256>
+```
+
+The gate rechecks installed adapter hashes, registry, credential metadata,
+drained status and a fresh matching Windows seal before removing only the Linux
+operator hold. Central owner hold, schedule/capacity checks and production
+acceptance remain independent. Any missing/stale/changed evidence leaves the
+hold in place. Re-hold/drain before any source or toolchain update and produce
+new receipts; reverting code never authorizes reuse of old qualification.
+
 ## Operator setup and per-adapter credentials
 
 `Setup-Worker.ps1 -ScriptFile <reviewed-linux-script> -Sha256 <exact-hash>

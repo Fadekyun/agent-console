@@ -12,6 +12,8 @@ getent passwd agcjob >/dev/null || useradd --system --create-home --home-dir /va
 install -d -m 0755 /usr/local/lib/agc-worker /etc/agc-worker
 install -d -m 0700 /var/lib/agc-worker
 install -m 0755 "$SOURCE/worker.py" /usr/local/lib/agc-worker/worker.py
+install -m 0644 "$SOURCE/qualification_gate.py" /usr/local/lib/agc-worker/qualification_gate.py
+install -m 0755 "$SOURCE/release-qualified-hold.sh" /usr/local/lib/agc-worker/release-qualified-hold.sh
 ln -sfn /usr/local/lib/agc-worker/worker.py /usr/local/bin/agc-worker
 if ! test -e /etc/agc-worker/adapters.json; then
   install -m 0600 "$SOURCE/adapters.example.json" /etc/agc-worker/adapters.json

@@ -96,8 +96,10 @@ p=argparse.ArgumentParser()
 for name in ('mode','manifest','workspace','output'): p.add_argument('--'+name,required=True)
 a=p.parse_args(); output=Path(a.output); workspace=Path(a.workspace)
 def save(name,value):
-    with (output/name).open('w') as stream:
+    temporary=output/(name+'.tmp')
+    with temporary.open('w') as stream:
         json.dump(value,stream);stream.flush();os.fsync(stream.fileno())
+    os.replace(temporary,output/name)
 def process(pid):
     text=Path('/proc/'+str(pid)+'/stat').read_text()
     return {'pid':pid,'start_ticks':text[text.rfind(')')+2:].split()[19]}
@@ -245,6 +247,8 @@ try:
         case = {'mode': mode, 'expected_state': expected, 'unit': unit, 'properties': properties, 'memory_oom_group': 1,
                 'processes': processes, 'namespace': namespace, 'production_umask':'0077',
                 'began_monotonic': time.monotonic()}
+        if mode == 'success':
+            case['atomic_lease_replacement'] = worker.read_json(job/'output/lease-replaced.json').get('replacement_visible') is True
         evidence['cases'].append(case)
         (job / 'workspace/release').touch()
         if mode == 'timer':

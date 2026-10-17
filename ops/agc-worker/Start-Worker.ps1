@@ -66,6 +66,7 @@ try {
         }
         $sample = @{observed_at=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()/1000.0;cpu_count=$logical;memory_total_bytes=$memory.totalPhysical;memory_available_bytes=$memory.availablePhysical;commit_total_bytes=$memory.totalCommit;commit_available_bytes=$memory.availableCommit;worker_memory_bytes=$workerBytes;disk_total_bytes=$drive.TotalSize;disk_free_bytes=$drive.AvailableFreeSpace;worker_disk_used_bytes=$diskBytes;cpu_percent=[Math]::Max(0,[Math]::Min(100,$cpuPercent));on_ac=[AgcHost]::OnAC();policy_verified=$verified;gpu_qualified=$false;memory_accounting='all_wsl_private_commit_plus_watchdog'}
         $sample.quota_total_bytes=$drive.QuotaTotalBytes
+        $sample.qualified_worker_sha256=if ($verified) {$qualification.worker_sha256} else {$null}
         $sample.quota_available_bytes=$drive.QuotaAvailableBytes
         $sample.disk_accounting=$drive.Source
         $sample | ConvertTo-Json -Compress | & wsl.exe -d $Distro -u root --exec /usr/local/bin/agc-worker host-sample

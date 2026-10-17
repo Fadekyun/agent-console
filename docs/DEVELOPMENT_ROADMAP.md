@@ -9,6 +9,7 @@ Provisioning now includes fixed per-workload SSH identities, independently check
 - [x] Reserve the Bushi organizer account across physical hosts; leave emergency execution disabled pending qualification.
 - [x] Add owner-only atomic emergency transfer for zero-attempt paid laptop jobs, preserving the job/request/business identity and durable producer-verifiable routing receipt. Keep Tuesday routine work durable without inventing emergency deadlines.
 - [x] Map only the current worker job into a private systemd namespace under production 0077; keep host state private and publish readable fenced lease replacements atomically. Native/runtime qualification is required before admission resumes.
+- [x] Require explicit protected native/toolchain receipts and matching worker hashes for operator hold release; replace historical Windows setup/staff pins with exact reviewed inputs and a fresh observed staff baseline. Fresh laptop execution evidence remains pending.
 - [x] Verify emergency CT102's actual hidden Proxmox memory boundary with authenticated host sampling and a protected enrollment receipt; retain conservative local limits, stale-sample stops and cold-start holds.
 - [ ] Qualify the installed worker, pinned toolchains, interruption/resource behavior and all five workload adapters.
 - [ ] Cut over each old heavy timer after accepted artifacts and publisher rollback; preserve central databases, payment APIs and serving processes.
