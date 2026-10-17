@@ -14,6 +14,10 @@ STORE_BUDGET = 20 * 1024 ** 3
 DISK_RESERVE = 6 * 1024 ** 3
 
 
+class ArtifactCapacityUnavailable(RuntimeError):
+    """Temporary storage pressure; preserve the immutable upload for retry."""
+
+
 class ComputeArtifacts:
     def __init__(self, state_dir):
         self.root = Path(state_dir) / 'compute-artifacts'
@@ -66,7 +70,7 @@ class ComputeArtifacts:
             usage = sum(item.stat(follow_symlinks=False).st_size for item in os.scandir(self.root)
                         if item.is_file(follow_symlinks=False))
             if usage + len(chunk) > STORE_BUDGET or shutil.disk_usage(self.root).free - len(chunk) < DISK_RESERVE:
-                raise ValueError('artifact store headroom unavailable')
+                raise ArtifactCapacityUnavailable('artifact store headroom unavailable')
             with os.fdopen(self._open(partial, os.O_CREAT | os.O_RDWR), 'r+b') as stream:
                 stream.seek(offset)
                 stream.write(chunk)

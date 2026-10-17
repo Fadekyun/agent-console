@@ -200,6 +200,10 @@ class RemoteTests(unittest.TestCase):
         worker.call.side_effect = call
         engine = self.engine(worker)
         engine.tick()
+        with patch('agent_console.compute_artifacts.shutil.disk_usage', return_value=SimpleNamespace(free=0)):
+            engine.tick()
+        self.assertEqual(self.queue.inspect(job['id'])['state'],'running')
+        self.assertEqual(len(self.queue.status()['reservations']),1)
         engine.tick()
         self.assertEqual(self.queue.inspect(job['id'])['state'],'completed')
         self.assertTrue(self.artifacts.has({'sha256':output_sha,'size':len(output)}))
@@ -244,6 +248,25 @@ class ProducerTests(unittest.TestCase):
         other=self.engine.queue.enqueue(kind='maintenance.report',execution_target='n100',source_digest='a'*64,
             input_digest='b'*64,request_key='private',actor='owner')
         self.assertEqual(self.client.get('/api/compute/producers/jobs/'+other['id'],headers=self.headers).status_code,403)
+
+    def test_temporary_upload_pressure_returns_503_and_resumes_exact_partial(self):
+        route='/api/compute/producers/artifacts/'+SHA
+        first={'size':len(DATA),'offset':0,'data':base64.b64encode(DATA[:3]).decode(),'final':False}
+        self.assertEqual(self.client.post(route,headers=self.headers,json=first).status_code,200)
+        remaining={'size':len(DATA),'offset':3,'data':base64.b64encode(DATA[3:]).decode(),'final':True}
+        for pressure in (patch('agent_console.compute_artifacts.shutil.disk_usage',return_value=SimpleNamespace(free=0)),
+                         patch('agent_console.compute_artifacts.STORE_BUDGET',0)):
+            with pressure:
+                response=self.client.post(route,headers=self.headers,json=remaining)
+                self.assertEqual(response.status_code,503)
+                self.assertEqual(response.headers['retry-after'],'60')
+                self.assertEqual(self.engine.artifacts.offset({'sha256':SHA,'size':len(DATA)}),3)
+                self.assertEqual(self.client.post(route,headers=self.headers,json={**remaining,'data':'not-base64'}).status_code,400)
+                self.assertEqual(self.client.post(route,json=remaining).status_code,403)
+        recovered=self.client.post(route,headers=self.headers,json=remaining)
+        self.assertEqual(recovered.status_code,200)
+        self.assertEqual(recovered.json(),{'offset':len(DATA),'complete':True})
+        self.assertEqual(self.client.post(route,headers=self.headers,json=remaining).json(),recovered.json())
 
 
     def test_producer_can_fetch_archived_unknown_evidence_but_not_reconcile_or_publish(self):

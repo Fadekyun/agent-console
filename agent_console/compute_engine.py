@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 
-from .compute_artifacts import ComputeArtifacts, CHUNK_BYTES
+from .compute_artifacts import ComputeArtifacts, CHUNK_BYTES, ArtifactCapacityUnavailable
 from .compute_manifest import artifact
 from .compute_policy import WORKERS, admission, emergency_runtime_hold, laptop_availability, laptop_schedule_reason
 from .compute_queue import ComputeQueue
@@ -160,8 +160,13 @@ class ComputeEngine:
             if (response.get('artifact_id') != description['sha256'] or response.get('offset') != offset
                     or response.get('size') != description['size']):
                 raise ValueError('artifact response mismatch')
-            result = self.artifacts.put(description['sha256'], size=description['size'], offset=offset,
-                                        data=response['data'], final=response.get('eof', False))
+            try:
+                result = self.artifacts.put(description['sha256'], size=description['size'], offset=offset,
+                                            data=response['data'], final=response.get('eof', False))
+            except ArtifactCapacityUnavailable:
+                # A bound terminal receipt remains pending archival. Capacity
+                # pressure is not evidence of a protocol fault or unknown write.
+                return False
             if result['complete']:
                 return True
             if result['offset'] <= offset:

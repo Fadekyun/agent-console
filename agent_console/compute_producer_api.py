@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import Field
 
 from .compute_api import ComputeRequest, ComputeRoute, JobRequest
+from .compute_artifacts import ArtifactCapacityUnavailable
 from .compute_manifest import digest, business_namespace
 from .compute_publication import ComputePublications
 from .compute_retention import ComputeRetention
@@ -137,7 +138,11 @@ def producer_routes(engine_callable, *, config_loader=configured_producers):
         # No path, URL, command or telemetry is accepted from producers.
         engine = engine_callable()
         ComputeRetention(engine).pin_upload(artifact_id, producer.actor)
-        return engine.artifacts.put(artifact_id, **payload.model_dump())
+        try:
+            return engine.artifacts.put(artifact_id, **payload.model_dump())
+        except ArtifactCapacityUnavailable:
+            raise HTTPException(503, 'Compute artifact capacity temporarily unavailable',
+                headers={'Retry-After': '60', 'Cache-Control': 'no-store'}) from None
 
     @router.get('/jobs/{job_id}/artifacts/{artifact_id}')
     def fetch(job_id: str, artifact_id: str, offset: int = 0, length: int = 262144,
