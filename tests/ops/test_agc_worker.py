@@ -231,6 +231,51 @@ class ReceiptTests(unittest.TestCase):
             self.assertEqual(receipt["reason"], "external_write_unknown")
             self.assertTrue((instance.state / "objects" / result["inventory_artifact"]["sha256"]).exists())
 
+    @patch.object(worker, "schedule_open", return_value=True)
+    def test_retained_success_receipt_is_durable_before_systemd_unit_release(self, _):
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = self.make_worker(tmp)
+            binding = worker.validate_binding(request())
+            instance.active = {**binding, "state": "running", "unit": "agc-job-test.service",
+                               "production_writes": False, "last_heartbeat_monotonic": worker.time.monotonic()}
+            info = {"ActiveState": "active", "SubState": "exited", "Result": "success",
+                    "ExecMainStatus": "0", "ControlGroup": ""}
+            def command(args, **kwargs):
+                if args[:2] == ["systemctl", "stop"]:
+                    receipt = instance.bound_receipt(binding)
+                    self.assertEqual(receipt["state"], "succeeded")
+                    self.assertTrue(receipt["unit_cleanup_pending"])
+                    self.assertTrue(receipt["result"]["inventory_artifact"]["sha256"])
+            with patch.object(worker, "read_json", side_effect=lambda p: host(worker.time.time()) if str(p).endswith("host.json") else json.loads(Path(p).read_text())), patch.object(instance, "unit_info", return_value=info), patch.object(worker, "run", side_effect=command):
+                instance.tick()
+            receipt = instance.bound_receipt(binding)
+            self.assertEqual(receipt["state"], "succeeded")
+            self.assertFalse(receipt["unit_cleanup_pending"])
+            self.assertIsNone(instance.active)
+
+    def test_running_unit_and_remaining_children_are_not_termination_proof(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = self.make_worker(tmp)
+            with patch.object(instance, "unit_info", return_value={"ActiveState": "active", "SubState": "running", "ControlGroup": ""}):
+                self.assertFalse(instance.unit_empty("agc-job-test.service"))
+            with patch.object(instance, "unit_info", return_value={"ActiveState": "active", "SubState": "exited", "ControlGroup": "/test"}), patch.object(Path, "exists", return_value=True), patch.object(Path, "read_text", return_value="populated 1\nfrozen 0\n"):
+                self.assertFalse(instance.unit_empty("agc-job-test.service"))
+
+    def test_output_objects_match_central_size_limit_and_allow_empty_files(self):
+        self.assertEqual(worker.MAX_ARTIFACT, 2 * 1024**3)
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = self.make_worker(tmp)
+            binding = worker.validate_binding(request())
+            output = instance.state / "jobs" / instance.key(binding) / "output"
+            output.mkdir(parents=True)
+            (output / "empty").touch()
+            result = instance.collect_result({**binding, "production_writes": False})
+            inventory = worker.read_json(instance.state / "objects" / result["inventory_artifact"]["sha256"])
+            self.assertEqual(inventory["files"][0]["size"], 0)
+            (output / "large").write_bytes(b"12345")
+            with patch.object(worker, "MAX_ARTIFACT", 4), self.assertRaisesRegex(ValueError, "result_limit"):
+                instance.collect_result({**binding, "production_writes": False})
+
 
 if __name__ == "__main__":
     unittest.main()

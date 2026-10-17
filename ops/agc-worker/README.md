@@ -195,8 +195,15 @@ operator reconciliation; termination proof does not prove a write never occurred
 ## Rollback and remaining qualification
 
 Hold/drain the central queue first. `Provision-Worker.ps1 -Phase Disable`
-disables only the two worker tasks and account and preserves distro, outputs,
-receipts and staff settings. Existing leases expire locally. Do not unregister
+disables the worker background/bootstrap/setup tasks, then runs a dedicated
+limited-account stop task. It stops the worker job/setup slice and supervisor,
+terminates only `AGC-Worker`, confirms the distro is absent from that user's
+running list, and only then disables the account. A failed or timed-out stop
+retains an unknown receipt and does not claim shutdown; the account stays
+enabled with automatic tasks disabled for operator recovery. The stop never
+starts a stopped distro, including on Monday/Tuesday. Distro, outputs, receipts
+and staff settings remain intact. Central reservations still require outcome
+reconciliation; VM termination does not prove an external write failed. Do not unregister
 the distro or delete receipts while outcomes remain unknown. Quota enforcement
 is retained on rollback so worker data cannot escape its cap; use the recorded
 before-state only after confirming no intervening administrator quota changes.
@@ -220,6 +227,12 @@ worker admissions, refuses an active job, verifies transferred bytes, and runs
 only inside `AGC-Worker` with systemd limits: 2 GiB RAM, zero swap, one CPU,
 low CPU/I/O weights, 256 tasks and a bounded timeout. Setup receipts and logs
 live under `data/setup-<label>-<hash>.*`. It leaves the local hold in place.
+Setup belongs to the worker jobs slice so watchdog shutdown also stops setup.
+Physical SSD capacity/free space come from `GetDiskSpaceInformationW` Actual
+fields; the Caller fields record the separate NTFS quota headroom. Standard
+worker identity validation confirmed the physical 510,194,085,888-byte volume
+and approximately 300 GB quota independently. Neither check uses DriveInfo's
+quota-limited capacity as the physical staff reserve denominator.
 The coordinator serializes this operation with other heavy work; do not put
 credentials in setup scripts or their logs. No shell operation is added to the
 worker's public SSH/RPC protocol. This helper cannot restart staff WSL.

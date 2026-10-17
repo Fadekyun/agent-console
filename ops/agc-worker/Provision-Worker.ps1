@@ -70,16 +70,47 @@ function New-TaskPassword {
 }
 
 if ($Phase -eq 'Disable') {
-    foreach ($name in @($TaskName,$BootstrapTask)) {
+    if (-not (Test-Path $Marker)) { throw 'No enrolled worker account; refuse unrelated task or account changes' }
+    $enrolled = Get-Content $Marker -Raw | ConvertFrom-Json
+    $worker = Get-LocalUser -Name $WorkerName
+    if ($worker.SID.Value -ne $enrolled.sid) { throw 'Worker SID changed; refuse disable' }
+    foreach ($name in @($TaskName,$BootstrapTask,'AGC-Worker-Setup')) {
         if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
             Disable-ScheduledTask -TaskName $name | Out-Null
             Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
         }
     }
-    # Disabling the account prevents new SSH starts. Runtime supervisor fencing
-    # expires outstanding leases; preserve distro/data/receipts for reconciliation.
-    if (Test-Path $Marker) { Disable-LocalUser -Name $WorkerName }
-    [pscustomobject]@{phase=$Phase;state='disabled';preserved='account,distro,receipts,staff configuration'} | ConvertTo-Json -Compress
+    $disabledReceipt = Join-Path $Control 'disabled.json'
+    if (-not $worker.Enabled) {
+        if (-not (Test-Path $disabledReceipt)) { throw 'Account already disabled without shutdown proof; do not assume worker VM stopped' }
+        $previous = Get-Content $disabledReceipt -Raw | ConvertFrom-Json
+        if ($previous.worker_sid -ne $enrolled.sid -or $previous.termination_confirmed -ne $true) { throw 'Prior worker shutdown remains unconfirmed' }
+        [pscustomobject]@{phase=$Phase;state='already_disabled';termination_confirmed=$true} | ConvertTo-Json -Compress
+        exit 0
+    }
+    Copy-Item -LiteralPath (Join-Path $SourceDirectory 'Stop-Worker.ps1') -Destination $Code -Force
+    $stopTask='AGC-Worker-Stop'
+    if ((Get-ScheduledTask -TaskName $stopTask -ErrorAction SilentlyContinue).State -eq 'Running') { throw 'Worker stop already running; inspect its receipt' }
+    $requestId=[Guid]::NewGuid().ToString('N')
+    $receipt=Join-Path $Data "stop-$requestId.json"
+    $credential=Read-TaskCredential
+    $action=New-ScheduledTaskAction -Execute powershell.exe -Argument "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\ProgramData\AGC-Worker\code\Stop-Worker.ps1 -ExpectedSid $($enrolled.sid) -RequestId $requestId"
+    # A stop is permitted on battery and closed run days; it never starts WSL.
+    $settings=New-ScheduledTaskSettingsSet -Hidden -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName $stopTask -Action $action -Settings $settings -User $credential.UserName -Password $credential.GetNetworkCredential().Password -RunLevel Limited -Force | Out-Null
+    Start-ScheduledTask -TaskName $stopTask
+    $deadline=[DateTimeOffset]::UtcNow.AddSeconds(110)
+    do {
+        Start-Sleep -Seconds 1
+        $task=Get-ScheduledTask -TaskName $stopTask
+    } while (($task.State -eq 'Running' -or -not (Test-Path $receipt)) -and [DateTimeOffset]::UtcNow -lt $deadline)
+    if (-not (Test-Path $receipt) -or $task.State -eq 'Running') { throw 'Worker shutdown timed out; account remains enabled, schedules disabled, queue reservations retained' }
+    $stopped=Get-Content $receipt -Raw | ConvertFrom-Json
+    if ($stopped.request_id -ne $requestId -or $stopped.worker_sid -ne $enrolled.sid -or $stopped.termination_confirmed -ne $true -or (Get-ScheduledTaskInfo -TaskName $stopTask).LastTaskResult -ne 0) { throw 'Worker shutdown unconfirmed; account remains enabled and queue reservations retained' }
+    Disable-LocalUser -Name $WorkerName
+    Save-Json $disabledReceipt $stopped
+    Unregister-ScheduledTask -TaskName $stopTask -Confirm:$false
+    [pscustomobject]@{phase=$Phase;state='disabled';termination_confirmed=$true;preserved='account,distro,receipts,staff configuration'} | ConvertTo-Json -Compress
     exit 0
 }
 

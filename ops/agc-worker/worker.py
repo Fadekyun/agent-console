@@ -28,7 +28,8 @@ from zoneinfo import ZoneInfo
 
 MAX_RPC = 512 * 1024
 CHUNK = 256 * 1024
-MAX_ARTIFACT = 20_000_000_000
+# Match the central queue object contract, including source/input blobs.
+MAX_ARTIFACT = 2 * 1024**3
 BINDING = ("job_id", "attempt_id", "lease_generation", "kind", "source_sha",
            "input_sha256", "manifest_sha256")
 TERMINAL = {"succeeded", "failed", "oom", "timeout", "interrupted", "unknown"}
@@ -284,6 +285,15 @@ class Worker:
                 atomic_json(path, receipt)
                 if not receipt["termination_confirmed"]:
                     self.active = receipt
+            elif receipt.get("unit_cleanup_pending"):
+                # A crash after persisting completion must not discard its
+                # result merely because the retained transient unit remains.
+                try:
+                    run(["systemctl", "stop", receipt["unit"]])
+                    receipt["unit_cleanup_pending"] = False
+                    atomic_json(path, receipt)
+                except (ValueError, subprocess.TimeoutExpired):
+                    pass
         atomic_json(self.state / "fences.json", self.fences)
 
     def key(self, binding):
@@ -307,7 +317,8 @@ class Worker:
 
     def unit_empty(self, unit):
         info = self.unit_info(unit)
-        if info.get("ActiveState") not in {"inactive", "failed"}:
+        retained_exit = info.get("ActiveState") == "active" and info.get("SubState") == "exited"
+        if info.get("ActiveState") not in {"inactive", "failed"} and not retained_exit:
             return False
         group = info.get("ControlGroup")
         if not group:
@@ -425,6 +436,7 @@ class Worker:
             self.active = None
             return receipt
         properties = {"Slice": "agc-worker-jobs.slice", "MemoryHigh": str(memory * 9 // 10),
+                      "RemainAfterExit": "yes",
                       "MemoryMax": str(memory), "MemorySwapMax": "0", "CPUQuota": str(cpus * 100) + "%",
                       "CPUWeight": "10", "IOWeight": "10", "Nice": "10", "TasksMax": "512",
                       "RuntimeMaxSec": str(timeout), "TimeoutStopSec": "10", "KillMode": "control-group",
@@ -518,7 +530,8 @@ class Worker:
             quota = "100%" if holds else "1200%"
             run(["systemctl", "set-property", "--runtime", "agc-worker-jobs.slice", "CPUQuota=" + quota])
             info = self.unit_info(receipt["unit"])
-            if info.get("ActiveState") in {"inactive", "failed"} and self.unit_empty(receipt["unit"]):
+            retained_exit = info.get("ActiveState") == "active" and info.get("SubState") == "exited"
+            if (info.get("ActiveState") in {"inactive", "failed"} or retained_exit) and self.unit_empty(receipt["unit"]):
                 result = info.get("Result", "unknown")
                 state = {"oom-kill": "oom", "timeout": "timeout"}.get(result, "failed")
                 if result == "success" and info.get("ExecMainStatus") == "0":
@@ -527,7 +540,7 @@ class Worker:
                     state = "unknown"
                 receipt.update(state=state, termination_confirmed=True,
                                finished_at=time.time(), systemd_result=result,
-                               memory_peak_bytes=info.get("MemoryPeak"))
+                               memory_peak_bytes=info.get("MemoryPeak"), unit_cleanup_pending=True)
                 try:
                     receipt["result"] = self.collect_result(receipt)
                 except (OSError, ValueError):
@@ -535,6 +548,14 @@ class Worker:
                                    reason="invalid_result_artifacts")
                 self.persist(receipt)
                 self.active = None
+                # Keep successful transient units until their Result and
+                # immutable artifacts are durable. Only then permit unit GC.
+                try:
+                    run(["systemctl", "stop", receipt["unit"]])
+                    receipt["unit_cleanup_pending"] = False
+                    self.persist(receipt)
+                except (ValueError, subprocess.TimeoutExpired):
+                    pass  # Safe to retry on daemon boot; completion is durable.
 
     def collect_result(self, receipt):
         output = self.state / "jobs" / self.key({k: receipt[k] for k in BINDING}) / "output"
