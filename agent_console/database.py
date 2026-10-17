@@ -386,12 +386,21 @@ class Database:
         actor: str = "system",
         surface: str = "CLI",
         details: dict[str, Any] | None = None,
+        session_id: str | None = None,
     ) -> None:
         with self.connect() as conn:
+            metadata = dict(details or {})
+            if action.startswith('session.'):
+                row = conn.execute('SELECT id FROM sessions WHERE id=? OR tmux_name=?',
+                                   (target, target)).fetchone()
+                identity = session_id or (row['id'] if row else None)
+                metadata.pop('session_id', None)
+                if identity:
+                    metadata['session_id'] = identity
             conn.execute(
                 "INSERT INTO audit_events(created_at, actor, surface, action, target, outcome, details_json) "
                 "VALUES(?, ?, ?, ?, ?, ?, ?)",
-                (utc_now(), actor, surface, action, target, outcome, json.dumps(details or {})),
+                (utc_now(), actor, surface, action, target, outcome, json.dumps(metadata)),
             )
 
     def prune_audit_events(self, retention_days: int = 395) -> int:

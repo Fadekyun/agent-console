@@ -1,3 +1,7 @@
+## 2026-10-17: durable session audit history (#198)
+
+- Completed: stable lifecycle audit attribution with conservative legacy rename intervals and unchanged pagination.
+
 ## 2026-10-17: native workflow permission recording (#193)
 
 - Completed: record permissions from effective automatic-review/native sandbox policy, including commands without an explicit sandbox flag; preserve read-only workflows.

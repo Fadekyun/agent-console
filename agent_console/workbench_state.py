@@ -178,7 +178,7 @@ class WorkbenchState:
         # Reading operator history must also work for imported/unmanaged and
         # integration records. The interactive-only gate belongs on mutations.
         with self.manager.database.connect() as db:
-            session=db.execute('SELECT id,tmux_name FROM sessions WHERE id=? OR tmux_name=?',(identity,identity)).fetchone()
+            session=db.execute('SELECT id,tmux_name,created_at FROM sessions WHERE id=? OR tmux_name=?',(identity,identity)).fetchone()
         if session is None:raise KeyError('session not found')
         svc=WorkflowService(self.manager);store=svc.store;graph=svc.graph()
         with store.connect() as db:
@@ -197,7 +197,8 @@ class WorkbenchState:
             rows=db.execute('SELECT * FROM workflow_events WHERE sequence<? AND ('+selection+') ORDER BY sequence DESC LIMIT 50',(before,*parameters)).fetchall()
             events=[{'sequence':r['sequence'],'at':r['at'],'action':r['kind'],'actor':r['actor'],'target':r['target']} for r in rows]
         with self.manager.database.connect() as db:
-            audit=[dict(r) for r in db.execute('SELECT id,created_at AS at,action,actor,outcome FROM audit_events WHERE id<? AND target IN (?,?) ORDER BY id DESC LIMIT 50',(audit_before,session['id'],session['tmux_name']))]
+            from .session_audit import session_audit
+            audit = session_audit(db, session, before=audit_before)
         return {'events':events,'audit':audit,'before':events[-1]['sequence'] if events else before,'audit_before':audit[-1]['id'] if audit else audit_before,'notice':'Workflow events include this connected work. Session audit entries are attributed to this session identity/name.'}
 
 

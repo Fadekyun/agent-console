@@ -2327,7 +2327,8 @@ class SessionManager:
                 original.unlink()
             except OSError:
                 log.warning("session=%s old rename metadata could not be removed", new_name)
-        self.database.audit("session.renamed", name, "success", details={"new_name": new_name})
+        self.database.audit("session.renamed", name, "success", details={"new_name": new_name},
+                            session_id=session['id'])
         return self.inspect(new_name)
 
     @serialized_session_mutation
