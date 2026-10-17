@@ -327,3 +327,51 @@ def maintenance_report(telemetry: Mapping) -> dict:
     if isinstance(error, str) and error in {'disabled', 'telemetry_unavailable', '', *HOST_GATE_REASONS}:
         result['error'] = error
     return result
+
+
+class LaptopSampler:
+    """Central observation history, distinct from worker self-reported readiness."""
+    def __init__(self, worker):
+        self.worker = worker
+        self.healthy_since = None
+        self.last_sample = None
+        self.boot_id = None
+
+    def sample(self, *, enabled, operator_hold, now):
+        from .compute_policy import admission, PROFILES, HEALTHY_WINDOW_SECONDS, laptop_schedule_reason
+        value = {'physical_host': 'agc-laptop', 'guest_id': 'AGC-Worker',
+                 'enabled': enabled, 'operator_hold': operator_hold, 'online': False}
+        if not enabled or laptop_schedule_reason(now) == 'schedule_closed':
+            value['readiness'] = 'schedule_closed' if enabled else 'worker_disabled'
+            self.healthy_since = self.last_sample = None
+            return value
+        try:
+            response = self.worker.call('status')
+            raw = response['telemetry']
+            if (response.get('worker_id') != 'agc-laptop' or not isinstance(response.get('boot_id'), str)
+                    or not response['boot_id'] or not isinstance(raw, dict)
+                    or not -5 <= now - _number(raw['sampled_at']) <= 30):
+                raise ProbeError('invalid_worker_sample')
+            allowed = ('host_cpu_count', 'host_memory_total_bytes', 'host_available_bytes',
+                       'guest_available_bytes', 'guest_disk_free_bytes', 'host_disk_total_bytes',
+                       'host_disk_free_bytes', 'worker_memory_bytes', 'worker_disk_used_bytes',
+                       'host_cpu_percent', 'host_commit_percent', 'on_ac', 'policy_verified')
+            value.update({key: raw.get(key) for key in allowed})
+            value['worker_ready'] = isinstance(response.get('admission'), dict) and response['admission'].get('ready') is True
+            value.update(online=True, sampled_at=now, capabilities=response.get('capabilities'),
+                         healthy_since=now - HEALTHY_WINDOW_SECONDS)
+            candidates = [profile for profile in PROFILES.values()
+                          if profile.physical_host == 'agc-laptop'
+                          and isinstance(value['capabilities'], list) and profile.name in value['capabilities']]
+            smallest = min(candidates, key=lambda profile: (profile.memory_max_bytes, profile.cpu_cores), default=None)
+            reason = admission(smallest, value, (), now) if smallest else 'adapter_unavailable'
+            if (reason or self.boot_id != response['boot_id'] or self.last_sample is None
+                    or now - self.last_sample > 30 or now < self.last_sample):
+                self.healthy_since = None if reason else now
+            self.boot_id, self.last_sample = response['boot_id'], now
+            value['healthy_since'] = self.healthy_since if self.healthy_since is not None else now
+            value['readiness'] = reason or ('ready' if now - value['healthy_since'] >= HEALTHY_WINDOW_SECONDS else 'warming_up')
+        except (OSError, ValueError, TypeError, KeyError):
+            self.healthy_since = self.last_sample = None
+            value['online'] = False
+        return value

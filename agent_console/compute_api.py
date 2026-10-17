@@ -16,11 +16,16 @@ class ComputeRequest(BaseModel):
 
 
 class JobRequest(ComputeRequest):
-    kind: Literal['maintenance.report', 'yuyutei.collect', 'yuyutei.parse', 'agc.build', 'agc.test']
+    kind: Literal['maintenance.report', 'yuyutei.collect', 'yuyutei.parse', 'agc.build', 'agc.test', 'tv.build', 'points.weekly', 'points.player_events', 'bushi.run', 'bushi.emergency']
     execution_target: Literal['n100', 'agc-laptop']
     source_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
     input_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
     request_key: str = Field(min_length=1, max_length=100)
+    manifest: dict | None = None
+    dependencies: list[str] = Field(default_factory=list, max_length=20)
+    priority: int = Field(default=0, ge=0, le=100)
+    not_before: float | None = Field(default=None, ge=0)
+    deadline: float | None = Field(default=None, ge=0)
 
 
 class HoldRequest(ComputeRequest):
@@ -28,6 +33,11 @@ class HoldRequest(ComputeRequest):
 
 
 class ReconcileRequest(ComputeRequest):
+    evidence: str = Field(min_length=1, max_length=4000)
+
+
+class PublicationReconcile(ComputeRequest):
+    outcome: Literal['completed', 'abandoned']
     evidence: str = Field(min_length=1, max_length=4000)
 
 
@@ -91,7 +101,7 @@ def compute_routes(engine_callable, require_identity, *, permitted_origins=froze
 
     @router.post('/api/compute/jobs')
     def enqueue(payload: JobRequest, auth=Depends(operator)):
-        return engine_callable().queue.enqueue(**payload.model_dump(), actor=auth.actor)
+        return engine_callable().queue.enqueue(**payload.model_dump(exclude_unset=True), actor=auth.actor)
 
     @router.post('/api/compute/hold')
     def hold(payload: HoldRequest, auth=Depends(operator)):
@@ -110,5 +120,16 @@ def compute_routes(engine_callable, require_identity, *, permitted_origins=froze
         return engine_callable().queue.reconcile_terminated(
             attempt_id, evidence=payload.evidence, actor=auth.actor,
         )
+
+    @router.get('/api/compute/publications')
+    def publications():
+        from .compute_publication import ComputePublications
+        return ComputePublications(engine_callable().queue).status()
+
+    @router.post('/api/compute/publications/{receipt_id}/reconcile')
+    def reconcile_publication(receipt_id: str, payload: PublicationReconcile, auth=Depends(operator)):
+        from .compute_publication import ComputePublications
+        return ComputePublications(engine_callable().queue).reconcile(
+            receipt_id, **payload.model_dump(), actor=auth.actor)
 
     return router
