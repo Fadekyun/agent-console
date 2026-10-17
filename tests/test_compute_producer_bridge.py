@@ -44,7 +44,8 @@ class ProducerBridgeTests(unittest.TestCase):
         with patch.object(bridge, 'http_call', return_value=response) as call:
             self.assertEqual(bridge.bridge(self.request(), config), response)
             endpoint, request, headers = call.call_args.args
-            self.assertEqual(endpoint, 'http://127.0.0.1:3210')
+            self.assertEqual(endpoint, 'http://192.168.1.115:3210')
+            self.assertEqual(call.call_args.kwargs, {'local_bridge': True})
             self.assertEqual(headers['Authorization'], 'Bearer ' + 't'*40)
             self.assertEqual(headers['X-Compute-Producer'], 'ct106-points')
             self.assertEqual(set(headers), {'Authorization', 'X-Compute-Producer', 'Content-Type', 'Accept'})
@@ -52,6 +53,34 @@ class ProducerBridgeTests(unittest.TestCase):
                 bridge.bridge(self.request(), {**config, 'endpoint': 'https://evil.test'})
         with self.assertRaises(ValueError):
             bridge.credentials({'producer': 'p', 'token': 'a'*32 + '\r\nX: injected'})
+
+    def test_local_bridge_requires_fresh_kernel_loopback_route_and_bound_socket(self):
+        route = {'type': 'local', 'dst': '192.168.1.115', 'from': '127.0.0.1',
+                 'dev': 'lo', 'table': 'local'}
+        result = Mock(returncode=0, stdout=json.dumps([route]).encode())
+        connection = Mock()
+        connection.sock.getsockname.return_value = ('127.0.0.1', 40000)
+        connection.sock.getpeername.return_value = ('192.168.1.115', 3210)
+        with patch.object(bridge.subprocess, 'run', return_value=result) as probe, \
+                patch.object(bridge.http.client, 'HTTPConnection', return_value=connection) as factory:
+            self.assertIs(bridge.local_bridge_connection(), connection)
+            factory.assert_called_once_with('192.168.1.115', 3210, timeout=bridge.SECONDS,
+                                            source_address=('127.0.0.1', 0))
+            self.assertEqual(probe.call_args.args[0],
+                ['/usr/bin/ip', '-j', 'route', 'get', '192.168.1.115', 'from', '127.0.0.1'])
+            self.assertEqual(probe.call_args.kwargs['timeout'], 2)
+            for changes in ({'dev': 'eth0'}, {'type': 'unicast'}, {'dst': '192.168.1.116'},
+                            {'from': '192.168.1.115'}, {'table': 'main'}):
+                result.stdout = json.dumps([{**route, **changes}]).encode()
+                with self.assertRaises(bridge.TransportError):
+                    bridge.local_bridge_connection()
+            result.stdout = json.dumps([route]).encode()
+            connection.sock.getsockname.return_value = ('192.168.1.115', 40000)
+            with self.assertRaises(bridge.TransportError):
+                bridge.local_bridge_connection()
+            connection.close.assert_called_once()
+            # Every invocation re-reads kernel routing, even rejected sockets.
+            self.assertEqual(probe.call_count, 7)
 
     def test_http_preserves_status_and_never_follows_redirect(self):
         connection = Mock()

@@ -178,8 +178,12 @@ Request: `{"version":1,"method":"GET","path":"/api/compute/producers/jobs/JOB"}`
 POST requests add an object `body`. Response: `{"status":200,"body":{...}}`.
 Only the producer upload, enqueue, inspect, fetch, publication begin/inspect/finish
 and consume routes are accepted. Owner hold/retry/reconcile routes are inaccessible.
-The fixed destination is `http://127.0.0.1:3210`; authenticated SSH protects the
-network leg. No proxy environment, redirects, forwarded identity or managed-agent
+The fixed destination is CT115's own `http://192.168.1.115:3210` listener,
+with a mandatory `127.0.0.1` source bind. Before each connection, the bridge requires
+the kernel route to be type `local`, device `lo`, table `local`, with the exact
+source/destination. It verifies connected socket endpoints before sending headers.
+Any failed check refuses the request. This works with the existing LAN-address-only
+listener while remaining entirely on-host; authenticated SSH protects the network leg. No proxy environment, redirects, forwarded identity or managed-agent
 headers are used. API producer policies must separately allow `127.0.0.1/32` and
 retain workload, request-prefix, production-write and publication-target limits.
 

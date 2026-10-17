@@ -26,6 +26,8 @@ import time
 from urllib.parse import urlsplit
 
 PREFIX = '/api/compute/producers'
+LOCAL_BRIDGE_HOST = '192.168.1.115'
+LOCAL_BRIDGE_ORIGIN = 'http://' + LOCAL_BRIDGE_HOST + ':3210'
 MAX_REQUEST = 512 * 1024
 MAX_RESPONSE = 1024 * 1024
 CHUNK = 256 * 1024
@@ -118,12 +120,45 @@ def credentials(config):
             'Content-Type': 'application/json', 'Accept': 'application/json'}
 
 
-def http_call(endpoint, request, headers):
+def local_bridge_connection():
+    # Console currently listens on its own LAN address only. Linux routes this
+    # assigned destination through lo; binding the source to loopback preserves
+    # the API's real socket-peer gate. Never send a credential off this host.
+    result = subprocess.run(['/usr/bin/ip', '-j', 'route', 'get', LOCAL_BRIDGE_HOST,
+                             'from', '127.0.0.1'], stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, timeout=2, check=False,
+        env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'})
+    if result.returncode or len(result.stdout) > 4096:
+        raise TransportError('local producer route unavailable')
+    routes = json.loads(result.stdout)
+    if (not isinstance(routes, list) or len(routes) != 1 or not isinstance(routes[0], dict)
+            or any(routes[0].get(key) != value for key, value in {
+                'type': 'local', 'dst': LOCAL_BRIDGE_HOST, 'from': '127.0.0.1',
+                'dev': 'lo', 'table': 'local'}.items())):
+        raise TransportError('producer destination is not local')
+    connection = http.client.HTTPConnection(LOCAL_BRIDGE_HOST, 3210, timeout=SECONDS,
+                                            source_address=('127.0.0.1', 0))
+    try:
+        connection.connect()
+        if (connection.sock.getsockname()[0] != '127.0.0.1'
+                or connection.sock.getpeername() != (LOCAL_BRIDGE_HOST, 3210)):
+            raise TransportError('producer socket identity mismatch')
+        return connection
+    except BaseException:
+        connection.close()
+        raise
+
+
+def http_call(endpoint, request, headers, *, local_bridge=False):
     parsed = urlsplit(endpoint)
     if (parsed.username or parsed.password or parsed.query or parsed.fragment
             or parsed.path not in {'', '/'} or not parsed.hostname):
         raise ValueError('endpoint must be an origin')
-    if parsed.scheme == 'https':
+    if local_bridge:
+        if endpoint != LOCAL_BRIDGE_ORIGIN:
+            raise ValueError('fixed local bridge destination required')
+        connection = local_bridge_connection()
+    elif parsed.scheme == 'https':
         connection = http.client.HTTPSConnection(parsed.hostname, parsed.port or 443,
                                                 timeout=SECONDS, context=ssl.create_default_context())
     elif parsed.scheme == 'http' and ipaddress.ip_address(parsed.hostname).is_loopback:
@@ -160,7 +195,7 @@ def bridge(request, config):
     validate_request(request)
     if set(config) != {'producer', 'token'}:
         raise ValueError('invalid bridge configuration')
-    return http_call('http://127.0.0.1:3210', request, credentials(config))
+    return http_call(LOCAL_BRIDGE_ORIGIN, request, credentials(config), local_bridge=True)
 
 
 def bounded_process(command, data):
@@ -356,7 +391,7 @@ def main():
             raise TransportError('producer response exceeds bound')
         sys.stdout.buffer.write(encoded + b'\n')
         return 0
-    except (OSError, ValueError, TypeError, KeyError, http.client.HTTPException):
+    except (OSError, ValueError, TypeError, KeyError, http.client.HTTPException, subprocess.TimeoutExpired):
         # No credentials, caller content, paths, original command or exceptions.
         sys.stdout.write('{"status":502,"body":{"detail":"Producer bridge request unavailable; reconcile before retry"}}\n')
         return 0
