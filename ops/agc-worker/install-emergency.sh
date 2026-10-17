@@ -69,6 +69,9 @@ for name,shell in [('bushi-emergency-job','/usr/sbin/nologin'),('bushi-compute',
 PY
 test "$(id -u bushi-emergency-job)" != 0
 test "$(id -u bushi-compute)" != 0
+# An impossible password permits public-key account checks; Match policy below
+# still disables password/interactive authentication for this dedicated user.
+usermod --password '*' bushi-compute
 # Preserve unmanaged accounts: reject any privileged supplementary groups.
 python3 - <<'PY'
 import grp,pwd
@@ -202,7 +205,15 @@ printf '%s\n' "$effective" | python3 -c 'import fnmatch,sys; lines=sys.stdin.rea
 systemctl daemon-reload
 systemctl start "$mount_unit" bushi-emergency-jobs.slice
 systemctl enable --now bushi-emergency.service
-systemctl reload ssh
+if systemctl is-active --quiet ssh.socket; then
+  test "$(systemctl show ssh.service -p KillMode --value)" = process
+  # SIGHUP cannot safely reuse systemd's inherited listening descriptors here.
+  # KillMode=process retains established connection children across the restart.
+  systemctl restart ssh.service
+else
+  systemctl reload ssh.service
+fi
+systemctl is-active --quiet ssh.service
 trap - ERR
 rm -f -- "$ssh_backup"
 printf '%s\n' '{"worker_id":"bushi-emergency","state":"installed_held_disabled","policy":"/etc/bushi-emergency/policy.json","requires":"root native qualification and global organizer fence before enablement"}'
