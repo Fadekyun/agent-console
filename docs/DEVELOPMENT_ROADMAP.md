@@ -1,3 +1,8 @@
+## 2026-10-17: native workflow permission recording (#193)
+
+- Completed: record permissions from effective automatic-review/native sandbox policy, including commands without an explicit sandbox flag; preserve read-only workflows.
+- Completed: align stored session permissions with native launch receipts and the UI version with package 0.28.28; verify isolated workflow permission cases and version checks.
+
 ## Session inspection and ancestor-control corrections — 2026-10-10 (#186)
 
 - [x] Allow bounded inspection of all recorded Console sessions, including cross-project peers by name or durable ID; keep relative selectors tree-scoped and private integration content redacted.

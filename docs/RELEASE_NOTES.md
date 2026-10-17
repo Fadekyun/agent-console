@@ -1,3 +1,9 @@
+# 0.28.28 — 2026-10-17 (#193)
+
+- Fix writable native automatic-review workflow launches when the prepared command omits `--sandbox`; record effective workspace-write permissions without changing launch arguments.
+- Keep stored session permissions aligned with launch receipts for Plan and read actions. Match the UI brand and desktop/mobile module cache versions to 0.28.28; preserve the public provider arguments and explicit no-sandbox regression.
+- Configuration/migration: none. Verification: 10 focused tests and 7 subtests passed through `scripts/test-isolated.py`: native permission units, writable/read-only and forced-no-sandbox workflow regressions, stored read metadata, and all three version checks. Fake agents and private state only; no real model requests. Rollback: select the previous immutable release; no schema change.
+
 ## 0.28.27 — unreleased, 2026-10-10 (#186)
 
 - Impact: managed agents can inspect all recorded Console sessions by name or durable ID across projects and trees. Writable non-Plan children can update attention, interrupt, restart, and stop ancestors as well as descendants within the authorized task. Sibling/unrelated mutations, read-only/Plan mutations of others, private integration content, and delegation inheritance remain restricted.
