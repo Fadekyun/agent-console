@@ -67,6 +67,7 @@ test('late child creation does not close another parent draft or change its rout
 
 test('rename during polling follows the same stable session and preserves its terminal draft',async({page})=>{
   const {sessions}=await fixture(page);await page.goto('/work#session/session-one');
+  await expect(page.locator('#session-title')).toHaveText('session-one');
   if(await page.locator('#terminal-panel').isHidden())await page.locator('#open-terminal').click();
   const terminal=page.frameLocator('iframe:not([hidden])');await terminal.locator('#toggle-composer').click();await terminal.locator('#composer').fill('Draft before automatic rename');
   sessions[0].tmux_name='renamed-session';
