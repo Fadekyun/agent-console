@@ -10,9 +10,9 @@ SPECS={
  'yuyutei':('192.168.1.71','yuyutei:', ['yuyutei.collect','yuyutei.parse'], ['yuyutei-archive','yuyutei-prices'],50,False,[]),
  'site':('192.168.1.71','agc:', ['agc.build','agc.test'], ['agc-release'],40,False,[]),
  'points':('192.168.1.71','points:', ['points.weekly','points.player_events'], ['points:weekly','points:player_events'],20,False,[]),
- 'bushi':('192.168.1.69','bushi:', ['bushi.run'], ['bushi-snapshots','bushi-applications'],90,True,['agc:bushi-series-apply','agc:bushi-series-modify']),
+ 'bushi':('192.168.1.67','bushi:', ['bushi.run'], ['bushi-snapshots','bushi-applications'],90,True,['agc:bushi-series-apply','agc:bushi-series-modify']),
  'tournament':('192.168.1.71','tournament:', ['bushi.run','bushi.emergency'], ['agc-tournament-state'],100,True,['agc:paid-participation']),
- 'bushi-mcp':('192.168.1.69','bushi-mcp:', ['bushi.run'], ['bushi-applications'],90,True,['agc:bushi-series-apply','agc:bushi-series-modify']),
+ 'bushi-mcp':('192.168.1.67','bushi-mcp:', ['bushi.run'], ['bushi-applications'],90,True,['agc:bushi-series-apply','agc:bushi-series-modify']),
  'tv':('127.0.0.1','tv:', ['tv.build'], ['tv-release'],40,False,[]),
 }
 
@@ -40,7 +40,7 @@ def protected(path):
 
 def client(name,helper):
  source=SPECS[name][0]
- expected='agent-console-staging' if source=='127.0.0.1' else 'bushi-automation' if source.endswith('.69') else 'codex-remote'
+ expected='agent-console-staging' if name=='tv' else 'bushi-automation' if name in ('bushi','bushi-mcp') else 'codex-remote'
  if socket.gethostname()!=expected:raise ValueError('wrong client host')
  group=0 if name=='tv' else grp.getgrnam('bushi' if name in ('bushi','bushi-mcp') else 'fadekyun').gr_gid
  directory('/etc/agc-compute');directory('/etc/agc-compute/producers')

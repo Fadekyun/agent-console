@@ -488,3 +488,5 @@ Verify recovery after rename, stopped-terminal recreation, concurrent resume, re
 ### 0.29.1 — issue #187 — 2026-10-10
 
 Recovery refreshes the Console bootstrap/interpreter when a historic release runtime has been retired, while preserving the native command, snapshot, UUID and permission settings. Configuration/migration: none. Verify recovery with a missing original Python path. Rollback: select the preceding release; keep native histories and immutable-ID bindings.
+
+- 2026-10-17 (#203): verified CT102 producer addresses and native-qualified worker hold release are installed; central owner activation and domain acceptance remain required.
