@@ -700,7 +700,8 @@ test('short desktop session keeps terminal and details within the viewport', asy
 test('embedded terminal delegates full screen to its containing view', async ({page}) => {
   await fixture(page);
   await page.goto('/work#session/session-one');
-  if(await page.locator('#terminal-panel').isHidden())await page.locator('#open-terminal').click();
+  // Wait for session rendering before deciding whether mobile needs an explicit open.
+  await ensureTerminal(page);
   const frame=page.frameLocator('iframe:not([hidden])');
   await expect(frame.locator('#connection')).toHaveText('Connected');
   await openMore(frame);
