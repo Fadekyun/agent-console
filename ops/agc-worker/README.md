@@ -235,3 +235,18 @@ forbidden. General builds receive no organizer credential. A Bushi domain
 `write_unknown` result becomes an unknown worker receipt even if its process
 exited successfully; artifacts remain available for reconciliation and cannot
 be acknowledged for automatic cleanup.
+
+### Pinned build roots
+
+`install-toolchains.sh` is an operator setup script for the held worker. It pins
+Debian 12/13 AMD64 OCI manifests, verifies the Node archives and the pnpm package,
+and creates separate roots matching the TV/site ABI. The source image and package
+inventory stay in each root's receipt. It creates only the worker's numeric Linux
+identity; no staff account, home, key or browser data is copied.
+
+The setup runs with 2 GiB RAM and one CPU, under the worker jobs slice. A failed
+installation retains its `.debian12-setup` or `.debian13-setup` directory for
+inspection and refuses an automatic restart. Reconcile that incomplete directory
+before an explicit retry; never remove an installed root or its receipt to retry.
+`check-installation.sh` reads the guest limits and cgroup configuration. Live
+workload/interruption qualification is still required before admission.

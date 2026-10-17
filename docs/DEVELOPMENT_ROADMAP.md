@@ -1,3 +1,11 @@
+## AGC laptop workload migration — 2026-10-17 (#203)
+
+- [x] Add scoped producers, immutable transfers, dependencies/deadlines and central publication fencing to the existing durable queue.
+- [x] Implement independent Windows account/WSL provisioning, constrained headless runtime, staff-priority admission/throttling and durable lease receipts.
+- [x] Reserve the Bushi organizer account across physical hosts; leave emergency execution disabled pending qualification.
+- [ ] Qualify the installed worker, pinned toolchains, interruption/resource behavior and all five workload adapters.
+- [ ] Cut over each old heavy timer after accepted artifacts and publisher rollback; preserve central databases, payment APIs and serving processes.
+
 ## Protected credentials and clear setup documentation — 2026-10-10 (#189)
 
 - [x] Keep the Environment key/value form and scope controls; route five protected names into a separate-user credential broker.
