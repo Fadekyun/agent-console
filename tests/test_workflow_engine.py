@@ -161,6 +161,7 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
             manifest=json.loads((self.settings.state_dir/'workflow-attempts'/attempt['id']/'launch.json').read_text())
             self.assertEqual(manifest['argv'][manifest['argv'].index('--sandbox')+1],'read-only')
             self.assertEqual(receipt['permission_mode'],'read-only')
+            self.assertEqual(self.manager.inspect(attempt['name'])['permission_mode'],'read-only')
 
     def test_changed_role_requires_review_before_dispatch(self):
         step=self.propose();self.accept(step)
@@ -266,7 +267,13 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
                     else:
                         self.assertIn('--approve-for-me',argv)
                         self.assertNotIn('--ask-for-approval',argv)
-                        self.assertEqual(argv[argv.index('--sandbox')+1],'workspace-write')
+                        self.assertNotIn('--sandbox',argv)
+                    from agent_console.workbench_launch import LaunchCatalog
+                    permission = 'read-only' if action == 'read' else 'workspace-write'
+                    attempt = done['attempts'][0]
+                    receipt = LaunchCatalog(self.manager).configuration(attempt['session_id'])['latest']
+                    self.assertEqual(receipt['permission_mode'],permission)
+                    self.assertEqual(self.manager.inspect(attempt['name'])['permission_mode'],permission)
 
     def test_read_action_uses_read_only_sandbox_even_for_general_role(self):
         step=self.propose(action='read');self.accept(step);done=self.finish(step['id'])
@@ -275,6 +282,36 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
         self.assertEqual(argv[argv.index('--sandbox')+1],'read-only')
         self.assertIn('The supervising runner owns result publication',' '.join(argv))
         self.assertNotIn('To signal completion:',' '.join(argv))
+
+    def test_unsupported_native_permissions_fail_before_task_startup(self):
+        from agent_console.providers import CodexAdapter
+        self.engine.configure(self.root['id'],policy={**DEFAULT_POLICY,'max_total':5},expected_version=0,actor='test')
+        original = CodexAdapter.workflow_argv
+        for policy,reason in [('missing','does not declare'),('unknown','ambiguous'),
+                              ('conflicting','conflicts'),('broader','Native permissions changed')]:
+            with self.subTest(policy=policy):
+                def unsupported_argv(adapter, *args, **kwargs):
+                    argv = original(adapter, *args, **kwargs)
+                    position = argv.index('--sandbox')
+                    if policy == 'missing':
+                        del argv[position:position + 2]
+                    elif policy == 'unknown':
+                        argv[position + 1] = 'unsupported-mode'
+                    elif policy == 'conflicting':
+                        argv.insert(1,'--approve-for-me')
+                    else:
+                        argv[position + 1] = 'danger-full-access'
+                    return argv
+
+                step = self.propose(key='native-' + policy, action='read')
+                self.accept(step)
+                with patch.object(CodexAdapter,'workflow_argv',unsupported_argv):
+                    done = self.finish(step['id'])
+                attempt = done['attempts'][0]
+                self.assertEqual(attempt['state'],'failed',attempt)
+                self.assertIn(reason,attempt['error'])
+                self.assertFalse(self.calls.exists())
+                self.assertFalse(self.manager.tmux.exists(attempt['name']))
 
     def test_lost_prepared_terminal_cannot_silently_retry(self):
         step=self.propose();self.accept(step);prepare=self.engine._prepare
