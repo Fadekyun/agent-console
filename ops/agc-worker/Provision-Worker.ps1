@@ -9,6 +9,7 @@ param(
     [string]$PublicKeyFile,
     [string]$RootfsFile,
     [ValidatePattern('^[a-f0-9]{64}$')][string]$RootfsSha256,
+    [ValidatePattern('^S-1-5-21-[0-9-]+$')][string]$RecoverAccountSid,
     [string]$SourceDirectory = $PSScriptRoot
 )
 $ErrorActionPreference = 'Stop'
@@ -20,7 +21,7 @@ $Control = Join-Path $Base 'control'
 $Code = Join-Path $Base 'code'
 $Data = Join-Path $Base 'data'
 $Marker = Join-Path $Control 'account.json'
-$CredentialFile = Join-Path $Control 'credential.clixml'
+$CredentialFile = Join-Path $Control 'credential.dpapi'
 $TaskName = 'AGC-Worker-Background'
 $BootstrapTask = 'AGC-Worker-Bootstrap'
 
@@ -44,6 +45,28 @@ function Protect-Directory([string]$Directory, [string]$WorkerAccess) {
         $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($script:WorkerSid,$WorkerAccess,'ContainerInherit,ObjectInherit','None','Allow')))
     }
     Set-Acl -LiteralPath $Directory -AclObject $acl
+}
+function Save-TaskCredential([Security.SecureString]$Password) {
+    Add-Type -AssemblyName System.Security
+    $temporary = [pscredential]::new("$env:COMPUTERNAME\$WorkerName",$Password)
+    $bytes = [Text.Encoding]::UTF8.GetBytes($temporary.GetNetworkCredential().Password)
+    try {
+        $encrypted = [Security.Cryptography.ProtectedData]::Protect($bytes,$null,[Security.Cryptography.DataProtectionScope]::LocalMachine)
+        [IO.File]::WriteAllBytes($CredentialFile,$encrypted)
+    } finally { [Array]::Clear($bytes,0,$bytes.Length) }
+}
+function Read-TaskCredential {
+    Add-Type -AssemblyName System.Security
+    $bytes = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($CredentialFile),$null,[Security.Cryptography.DataProtectionScope]::LocalMachine)
+    try {
+        $password = ConvertTo-SecureString ([Text.Encoding]::UTF8.GetString($bytes)) -AsPlainText -Force
+        return [pscredential]::new("$env:COMPUTERNAME\$WorkerName",$password)
+    } finally { [Array]::Clear($bytes,0,$bytes.Length) }
+}
+function New-TaskPassword {
+    $random = New-Object byte[] 48
+    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($random)
+    return (ConvertTo-SecureString ('Agc!7a' + [Convert]::ToBase64String($random)) -AsPlainText -Force)
 }
 
 if ($Phase -eq 'Disable') {
@@ -72,18 +95,32 @@ if ($Phase -eq 'Account') {
     $publicKey = (Get-Content -LiteralPath $PublicKeyFile -Raw).Trim()
     if ($publicKey -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\r\n]+)?$') { throw 'Expected one dedicated ed25519 public key' }
     $existing = Get-LocalUser -Name $WorkerName -ErrorAction SilentlyContinue
-    if ($existing -and -not (Test-Path $Marker)) { throw 'Existing unmanaged agc-worker account: preserve it for manual inspection' }
+    if ($existing -and -not (Test-Path $Marker)) {
+        if (-not $RecoverAccountSid -or $existing.SID.Value -ne $RecoverAccountSid -or $existing.Enabled -or $existing.Description -ne 'Isolated headless AGC compute worker') {
+            throw 'Existing unmanaged agc-worker account: preserve it for manual inspection'
+        }
+        $script:WorkerSid = $existing.SID
+        Protect-Directory $Base 'ReadAndExecute'
+        Protect-Directory $Control ''
+        Save-Json $Marker @{version=1;sid=$existing.SID.Value;owner='Console #203';recovered_disabled_partial=$true;created_at=[DateTimeOffset]::UtcNow.ToString('o')}
+    }
     if (-not $existing) {
-        $random = New-Object byte[] 48
-        [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($random)
-        $password = ConvertTo-SecureString ('Agc!7a' + [Convert]::ToBase64String($random)) -AsPlainText -Force
+        $password = New-TaskPassword
         $existing = New-LocalUser -Name $WorkerName -Password $password -PasswordNeverExpires -UserMayNotChangePassword -Disabled -Description 'Isolated headless AGC compute worker'
         $script:WorkerSid = $existing.SID
         Protect-Directory $Base 'ReadAndExecute'
         Protect-Directory $Control ''
-        $credential = [pscredential]::new("$env:COMPUTERNAME\$WorkerName",$password)
-        $credential | Export-Clixml -LiteralPath $CredentialFile
         Save-Json $Marker @{version=1;sid=$existing.SID.Value;owner='Console #203';created_at=[DateTimeOffset]::UtcNow.ToString('o')}
+        Save-TaskCredential $password
+    }
+    if (-not (Test-Path $CredentialFile)) {
+        if ($existing.Enabled) { throw 'Missing task credential on enabled worker: refuse automatic password reset' }
+        $password = New-TaskPassword
+        Set-LocalUser -Name $WorkerName -Password $password
+        Save-TaskCredential $password
+        # The old user-DPAPI attempt may have left an incomplete encrypted file.
+        $partial = Join-Path $Control 'credential.clixml'
+        if (Test-Path $partial) { Remove-Item -LiteralPath $partial }
     }
     $script:WorkerSid = $existing.SID
     if ((Get-LocalGroupMember -SID 'S-1-5-32-544' | Where-Object {$_.SID -eq $WorkerSid})) { throw 'Worker must not be an administrator' }
@@ -200,7 +237,7 @@ Match User agc-worker
 }
 
 if (-not (Test-Path $Marker) -or -not (Test-Path $CredentialFile)) { throw 'Complete Account phase first' }
-$credential = Import-Clixml -LiteralPath $CredentialFile
+$credential = Read-TaskCredential
 $script:WorkerSid = (Get-LocalUser -Name $WorkerName).SID
 if ($Phase -eq 'Import') {
     if (-not $RootfsFile -or -not $RootfsSha256 -or -not (Test-Path $RootfsFile)) { throw 'Supply a separately verified Ubuntu 24.04 rootfs and SHA-256' }
