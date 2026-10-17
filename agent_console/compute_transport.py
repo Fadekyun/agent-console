@@ -130,7 +130,7 @@ class SSHWorker:
 class EmergencySSHWorker(SSHWorker):
     """Separate root-enrolled key and fixed command; never an SSH hop or shell."""
     actions = SSHWorker.actions | {'host-sample'}
-    host = '192.168.1.69'
+    host = '192.168.1.67'
     user = 'bushi-compute'
     rpc_command = 'agc-emergency rpc'
     config_variable = 'AGENT_CONSOLE_COMPUTE_EMERGENCY_CONFIG'

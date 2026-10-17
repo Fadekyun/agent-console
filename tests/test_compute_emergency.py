@@ -346,10 +346,10 @@ class EmergencyProducerTests(unittest.TestCase):
 
 class EmergencyTransportTests(unittest.TestCase):
     def test_fixed_endpoint_and_separate_sample_capability(self):
-        config={'enabled':True,'host':'192.168.1.69','user':'bushi-compute',
+        config={'enabled':True,'host':'192.168.1.67','user':'bushi-compute',
                 'identity_file':'/etc/emergency/key','known_hosts_file':'/etc/emergency/hosts'}
         worker=EmergencySSHWorker(config)
-        self.assertEqual(worker.command[-2:],('bushi-compute@192.168.1.69','agc-emergency rpc'))
+        self.assertEqual(worker.command[-2:],('bushi-compute@192.168.1.67','agc-emergency rpc'))
         with self.assertRaises(ValueError): EmergencySSHWorker({**config,'user':'root'})
         with self.assertRaises(ValueError): EmergencySSHWorker({**config,'host':'other'})
         self.assertNotIn('host-sample',SSHWorker.actions)
