@@ -34,7 +34,9 @@ for hostile code: only reviewed source and fixed adapters may execute here.
   enforcement is refused if it would activate finite limits on other users.
 * Wednesday–Sunday, AC only, Singapore time; Sunday 23:45 drain. No wake timer
   or power-on change. The startup task exits before WSL on Monday/Tuesday or
-  battery. Two minutes startup and three healthy minutes precede admission.
+  battery. A five-minute task retry during permitted days allows recovery after
+  AC reconnect or staff pressure; it never overlaps an existing watchdog. Two
+  minutes startup and three healthy minutes precede admission.
 * CPU over 85% or available memory below max(8 GiB, 25% of host RAM) reduces
   the jobs slice to one CPU equivalent. Sustained memory pressure requests a
   checkpoint immediately, stops the job at 60 seconds, and stops only the worker

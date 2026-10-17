@@ -28,6 +28,9 @@ function In-Window {
     return ([int]$now.DayOfWeek -notin @(1,2)) -and -not ([int]$now.DayOfWeek -eq 0 -and $now.TimeOfDay -ge [TimeSpan]::FromMinutes(1425))
 }
 if (-not (In-Window) -or -not [AgcHost]::OnAC()) { exit 0 }
+$initialMemory = [AgcHost]::ReadMemory()
+$initialDisk = [IO.DriveInfo]::new('C')
+if ($initialMemory.availablePhysical -lt ([Math]::Max(8GB,$initialMemory.totalPhysical * .25) + 1000000000) -or $initialDisk.AvailableFreeSpace -lt ($initialDisk.TotalSize * .15)) { exit 0 }
 if (-not (Test-Path (Join-Path $Data 'distro-ready.json'))) { throw 'Independent distro was not initialized' }
 $self = Get-Process -Id $PID
 $self.PriorityClass = 'BelowNormal'

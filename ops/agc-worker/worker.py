@@ -207,6 +207,7 @@ def extract_archive(archive, target, max_bytes=40_000_000_000):
             with source.extractfile(member) as src, dest.open("xb") as dst:
                 shutil.copyfileobj(src, dst, 1024 * 1024)
             os.chmod(dest, 0o750 if member.mode & 0o111 else 0o640)
+    return total
 
 
 def admission_holds(host, now=None, required_memory=0):
@@ -358,6 +359,9 @@ class Worker:
         job.mkdir(mode=0o755)
         work = job / "workspace"
         work.mkdir(mode=0o755)
+        disk_budget = max(0, int(self.host["disk_free_bytes"] - max(6_000_000_000, self.host["disk_total_bytes"] * 0.15) - 512 * 1024**2))
+        disk_budget = min(disk_budget, status["guest"]["disk_free_bytes"] - 1024**3,
+                          300_000_000_000 - self.host["worker_disk_used_bytes"])
         for key, dirname in (("source_artifact", "source"), ("inputs_artifact", "inputs")):
             artifact = manifest.get(key)
             if not artifact:
@@ -365,7 +369,7 @@ class Worker:
             obj = self.state / "objects" / artifact["sha256"]
             if not obj.is_file() or obj.stat().st_size != artifact["size"] or digest_file(obj) != artifact["sha256"]:
                 raise ValueError("artifact_missing_or_corrupt")
-            extract_archive(obj, work / dirname)
+            disk_budget -= extract_archive(obj, work / dirname, max_bytes=min(40_000_000_000, disk_budget))
         output = job / "output"
         output.mkdir(mode=0o750)
         for name in (".home", ".tmp", ".cache"):
@@ -393,8 +397,12 @@ class Worker:
         self.fences[binding["job_id"]] = binding["lease_generation"]
         atomic_json(self.state / "fences.json", self.fences)
         self.active = receipt
-        if time.monotonic() - preparation_started > 45:
-            receipt.update(state="interrupted", reason="preparation_timeout", termination_confirmed=True)
+        try:
+            self.host = read_json("/run/agc-worker/host.json")
+        except (OSError, ValueError):
+            self.host = {}
+        if time.monotonic() - preparation_started > 45 or admission_holds(self.host, required_memory=memory):
+            receipt.update(state="interrupted", reason="preparation_timeout_or_pressure", termination_confirmed=True)
             self.persist(receipt)
             self.active = None
             return receipt

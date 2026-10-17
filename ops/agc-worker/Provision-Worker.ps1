@@ -270,7 +270,11 @@ if ($Phase -eq 'Runtime') {
     # Startup trigger never wakes or powers on the laptop. Script exits before
     # starting WSL on Monday/Tuesday or battery. Existing power plans untouched.
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\ProgramData\AGC-Worker\code\Start-Worker.ps1'
-    $triggers = @((New-ScheduledTaskTrigger -AtStartup),(New-ScheduledTaskTrigger -Weekly -DaysOfWeek Wednesday,Thursday,Friday,Saturday,Sunday -At '00:01'))
+    $weekly = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Wednesday,Thursday,Friday,Saturday,Sunday -At '00:01'
+    # Retry after AC reconnect or transient staff pressure, without waking the
+    # machine. IgnoreNew keeps the already-running watchdog single-instance.
+    $weekly.Repetition = (New-ScheduledTaskTrigger -Once -At '00:01' -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 1)).Repetition
+    $triggers = @((New-ScheduledTaskTrigger -AtStartup),$weekly)
     $settings = New-ScheduledTaskSettingsSet -Hidden -ExecutionTimeLimit (New-TimeSpan -Days 6) -MultipleInstances IgnoreNew -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers -Settings $settings -User $credential.UserName -Password $credential.GetNetworkCredential().Password -RunLevel Limited -Force | Out-Null
     Start-ScheduledTask -TaskName $TaskName
