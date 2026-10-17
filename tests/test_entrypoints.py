@@ -327,6 +327,17 @@ exec /usr/bin/python3 -B "$@"
         self.assertIn('AGENT_CONSOLE_DB='+str(database),(self.config/'runtime.env').read_text())
         self.assertIn('runner_state='+str(self.state),(self.state/'runner.sh').read_text())
 
+    def test_installer_excludes_generated_browser_artifacts(self):
+        for name in ('test-results', 'playwright-report', 'blob-report'):
+            directory = self.source / name
+            directory.mkdir(exist_ok=True)
+            (directory / 'fixture.txt').write_text('generated browser output')
+        result = self.run_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        selected = (self.state / 'releases/current').resolve()
+        for name in ('test-results', 'playwright-report', 'blob-report'):
+            self.assertFalse((selected / name).exists())
+
     def test_real_installer_existing_database_without_current_stops_before_service(self):
         Database(self.state/'agent-console.sqlite3').migrate()
         result=self.run_install();self.assertNotEqual(result.returncode,0)

@@ -38,6 +38,7 @@ class DeploymentMode(enum.Enum):
 EXCLUDED_DIRS = frozenset({
     ".git", "__pycache__", ".venv", "venv", ".runtime", "node_modules",
     ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    "test-results", "playwright-report", "blob-report",
 })
 EXCLUDED_FILE_SUFFIXES = frozenset({".pyc", ".pyo", ".egg-info"})
 EXCLUDED_FILE_NAMES = frozenset({".env", ".env.local", ".env.production"})

@@ -21,6 +21,8 @@ Session details → **Tool calls** reads Codex/Codex Pro records from the sessio
 
 Use `python scripts/test-isolated.py` to run Python tests. It supplies fake harnesses, private state/config/tmux paths and a temporary log directory, preventing fixture traffic from entering operational logs. JSON diagnostics include process/release identity, optional session/request/operation context, exception class and a redacted bounded traceback.
 
+Python caches and local browser artifacts also use temporary directories. Set `AGCONSOLE_UI_OUTPUT_DIR` to choose where Playwright keeps failure artifacts. CI retains its existing `test-results` upload path inside the temporary runner workspace. Generated `test-results`, `playwright-report` and `blob-report` directories are excluded from release packaging.
+
 ## Workspace entrypoint
 
 `python scripts/compact-workspace-instructions.py /path/to/workspace` previews compaction. Add `--write` to atomically replace its top-level `AGENTS.md` after preserving the full original in a SHA-256-named operations archive. Existing guardrails, AGC policies and Console/GitHub policy blocks remain in the entrypoint; all project policy remains applicable through the required operations-manual link. The command is idempotent and refuses conflicting archives. Keep canonical N100 and CT115 copies scoped; do not mirror credentials or perform a broad skill sync.

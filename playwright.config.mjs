@@ -1,6 +1,11 @@
 import { defineConfig } from '@playwright/test';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 const fixturePort = Number(process.env.AGCONSOLE_UI_TEST_PORT || 4173);
+// Workers inherit the same per-run directory; fixture output stays out of source.
+const outputDir = process.env.AGCONSOLE_UI_OUTPUT_DIR ||=
+  (process.env.CI ? 'test-results' : mkdtempSync(join(tmpdir(), 'agent-console-ui-')));
 
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
   || (process.platform === 'linux' && existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
@@ -11,7 +16,7 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   reporter: [['line']],
-  outputDir: 'test-results',
+  outputDir,
   webServer: liveBaseURL ? undefined : {
     command: process.platform === 'win32' ? 'py -3 tests/ui_server.py' : 'python3 tests/ui_server.py',
     port: fixturePort,

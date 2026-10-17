@@ -45,5 +45,6 @@ with tempfile.TemporaryDirectory(prefix='agent-console-tests-') as directory:
     })
     (scratch / 'workspace').mkdir()
     args = sys.argv[1:] or ['-q', 'tests']
-    result = subprocess.run([sys.executable, '-m', 'pytest', *args], cwd=root, env=env)
+    result = subprocess.run([sys.executable, '-m', 'pytest', '-o',
+                             'cache_dir=' + str(scratch / 'pytest-cache'), *args], cwd=root, env=env)
     raise SystemExit(result.returncode)
