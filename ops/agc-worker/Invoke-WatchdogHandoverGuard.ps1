@@ -27,7 +27,7 @@ function Save-Guard {
     $result.observed_at=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()/1000.0
     $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($result | ConvertTo-Json -Depth 8 -Compress))
     [IO.File]::WriteAllBytes("$receipt.tmp",$bytes)
-    if([IO.File]::Exists($receipt)){[IO.File]::Replace("$receipt.tmp",$receipt,$null)}else{[IO.File]::Move("$receipt.tmp",$receipt)}
+    if([IO.File]::Exists($receipt)){[IO.File]::Replace("$receipt.tmp",$receipt,[System.Management.Automation.Language.NullString]::Value)}else{[IO.File]::Move("$receipt.tmp",$receipt)}
 }
 try {
     Save-Guard

@@ -147,9 +147,48 @@ is evidence, not an automatic runnable fallback. Keep central and local holds.
 Guard-task/source/journal cleanup is a separate reviewed operation after receipt
 capture; never unregister a running guard to tidy up.
 
-Verification performed in the source worktree: eight bounded Python fixtures
+Verification performed in the source worktree: nine bounded Python fixtures
 cover changed boot/missing hold, populated job cgroups, unknown source hash,
 clock rollback/deadline expiry, absence of reconnect/mutation, destructive action
 ordering, retained-client cleanup and host-sample finalization guards. Whitespace checks pass. Native
 PowerShell parsing, COM behavior, ACL preservation and handover are still
 operator acceptance checks; no laptop action was performed by these tests.
+
+
+## Native PowerShell 5.1 replacement correction
+
+The first native Prepare stopped before guard registration: PowerShell coerced
+`File.Replace`'s `$null` backup-path argument into an illegal empty path. Both
+journal and guard-receipt replacements now pass the explicit
+`System.Management.Automation.Language.NullString.Value`. This does not change
+the failure/replay policy or authorize recovery by overwriting a leftover temp.
+
+Before another Prepare, root verifies the exact replacement call and extracted
+reviewed write functions in new protected scratch files, without executing either
+script's main/task/WSL path. Repeat writes must preserve JSON/ACL and consume the
+temporary file. Root's isolated Windows PowerShell5.1 explicit-null-string call
+passed; that result does not substitute for runtime handover acceptance. The
+source regression requires this explicit null in both replacement call sites.
+
+For this **exact pre-mutation failure only**, root first verifies all of the
+following against the saved native baseline: Start is still the old hash with
+unchanged ACL; Background remains enabled with the same normalized definition,
+instance/PID/native creation; both boots/config and local/central holds remain;
+no active work; the independent guard task and its data receipt do not exist;
+no Linux upgrade ran. The old journal must remain `prepared` and its separate
+`.tmp` must contain only the pending `guard_start_intent`; preserve their exact
+hashes/bytes. The staged `code/handover` directory must contain only the two pinned
+guard sources and the old transaction's plan, with original protected ACLs and
+no links/extras.
+
+After reviewing that evidence, root may **rename**, without overwriting, only
+that unused `code/handover` directory into a newly named child of the old
+transaction's protected evidence directory. Keep its contents/ACL and both old
+journal files intact. Write a separate reconciliation receipt containing exact
+before/after paths and hashes, untouched runtime/process/task/boot observations,
+and the reason; do not change the old journal to claim success. Confirm the old
+code path is now absent and the archive hashes are identical. A new transaction
+may then start using corrected hashes, fresh native pins and fresh staff
+observations. The previous transaction is never rerun or deleted. Any guard
+registration, task/file mutation, unexpected staging content or identity drift
+requires a different explicit reconciliation; this procedure does not apply.

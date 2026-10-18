@@ -95,6 +95,14 @@ class HandoverGuardTests(unittest.TestCase):
         self.assertIn("$ShimWsl='C:\\Program Files\\WSL\\wsl.exe'".replace('\\\\', '\\'), source)
         self.assertIn('$state.old_clients_confirmed_dead -ne $true', source)
 
+    def test_native_replace_uses_explicit_null_string(self):
+        for name in ('Handover-WorkerWatchdog.ps1', 'Invoke-WatchdogHandoverGuard.ps1'):
+            source=(ROOT/'ops/agc-worker'/name).read_text()
+            replacements=[line for line in source.splitlines() if '[IO.File]::Replace(' in line]
+            self.assertEqual(len(replacements), 1)
+            self.assertIn('[System.Management.Automation.Language.NullString]::Value', replacements[0])
+            self.assertNotIn(',$null)', replacements[0])
+
     def test_guard_has_one_attach_and_no_shutdown_cleanup(self):
         source=(ROOT/'ops/agc-worker/Invoke-WatchdogHandoverGuard.ps1').read_text()
         self.assertEqual(source.count('[Diagnostics.Process]::Start('), 1)
