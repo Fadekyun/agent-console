@@ -81,6 +81,20 @@ class HandoverGuardTests(unittest.TestCase):
         self.assertIn('$guard.guest.status.new_watchdog_sample -eq $true', source)
         self.assertIn('Fresh operator-observed staff baseline required', source)
 
+    def test_retained_clients_are_fenced_and_proven_dead_before_upgrade(self):
+        source=(ROOT/'ops/agc-worker/Handover-WorkerWatchdog.ps1').read_text()
+        prepare=source[source.index("$state.state='disable_intent'"):source.index("$state.state='awaiting_linux_upgrade'")]
+        self.assertLess(prepare.index('Pin-OldClients'), prepare.index('$oldHandle.TerminateExact()'))
+        self.assertLess(prepare.index('$oldHandle.TerminateExact()'), prepare.index('Stop-PinnedOldClients'))
+        cleanup=source[source.index('function Stop-PinnedOldClients'):source.index('function Read-Guard')]
+        self.assertLess(cleanup.index('if(-not $oldHandle.Exited)'), cleanup.index('$client.handle.TerminateExact()'))
+        self.assertIn('Sort-Object -Property depth -Descending', cleanup)
+        self.assertIn('if($remaining.Count)', cleanup)
+        self.assertIn("$state.old_clients_confirmed_dead=$true", cleanup)
+        self.assertNotIn('[AgcPinnedProcess]::new', cleanup)
+        self.assertIn("$ShimWsl='C:\\Program Files\\WSL\\wsl.exe'".replace('\\\\', '\\'), source)
+        self.assertIn('$state.old_clients_confirmed_dead -ne $true', source)
+
     def test_guard_has_one_attach_and_no_shutdown_cleanup(self):
         source=(ROOT/'ops/agc-worker/Invoke-WatchdogHandoverGuard.ps1').read_text()
         self.assertEqual(source.count('[Diagnostics.Process]::Start('), 1)

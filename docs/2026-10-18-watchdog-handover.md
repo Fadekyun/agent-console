@@ -85,12 +85,22 @@ Prepare does the following:
    terminates only the retained old PowerShell handle after rechecking its
    creation/owner/image/CIM metadata and exact hidden task instance. It waits
    for that handle to signal, bypassing the old PowerShell cleanup.
-5. Only after confirmed death, disabled scheduling, a fresh independent guard,
-   and absence of a replacement instance, stops the same old COM running task
-   instance to clean its old child clients. It never kills an arbitrary PID
-   tree, task engine parent, or worker/staff VM. It requires the old instance to
-   disappear and the same held boot to remain available.
-6. Returns `awaiting_linux_upgrade`, leaving at least400seconds on the guard.
+5. Before terminating the old PowerShell, retains native handles for its exact
+   System32 WSL client and `C:\Program Files\WSL\wsl.exe` shim, requiring the
+   existing sleep-infinity chain and capturing any visible fixed host-sample
+   clients. Owner SID, image, full native creation time, parent identity and
+   exact action are journaled. CIM's timestamp is only cross-checked within its
+   microsecond precision; native handles remain the authority.
+6. Only after confirmed PowerShell death, disabled scheduling, fresh guard and
+   absence of a replacement instance, stops the same old COM instance if it
+   remains. It then terminates only surviving retained WSL client handles,
+   deepest-first, and waits for every handle to signal. A disappearing COM
+   instance alone is not proof that clients died. Never kill conhost, wslhost,
+   an arbitrary PID tree, task engine parent, or worker/staff VM. An uncaptured
+   late-born client is observed for bounded natural exit; it is never promoted
+   to a PID-based kill target. Any remainder refuses success. Same held boot is
+   required after cleanup; all retained clients must be confirmed dead.
+7. Returns `awaiting_linux_upgrade`, leaving at least400seconds on the guard.
    Save its exact deadline and journal. Background is disabled and stopped.
 
 Root now runs only the reviewed `upgrade-linux.sh` through existing Setup,
@@ -137,9 +147,9 @@ is evidence, not an automatic runnable fallback. Keep central and local holds.
 Guard-task/source/journal cleanup is a separate reviewed operation after receipt
 capture; never unregister a running guard to tidy up.
 
-Verification performed in the source worktree: seven bounded Python fixtures
+Verification performed in the source worktree: eight bounded Python fixtures
 cover changed boot/missing hold, populated job cgroups, unknown source hash,
 clock rollback/deadline expiry, absence of reconnect/mutation, destructive action
-ordering and host-sample finalization guards. Whitespace checks pass. Native
+ordering, retained-client cleanup and host-sample finalization guards. Whitespace checks pass. Native
 PowerShell parsing, COM behavior, ACL preservation and handover are still
 operator acceptance checks; no laptop action was performed by these tests.

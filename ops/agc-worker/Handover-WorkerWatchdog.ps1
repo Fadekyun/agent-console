@@ -36,6 +36,9 @@ $GuardCode=Join-Path $Code 'handover'
 $Receipt=Join-Path $Data "handover-$Transaction.json"
 $ExpectedImage="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 $state=$null; $oldHandle=$null; $lock=$null; $mutationStarted=$false
+$clients=New-Object 'Collections.Generic.List[object]'
+$SystemWsl="$env:SystemRoot\System32\wsl.exe"
+$ShimWsl='C:\Program Files\WSL\wsl.exe'
 
 Add-Type @'
 using System;
@@ -153,6 +156,99 @@ function Assert-Old {
     $watchdogs=@(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object {$_.CommandLine -like '*\code\Start-Worker.ps1*'})
     if($watchdogs.Count -ne 1 -or $watchdogs[0].ProcessId -ne $state.old_pid){throw 'Another watchdog exists'}
 }
+function Client-Action([string]$CommandLine){
+    $command=$CommandLine.Trim()
+    if($command -notmatch '^"([^"]+)" (.+)$'){throw 'Unexpected old WSL command syntax'}
+    if($Matches[1] -ine $SystemWsl){throw 'Unexpected old WSL command executable'}
+    $action=$Matches[2]
+    if($action -cnotin @('-d AGC-Worker -u root --exec /usr/bin/sleep infinity','-d AGC-Worker -u root --exec /usr/local/bin/agc-worker host-sample')){throw 'Old WSL client action is not allowlisted'}
+    return $action
+}
+function Pin-OldClients {
+    # Inspect only wsl.exe client children. conhost/wslhost are not client
+    # handles and must never be terminated by this helper.
+    $parents=New-Object 'Collections.Generic.List[object]'
+    $parents.Add(@{pid=$state.old_pid;creation=$oldHandle.Creation;depth=0;action=$null})
+    for($index=0;$index -lt $parents.Count;$index++){
+        $parent=$parents[$index]
+        $rows=@(Get-CimInstance Win32_Process -Filter "Name='wsl.exe' AND ParentProcessId=$($parent.pid)")
+        foreach($row in $rows){
+            if($parent.depth -ge 2 -or $clients.Count -ge 8){throw 'Unexpected WSL client hierarchy'}
+            $action=Client-Action $row.CommandLine
+            $handle=$null
+            try{
+                try{$handle=[AgcPinnedProcess]::new([int]$row.ProcessId)}catch{
+                    # A short host-sample client can finish before handle open.
+                    # If still visible, refuse uncertainty rather than infer death.
+                    if(-not (Get-CimInstance Win32_Process -Filter "ProcessId=$($row.ProcessId)")){continue}
+                    throw
+                }
+                $fresh=Get-CimInstance Win32_Process -Filter "ProcessId=$($row.ProcessId)"
+                if(-not $fresh -and $handle.Exited){$handle.Dispose();$handle=$null;continue}
+                $cimTime=$fresh.CreationDate.ToUniversalTime().ToFileTimeUtc()
+                $image=if($parent.depth -eq 0){$SystemWsl}else{$ShimWsl}
+                if($handle.Sid -ne $state.worker_sid -or $handle.Image -ine $image -or $handle.Creation -lt $parent.creation -or [Math]::Abs($handle.Creation-$cimTime) -ge 10 -or $fresh.ParentProcessId -ne $parent.pid -or $fresh.CommandLine -cne $row.CommandLine){throw 'Old WSL native identity/parent changed'}
+                if($parent.depth -eq 1 -and $action -cne $parent.action){throw 'WSL shim action differs from pinned client'}
+                $entry=@{pid=$handle.Pid;creation_filetime=$handle.Creation;sid=$handle.Sid;image=$handle.Image;parent_pid=$parent.pid;parent_creation_filetime=$parent.creation;depth=($parent.depth+1);action=$action;command_line=$fresh.CommandLine;handle=$handle}
+                $clients.Add($entry)
+                $parents.Add(@{pid=$handle.Pid;creation=$handle.Creation;depth=$entry.depth;action=$action})
+                $handle=$null # collection owns this retained handle
+            }finally{if($handle){$handle.Dispose()}}
+        }
+    }
+    $keepers=@($clients | Where-Object {$_.action -ceq '-d AGC-Worker -u root --exec /usr/bin/sleep infinity'})
+    if(@($keepers | Where-Object {$_.depth -eq 1}).Count -ne 1 -or @($keepers | Where-Object {$_.depth -eq 2}).Count -ne 1){throw 'Exact existing keeper and shim were not pinned'}
+    foreach($keeper in $keepers){if($keeper.handle.Exited){throw 'Old keeper exited before parent termination'}}
+    $state.old_clients=@($clients | ForEach-Object {@{pid=$_.pid;creation_filetime=$_.creation_filetime;sid=$_.sid;image=$_.image;parent_pid=$_.parent_pid;parent_creation_filetime=$_.parent_creation_filetime;depth=$_.depth;action=$_.action;command_line=$_.command_line}})
+}
+function Remaining-OldClientRows {
+    # Observation only: a late client must never become a new kill target.
+    # Retained native handles prevent the identities above from being guessed.
+    $parents=New-Object 'Collections.Generic.List[int]'
+    $parents.Add([int]$state.old_pid)
+    foreach($client in $clients){if(-not $parents.Contains([int]$client.pid)){$parents.Add([int]$client.pid)}}
+    $seen=New-Object 'Collections.Generic.HashSet[int]'
+    $remaining=New-Object 'Collections.Generic.List[object]'
+    for($index=0;$index -lt $parents.Count;$index++){
+        foreach($row in @(Get-CimInstance Win32_Process -Filter "Name='wsl.exe' AND ParentProcessId=$($parents[$index])")){
+            if($seen.Add([int]$row.ProcessId)){
+                $remaining.Add($row)
+                if($parents.Count -ge 16){throw 'Unexpected late WSL client hierarchy'}
+                if(-not $parents.Contains([int]$row.ProcessId)){$parents.Add([int]$row.ProcessId)}
+            }
+        }
+    }
+    return $remaining.ToArray()
+}
+function Stop-PinnedOldClients {
+    if(-not $oldHandle.Exited){throw 'Old PowerShell is not confirmed dead'}
+    [void](Assert-Task $false)
+    if(@(Instances).Count){throw 'A Background instance remains before client cleanup'}
+    [void](Read-Guard -MinimumSeconds 410 -RequireHealthy)
+    $state.state='old_client_cleanup_intent';Save-Journal
+    foreach($client in @($clients | Sort-Object -Property depth -Descending)){
+        # Only the pre-termination retained handle is used. Never reopen a PID,
+        # issue a process-tree kill, kill conhost/wslhost, or send WSL a command.
+        if(-not $client.handle.Exited){$client.handle.TerminateExact()}
+        if(-not $client.handle.Exited){throw 'Pinned old WSL client termination unconfirmed'}
+    }
+    $until=[DateTimeOffset]::UtcNow.AddSeconds(25)
+    do{
+        $remaining=@(Remaining-OldClientRows)
+        if(-not $remaining.Count){break}
+        # A host-sample process born between snapshot and parent termination may
+        # finish normally. It is never killed by this observation or by PID.
+        Start-Sleep -Milliseconds 250
+    }while([DateTimeOffset]::UtcNow -lt $until)
+    if($remaining.Count){
+        $state.unresolved_old_client_pids=@($remaining | ForEach-Object {$_.ProcessId})
+        Save-Journal
+        throw 'Uncaptured old WSL clients require reconciliation'
+    }
+    foreach($client in $clients){if(-not $client.handle.Exited){throw 'Retained client death proof changed'}}
+    [void](Read-Guard -MinimumSeconds 400 -RequireHealthy)
+    $state.old_clients_confirmed_dead=$true;Save-Journal
+}
 function Read-Guard([int]$MinimumSeconds=60,[switch]$RequireHealthy){
     $value=Read-Bounded $Receipt
     $now=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()/1000.0
@@ -261,6 +357,8 @@ try {
         if((Hash $StartFile) -ne $NewStart -or (Get-Acl -LiteralPath $StartFile).Sddl -cne $state.start_sddl){throw 'Replacement bytes/ACL verification failed'}
         Assert-Old; [void](Assert-Task $false)
         [void](Read-Guard -MinimumSeconds 450 -RequireHealthy)
+        Pin-OldClients
+        Assert-Old; [void](Read-Guard -MinimumSeconds 450 -RequireHealthy)
         $state.state='terminate_old_intent';Save-Journal
         # This retained handle bypasses the exact old PowerShell finally block.
         # Never terminate an engine/parent PID or a newly looked-up PID by name.
@@ -279,13 +377,13 @@ try {
         $until=[DateTimeOffset]::UtcNow.AddSeconds(10)
         while(@(Instances).Count -and [DateTimeOffset]::UtcNow -lt $until){Start-Sleep -Milliseconds 250}
         if(@(Instances).Count){throw 'Old task instance cleanup unconfirmed'}
-        [void](Read-Guard -MinimumSeconds 400 -RequireHealthy)
+        Stop-PinnedOldClients
         $state.state='awaiting_linux_upgrade';Save-Journal
     } else {
         Assert-Protected $Journal
         $loaded=Read-Bounded $Journal
         $state=@{};foreach($property in $loaded.PSObject.Properties){$state[$property.Name]=$property.Value}
-        if($state.version -ne 1 -or $state.transaction -ne $Transaction -or $state.worker_sid -ne $worker.SID.Value -or $state.state -ne 'awaiting_linux_upgrade'){throw 'Incomplete or completed transaction requires reconciliation; no replay'}
+        if($state.version -ne 1 -or $state.transaction -ne $Transaction -or $state.worker_sid -ne $worker.SID.Value -or ($state.state -ne 'awaiting_linux_upgrade' -or $state.old_clients_confirmed_dead -ne $true)){throw 'Incomplete or completed transaction requires reconciliation; no replay'}
         Assert-StaffObservation
         [void](Assert-Task $false)
         if(@(Instances).Count){throw 'Unexpected Background task before finalize'}
@@ -344,6 +442,7 @@ try {
     }
     throw
 } finally {
+    foreach($client in $clients){$client.handle.Dispose()}
     if($oldHandle){$oldHandle.Dispose()}
     if($lock){$lock.Dispose()}
 }
