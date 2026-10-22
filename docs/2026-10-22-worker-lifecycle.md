@@ -127,6 +127,37 @@ write an unphased receipt that the coordinator would reject.
 - Guest fencing, generation checks, duplicate-start receipts and unknown
   external-write handling are unchanged.
 
+## WSL launch coverage (rollout preflight 2026-10-22)
+
+All owner/host WSL hooks now require the protected lifecycle library and fail
+closed when it is absent:
+
+| Script | Gate path |
+|---|---|
+| `Start-Worker.ps1` | admitted keepalive/telemetry/start; validated coordinator stop delegates to the fixed helper |
+| `Dispatch-Worker.ps1` | refuses all forwarding while stopping; admitted RPC only |
+| `worker-stop.ps1` | fixed owner request/phase bound; intentionally no `RequireAdmission` |
+| `Stop-Worker.ps1` | transient rollback; exact distro request bound |
+| `Invoke-WorkerSetup.ps1` | gate before hold; admitted step commands; recheck between steps and before the long bounded unit |
+| `Initialize-Distro.ps1` | gate before import/list/copy/install; admitted import and `wsl -d`; exact bounded terminate only |
+| `Invoke-WatchdogHandoverGuard.ps1` | staged with reviewed `WorkerLifecycle.ps1` and pinned SHA-256; gate + list; keeper created by `Start-AgcWorkerAdmittedProcessInfo` under the shared launch mutex, rechecked after creation |
+| `Install-OrganizerCredential.ps1` | gate + running list; admitted stdin install; exact source/digest checks preserved |
+| `Verify-WorkerPolicy.ps1` | display-owner gate (`-Owner display`) before list and staff Ubuntu read; admitted staff read |
+
+`Setup-Worker.ps1`, `Provision-Worker.ps1` (`Import`/`Runtime`) and
+`Handover-WorkerWatchdog.ps1` (`Prepare`/`Finalize`) refuse before registering or
+starting maintenance tasks when the lifecycle library or a Ready gate is
+unavailable. `Provision-Worker.ps1 -Phase Disable` remains an un-gated parent
+branch; it reuses the existing stop helper semantics, which require the common
+library and report unconfirmed if it is missing. No fallback stop helper was
+added, and no missing-library fallback exists in the managed laptop path.
+
+All ordinary process creation that can launch WSL uses the shared
+`RequireAdmission` path or `Start-AgcWorkerAdmittedProcessInfo`; the handover
+keeper is the only caller-built `ProcessStartInfo`, and it writes stdin/reads
+output only after the mutex is released. The fixed owner stop helper remains the
+only closed-gate `-d`/`--terminate` path.
+
 ## Logs and managed mode
 
 `install-linux.sh` creates `/etc/agc-worker/managed-mode`, disables independent
@@ -138,6 +169,15 @@ journal segment may survive until rotation). `worker.py` queues low-volume JSONL
 and 7-day age pruning at startup and hourly. A stalled disk or full queue can
 drop diagnostic records but cannot block admission or job termination; receipts,
 objects, jobs, leases and data are never retention candidates.
+
+## Qualification state (do not infer acceptance)
+
+The live laptop worker is currently `worker.py 43EA09CB…` while the existing
+policy seal still names `c6dacde9…`; the distro is `held`. This patch's reviewed
+worker source is a new hash again. Keep both the Linux and central holds and
+produce fresh native/toolchain receipts for the installed hash before releasing
+only the Linux hold. Never rewrite `policy-verified.json` or reuse historical
+receipts. The stale seal is expected, not evidence of a passed qualification.
 
 ## Verification performed locally
 

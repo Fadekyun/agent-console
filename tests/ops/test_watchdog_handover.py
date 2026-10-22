@@ -103,9 +103,20 @@ class HandoverGuardTests(unittest.TestCase):
             self.assertIn('[System.Management.Automation.Language.NullString]::Value', replacements[0])
             self.assertNotIn(',$null)', replacements[0])
 
+    def test_guard_stages_reviewed_worker_lifecycle_adapter(self):
+        parent=(ROOT/'ops/agc-worker/Handover-WorkerWatchdog.ps1').read_text()
+        guard=(ROOT/'ops/agc-worker/Invoke-WatchdogHandoverGuard.ps1').read_text()
+        self.assertTrue((ROOT/'ops/agc-worker/WorkerLifecycle.ps1').is_file())
+        self.assertIn("'WorkerLifecycle.ps1'", parent)
+        self.assertIn("lifecycle_sha256=$lifecycleSha256", parent)
+        self.assertIn("'WorkerLifecycle.ps1'", parent[parent.index('foreach($name in @('):])
+        self.assertIn(". $lifecycleFile -DataPath $Data", guard)
+        self.assertIn("$plan.lifecycle_sha256", guard)
+
     def test_guard_has_one_attach_and_no_shutdown_cleanup(self):
         source=(ROOT/'ops/agc-worker/Invoke-WatchdogHandoverGuard.ps1').read_text()
-        self.assertEqual(source.count('[Diagnostics.Process]::Start('), 1)
+        self.assertEqual(source.count('[Diagnostics.Process]::Start('), 0)
+        self.assertIn('Start-AgcWorkerAdmittedProcessInfo', source)
         self.assertNotIn('--terminate', source)
         self.assertNotIn('--shutdown', source)
         self.assertNotIn('systemctl', source)

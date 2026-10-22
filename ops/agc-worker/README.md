@@ -46,6 +46,23 @@ requested `stop`, `terminate` or `verify` phase (an absent/unknown phase
 defaults to `verify`). Receipts bind owner/request/boot/SID/distro and are also
 retained locally for rollback diagnosis.
 
+Every host/owner WSL hook loaded from this directory is gate-covered:
+`Start-Worker`, `Dispatch-Worker`, `Invoke-WorkerSetup`, `Initialize-Distro`,
+`Invoke-WatchdogHandoverGuard`, `Install-OrganizerCredential` and the
+display-owner staff read in `Verify-WorkerPolicy`. `Setup-Worker`,
+`Provision-Worker` (`Import`/`Runtime`) and `Handover-WorkerWatchdog`
+(`Prepare`/`Finalize`) refuse before starting maintenance tasks when the
+lifecycle library or a Ready gate is unavailable. `Provision-Worker -Phase
+Disable` remains an un-gated parent branch; existing stop-helper semantics are unchanged (missing library = unconfirmed), with no new fallback helper. Missing library means fail closed;
+there is no managed-laptop fallback. The fixed `worker-stop.ps1` task is the only
+closed-gate request/phase-bound path. The handover keeper uses
+`Start-AgcWorkerAdmittedProcessInfo`, which holds the shared launch mutex only
+for gate recheck + process creation and releases it before stdin/output.
+
+The live worker `worker.py 43EA09CB…` and old seal `c6dacde9…` are stale relative
+to this source. Keep the holds and requalify the installed hash; do not rewrite
+the seal or reuse receipts.
+
 Managed-mode installation writes `/etc/agc-worker/managed-mode`, removes the
 unit's independent `[Install]` enablement, disables any older enable link, and
 sets `Restart=no`. It stages only: it never starts or restarts the supervisor;

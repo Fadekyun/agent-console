@@ -39,6 +39,19 @@ Assert-True ($parsed.ok -eq $true -and $parsed.data.Length -gt 300000) 'large fe
 $small = Invoke-AgcBoundedProcess -FilePath '/usr/bin/python3' -ArgumentList @($gen) -TimeoutMilliseconds 20000
 Assert-True ($small.OutputTruncated -eq $true) 'default 64KiB cap reports truncation'
 
+$stdinHash = Join-Path $root 'stdin-hash.py'
+@'
+import base64, hashlib, sys
+raw = base64.b64decode(sys.stdin.buffer.read().strip(), validate=True)
+print(hashlib.sha256(raw).hexdigest())
+'@ | Set-Content -LiteralPath $stdinHash -Encoding UTF8
+$rawPayload = New-Object byte[] 1500000
+for ($i = 0; $i -lt $rawPayload.Length; $i++) { $rawPayload[$i] = 0x41 }
+$payload = [Convert]::ToBase64String($rawPayload)
+$expected = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($rawPayload)).Replace('-','').ToLowerInvariant()
+$stdinResult = Invoke-AgcBoundedProcess -FilePath '/usr/bin/python3' -ArgumentList @($stdinHash) -TimeoutMilliseconds 20000 -StandardInput $payload -MaxOutputBytes 4096
+Assert-True ($stdinResult.Started -eq $true -and $stdinResult.ExitCode -eq 0 -and $stdinResult.Stdout.Trim() -eq $expected) 'large setup-style stdin is preserved exactly'
+
 $threw = $false
 try { Write-AgcStopReceipt -Owner worker -RequestId $requestId -Outcome 'forced_scoped' -Data @{} -Phase terminate } catch { $threw = $true }
 Assert-True $threw 'real ValidateSet rejects unmapped local outcome'

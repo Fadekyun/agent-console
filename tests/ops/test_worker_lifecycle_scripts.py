@@ -70,6 +70,26 @@ class WorkerScriptContractTests(unittest.TestCase):
         self.assertIn("rpc_reply_too_large", script)
         self.assertNotIn("WaitForExit()", script)
 
+    def test_all_maintenance_wsl_hooks_are_gated(self):
+        checks = {
+            "Invoke-WorkerSetup.ps1": ["Initialize-AgcWorkerLifecycle", "Assert-AgcWorkerGateOpen", "Invoke-AgcWorkerAdmittedWsl"],
+            "Initialize-Distro.ps1": ["Initialize-AgcWorkerLifecycle", "Assert-Gate", "Invoke-AgcWorkerAdmittedWsl"],
+            "Invoke-WatchdogHandoverGuard.ps1": ["Initialize-AgcWorkerLifecycle", "Get-AgcWorkerGate", "Start-AgcWorkerAdmittedProcessInfo"],
+            "Install-OrganizerCredential.ps1": ["Initialize-AgcWorkerLifecycle", "Assert-AgcWorkerGateOpen", "Invoke-AgcWorkerAdmittedWsl"],
+            "Verify-WorkerPolicy.ps1": ["Test-AgcStartAllowed -Owner 'display'", "-RequireAdmission -Owner 'display'"],
+            "Setup-Worker.ps1": ["Assert-AgcWorkerGateOpen"],
+            "Provision-Worker.ps1": ["Assert-LifecycleAdmission"],
+            "Handover-WorkerWatchdog.ps1": ["Assert-AgcWorkerGateOpen"],
+        }
+        for name, needles in checks.items():
+            script = source(name)
+            for needle in needles:
+                self.assertIn(needle, script, f"{name} missing {needle}")
+            self.assertNotRegex(script, r"(?m)^\s*&\s*wsl\.exe")
+        self.assertIn("Assert-AgcWorkerGateOpen", source("Invoke-WorkerSetup.ps1"))
+        self.assertIn("Get-AgcWorkerGate", source("Invoke-WatchdogHandoverGuard.ps1"))
+        self.assertIn("Start-AgcWorkerAdmittedProcessInfo", source("WorkerLifecycle.ps1"))
+
     def test_guest_install_is_managed_and_bounds_journald(self):
         script = source("install-linux.sh")
         self.assertIn("managed-mode", script)

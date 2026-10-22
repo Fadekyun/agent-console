@@ -18,6 +18,12 @@ $ProgressPreference='SilentlyContinue'
 $Base='C:\ProgramData\AGC-Worker'
 $Code=Join-Path $Base 'code'
 $Data=Join-Path $Base 'data'
+$Lifecycle='C:\ProgramData\AGCLifecycle\Lifecycle.ps1'
+if(-not (Test-Path -LiteralPath $Lifecycle -PathType Leaf)){throw 'lifecycle_library_unavailable'}
+. $Lifecycle
+if(-not (Get-Command Test-AgcStartAllowed -CommandType Function -ErrorAction SilentlyContinue)){throw 'lifecycle_library_unavailable'}
+# The staff Ubuntu read belongs to the display owner, never the worker owner.
+if(-not (Test-AgcStartAllowed -Owner 'display')){throw 'lifecycle_gate_closed'}
 function Assert-AdminProtected([string]$Path) {
     $item=Get-Item -LiteralPath $Path -Force
     if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Reparse point in protected operator path'}
@@ -68,10 +74,14 @@ $observed=[DateTimeOffset]::Parse($StaffObservedAt,[Globalization.CultureInfo]::
 $age=([DateTimeOffset]::UtcNow-$observed).TotalSeconds
 if($age -lt -5 -or $age -gt 300){throw 'Freshly observed staff baseline required'}
 if((Get-FileHash -LiteralPath $staff -Algorithm SHA256).Hash.ToLowerInvariant() -ne $StaffConfigSha256){throw 'Staff WSL settings changed'}
-$running=((& wsl.exe --list --running --quiet) -replace "`0",'') | ForEach-Object {$_.Trim()}
+$listing=Invoke-AgcBoundedProcess -FilePath 'wsl.exe' -ArgumentList @('--list','--running','--quiet') -TimeoutMilliseconds 10000
+if($listing.Started -ne $true -or $listing.TimedOut -eq $true -or $listing.ExitCode -ne 0){throw 'Staff WSL list unavailable'}
+$running=(([string]$listing.Stdout) -replace "`0",'') -split "`r?`n" | ForEach-Object {$_.Trim()}
 if($running -notcontains 'Ubuntu-24.04'){throw 'Previously running staff distro unavailable'}
-$staffBoot=((& wsl.exe -d Ubuntu-24.04 --exec cat /proc/sys/kernel/random/boot_id) -join '').Trim()
-if($LASTEXITCODE -ne 0 -or $staffBoot -ne $StaffBootId){throw 'Staff runtime identity changed'}
+$staffRead=Invoke-AgcBoundedProcess -FilePath 'wsl.exe' -ArgumentList @('-d','Ubuntu-24.04','--exec','cat','/proc/sys/kernel/random/boot_id') -TimeoutMilliseconds 20000 -MaxOutputBytes 4096 -RequireAdmission -Owner 'display'
+if($staffRead.Started -ne $true -or $staffRead.Suppressed -eq $true -or $staffRead.TimedOut -eq $true -or $staffRead.OutputTruncated -eq $true -or $staffRead.ExitCode -ne 0){throw 'Staff runtime identity unavailable'}
+$staffBoot=([string]$staffRead.Stdout).Trim()
+if($staffBoot -ne $StaffBootId){throw 'Staff runtime identity changed'}
 $quota=New-Object -ComObject Microsoft.DiskQuota
 $quota.Initialize('C:\',$false)
 $q=$quota.FindUser("$env:COMPUTERNAME\agc-worker")

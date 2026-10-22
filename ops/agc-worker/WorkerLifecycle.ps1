@@ -287,6 +287,45 @@ function Save-AgcWorkerLocalStopReceipt {
     } catch { return $false }
 }
 
+
+function Assert-AgcWorkerGateOpen {
+    [CmdletBinding()]
+    param()
+    $gate = Get-AgcWorkerGate
+    if (-not $gate.Allowed) { throw 'lifecycle_gate_closed' }
+    return $gate
+}
+
+function Start-AgcWorkerAdmittedProcessInfo {
+    <#
+      Atomic admission for a caller-built ProcessStartInfo (the handover keeper).
+      The shared launch mutex is held only for gate recheck + process creation;
+      the caller writes stdin/reads output after this function returns.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][Diagnostics.ProcessStartInfo]$StartInfo,
+        [int]$TimeoutMilliseconds = 2000
+    )
+    if (-not (Test-AgcWorkerAdmissionApi)) { throw 'atomic_admission_unavailable' }
+    if ($TimeoutMilliseconds -lt 100) { $TimeoutMilliseconds = 100 }
+    try { $mutex = Get-AgcLaunchMutex } catch { return $null }
+    $acquired = $false
+    try {
+        try {
+            $acquired = $mutex.WaitOne($TimeoutMilliseconds)
+        } catch [System.Threading.AbandonedMutexException] {
+            $acquired = $true
+        }
+        if (-not $acquired) { return $null }
+        if (-not (Test-AgcStartAllowed -Owner $script:AgcWorkerOwner)) { return $null }
+        return [Diagnostics.Process]::Start($StartInfo)
+    } finally {
+        if ($acquired) { try { $mutex.ReleaseMutex() } catch { } }
+        try { $mutex.Dispose() } catch { }
+    }
+}
+
 function Invoke-AgcWorkerScopedTerminate {
     [CmdletBinding()]
     param(

@@ -21,7 +21,7 @@ function Test-AgcStartAllowed { param([string]$Owner) return $global:FakeStartAl
 function Get-AgcStopRequest { param([string]$Owner) return $global:FakeStop }
 function Invoke-AgcBoundedProcess {
     param([string]$FilePath,[string[]]$ArgumentList=@(),[int]$TimeoutMilliseconds=1000,[string]$StandardInput,[int]$MaxOutputBytes=65536,[switch]$RequireAdmission,[string]$Owner)
-    if ($global:FakeSuppressAdmission) { return [pscustomobject]@{Started=$false;Suppressed=$true;ExitCode=0;TimedOut=$false;Stdout='';Stderr='';OutputTruncated=$false;DurationMs=0} }
+    if ($global:FakeSuppressAdmission -or ($RequireAdmission -and -not $global:FakeStartAllowed)) { return [pscustomobject]@{Started=$false;Suppressed=$true;ExitCode=0;TimedOut=$false;Stdout='';Stderr='';OutputTruncated=$false;DurationMs=0} }
     if ($global:FakeNotStarted) { return [pscustomobject]@{Started=$false;ExitCode=$null;TimedOut=$false;Stdout='';Stderr='';OutputTruncated=$false;DurationMs=0} }
     if ($global:FakeTruncated) { return [pscustomobject]@{Started=$true;ExitCode=0;TimedOut=$false;Stdout='';Stderr='';OutputTruncated=$true;DurationMs=0} }
     $start = New-Object Diagnostics.ProcessStartInfo
@@ -164,6 +164,25 @@ Assert-True ($result.termination_confirmed -eq $true -and $result.shared_receipt
 $local = Get-Content -LiteralPath (Join-Path $data (('1' * 32) + '.terminate.json')) -Raw | ConvertFrom-Json
 Assert-True ($local.sharedReceiptError -match 'forced_receipt_failure') 'local receipt records shared write failure'
 $global:FakeReceiptFailure = $false
+
+# A gate that closes between steps makes the next assertion fail closed.
+$global:FakeStartAllowed = $true
+Assert-True ($null -ne (Assert-AgcWorkerGateOpen)) 'open gate assertion succeeds'
+$global:FakeStartAllowed = $false
+$threw = $false
+try { Assert-AgcWorkerGateOpen | Out-Null } catch { $threw = $true }
+Assert-True $threw 'gate closing between steps refuses next step'
+$global:FakeStartAllowed = $true
+$admittedOk = Invoke-AgcWorkerAdmittedWsl -Arguments @('--list','--running','--quiet') -TimeoutMilliseconds 1000 -WslPath $fakeWsl
+Assert-True ($admittedOk.Started -eq $true) 'admitted launch succeeds while open'
+$global:FakeStartAllowed = $false
+$admittedClosed = Invoke-AgcWorkerAdmittedWsl -Arguments @('--list','--running','--quiet') -TimeoutMilliseconds 1000 -WslPath $fakeWsl
+Assert-True ($admittedClosed.Started -eq $false -and $admittedClosed.Suppressed -eq $true) 'admitted launch refuses after gate closes'
+$global:FakeStartAllowed = $true
+$info = New-Object Diagnostics.ProcessStartInfo
+$info.FileName = '/bin/true'
+$guard = Start-AgcWorkerAdmittedProcessInfo -StartInfo $info -TimeoutMilliseconds 1000
+Assert-True ($null -eq $guard) 'guard keeper creation refused without shared mutex'
 
 # Atomic admission refusal returns Suppressed without a process.
 . $library
