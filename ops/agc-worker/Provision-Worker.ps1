@@ -55,6 +55,14 @@ function Save-TaskCredential([Security.SecureString]$Password) {
         [IO.File]::WriteAllBytes($CredentialFile,$encrypted)
     } finally { [Array]::Clear($bytes,0,$bytes.Length) }
 }
+function Assert-LifecycleAdmission {
+    $lifecycle = Join-Path $Code 'WorkerLifecycle.ps1'
+    if (-not (Test-Path -LiteralPath $lifecycle)) { $lifecycle = Join-Path $PSScriptRoot 'WorkerLifecycle.ps1' }
+    if (-not (Test-Path -LiteralPath $lifecycle)) { throw 'lifecycle_library_unavailable' }
+    . $lifecycle
+    if (-not (Initialize-AgcWorkerLifecycle)) { throw 'lifecycle_library_unavailable' }
+    Assert-AgcWorkerGateOpen | Out-Null
+}
 function Read-TaskCredential {
     Add-Type -AssemblyName System.Security
     $bytes = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($CredentialFile),$null,[Security.Cryptography.DataProtectionScope]::LocalMachine)
@@ -214,7 +222,7 @@ public static class AgcAccountRights {
     Protect-Directory $Code 'ReadAndExecute'
     Protect-Directory $Data 'Modify'
     Copy-Item -LiteralPath (Join-Path $SourceDirectory 'wslconfig') -Destination (Join-Path $profile '.wslconfig') -Force
-    foreach ($file in @('Dispatch-Worker.ps1','Start-Worker.ps1','Host-Disk.ps1','Initialize-Distro.ps1','worker.py','qualification_gate.py','release-qualified-hold.sh','install-linux.sh','wsl.conf','adapters.example.json')) {
+    foreach ($file in @('Dispatch-Worker.ps1','Start-Worker.ps1','Host-Disk.ps1','WorkerLifecycle.ps1','Stop-Worker.ps1','Initialize-Distro.ps1','worker.py','qualification_gate.py','release-qualified-hold.sh','install-linux.sh','wsl.conf','adapters.example.json')) {
         if (Test-Path (Join-Path $SourceDirectory $file)) { Copy-Item -LiteralPath (Join-Path $SourceDirectory $file) -Destination $Code -Force }
     }
     # Hard per-SID ceiling. Existing staff defaults/limits must remain unlimited
@@ -282,6 +290,7 @@ if (-not (Test-Path $Marker) -or -not (Test-Path $CredentialFile)) { throw 'Comp
 $credential = Read-TaskCredential
 $script:WorkerSid = (Get-LocalUser -Name $WorkerName).SID
 if ($Phase -eq 'Import') {
+    Assert-LifecycleAdmission
     if (-not $RootfsFile -or -not $RootfsSha256 -or -not (Test-Path $RootfsFile)) { throw 'Supply a separately verified Ubuntu 24.04 rootfs and SHA-256' }
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $RootfsFile).Hash.ToLowerInvariant() -ne $RootfsSha256) { throw 'Rootfs hash mismatch' }
     $importRootfs = Join-Path $Data 'rootfs.tar'
@@ -302,8 +311,9 @@ if ($Phase -eq 'Import') {
 }
 
 if ($Phase -eq 'Runtime') {
+    Assert-LifecycleAdmission
     if (-not (Test-Path (Join-Path $Data 'distro-ready.json'))) { throw 'Import and verify independent distro first' }
-    foreach ($file in @('Dispatch-Worker.ps1','Start-Worker.ps1','Host-Disk.ps1','worker.py','qualification_gate.py','release-qualified-hold.sh','install-linux.sh')) {
+    foreach ($file in @('Dispatch-Worker.ps1','Start-Worker.ps1','Host-Disk.ps1','WorkerLifecycle.ps1','Stop-Worker.ps1','worker.py','qualification_gate.py','release-qualified-hold.sh','install-linux.sh')) {
         Copy-Item -LiteralPath (Join-Path $SourceDirectory $file) -Destination $Code -Force
     }
     # Startup trigger never wakes or powers on the laptop. Script exits before
@@ -314,7 +324,7 @@ if ($Phase -eq 'Runtime') {
     # machine. IgnoreNew keeps the already-running watchdog single-instance.
     $weekly.Repetition = (New-ScheduledTaskTrigger -Once -At '00:01' -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 1)).Repetition
     $triggers = @((New-ScheduledTaskTrigger -AtStartup),$weekly)
-    $settings = New-ScheduledTaskSettingsSet -Hidden -ExecutionTimeLimit (New-TimeSpan -Days 6) -MultipleInstances IgnoreNew -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+    $settings = New-ScheduledTaskSettingsSet -Hidden -ExecutionTimeLimit (New-TimeSpan -Days 6) -MultipleInstances IgnoreNew -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers -Settings $settings -User $credential.UserName -Password $credential.GetNetworkCredential().Password -RunLevel Limited -Force | Out-Null
     Start-ScheduledTask -TaskName $TaskName
     [pscustomobject]@{phase=$Phase;state='runtime_started_but_held';next='verify independent VM/cgroup/host telemetry before explicit hold removal'} | ConvertTo-Json -Compress

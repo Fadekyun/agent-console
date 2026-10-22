@@ -3,9 +3,13 @@ $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $OutputEncoding=[Text.UTF8Encoding]::new($false)
 if([Security.Principal.WindowsIdentity]::GetCurrent().Name -notmatch '\\agc-worker$'){throw 'Worker identity required'}
+if(-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'WorkerLifecycle.ps1'))){throw 'lifecycle_library_unavailable'}
+. (Join-Path $PSScriptRoot 'WorkerLifecycle.ps1')
+if(-not (Initialize-AgcWorkerLifecycle)){throw 'lifecycle_library_unavailable'}
+Assert-AgcWorkerGateOpen | Out-Null
 $now=[TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow,'Singapore Standard Time')
 if([int]$now.DayOfWeek -in @(1,2) -or ([int]$now.DayOfWeek -eq 0 -and $now.TimeOfDay -ge [TimeSpan]::FromMinutes(1425))){throw 'Outside worker schedule'}
-$running=((& wsl.exe --list --running --quiet) -replace "`0",'') | ForEach-Object {$_.Trim()}
+$running=@(Get-AgcWorkerRunningDistros -WslPath 'wsl.exe' -TimeoutMilliseconds 3000)
 if($running -notcontains 'AGC-Worker'){throw 'Worker must already be running'}
 $Base='C:\ProgramData\AGC-Worker'
 $source=Join-Path $Base 'code\organizer-input.json'
@@ -42,8 +46,9 @@ print('dedicated_organizer_credential_installed')
     # Python program. Encode only the static program, never credential bytes.
     $program=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($decode))
     $launcher="import base64;exec(base64.b64decode('$program'))"
-    [Convert]::ToBase64String($raw) | & wsl.exe -d AGC-Worker -u root --exec /usr/bin/python3 -c $launcher
-    if($LASTEXITCODE -ne 0){throw 'Credential installation failed'}
+    $encodedCredential=[Convert]::ToBase64String($raw)
+    $install=Invoke-AgcWorkerAdmittedWsl -Arguments @('-d','AGC-Worker','-u','root','--exec','/usr/bin/python3','-c',$launcher) -TimeoutMilliseconds 30000 -StandardInput $encodedCredential
+    if($install.Started -ne $true -or $install.TimedOut -eq $true -or $install.OutputTruncated -eq $true -or $install.ExitCode -ne 0){throw 'Credential installation failed'}
     $result.state='installed'
 } finally {
     if($raw){[Array]::Clear($raw,0,$raw.Length)}

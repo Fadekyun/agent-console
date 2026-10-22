@@ -1,3 +1,8 @@
+> **Superseded for new deployments (2026-10-22, #206):** this one-shot helper
+> targets the pre-lifecycle baseline. Its `Start-Worker.ps1` / `worker.py` hashes
+> are intentionally stale after the AGCLifecycle change. Do not replay it on a
+> lifecycle-managed worker; use `docs/2026-10-22-worker-lifecycle.md` instead.
+
 # Held Windows watchdog handover (#203)
 
 This source-only operator helper covers the narrow gap between the old Windows

@@ -15,6 +15,12 @@ $Control = Join-Path $Base 'control'
 $Code = Join-Path $Base 'code'
 $Data = Join-Path $Base 'data'
 $TaskName = 'AGC-Worker-Setup'
+$Lifecycle = Join-Path $Code 'WorkerLifecycle.ps1'
+if (-not (Test-Path -LiteralPath $Lifecycle)) { $Lifecycle = Join-Path $PSScriptRoot 'WorkerLifecycle.ps1' }
+if (-not (Test-Path -LiteralPath $Lifecycle)) { throw 'lifecycle_library_unavailable' }
+. $Lifecycle
+if (-not (Initialize-AgcWorkerLifecycle)) { throw 'lifecycle_library_unavailable' }
+Assert-AgcWorkerGateOpen | Out-Null
 $marker = Get-Content (Join-Path $Control 'account.json') -Raw | ConvertFrom-Json
 $worker = Get-LocalUser -Name agc-worker
 if ($marker.sid -ne $worker.SID.Value -or -not $worker.Enabled) { throw 'Worker identity is not enrolled and enabled' }
@@ -34,6 +40,7 @@ foreach ($rule in $acl.Access) {
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Invoke-WorkerSetup.ps1') -Destination $Code -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Host-Disk.ps1') -Destination $Code -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'WorkerLifecycle.ps1') -Destination $Code -Force
 Add-Type -AssemblyName System.Security
 $bytes = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes((Join-Path $Control 'credential.dpapi')),$null,[Security.Cryptography.DataProtectionScope]::LocalMachine)
 try {

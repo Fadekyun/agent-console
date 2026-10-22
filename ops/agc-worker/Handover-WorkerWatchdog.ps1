@@ -33,8 +33,17 @@ $ExpectedArguments='-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Exec
 $JournalDir=Join-Path $Control "watchdog-handover\$Transaction"
 $Journal=Join-Path $JournalDir 'journal.json'
 $GuardCode=Join-Path $Code 'handover'
+$LifecycleFile=Join-Path $PSScriptRoot 'WorkerLifecycle.ps1'
 $Receipt=Join-Path $Data "handover-$Transaction.json"
 $ExpectedImage="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+if ($Phase -ne 'Inspect') {
+    $lifecycle = Join-Path $Code 'WorkerLifecycle.ps1'
+    if (-not (Test-Path -LiteralPath $lifecycle)) { $lifecycle = Join-Path $PSScriptRoot 'WorkerLifecycle.ps1' }
+    if (-not (Test-Path -LiteralPath $lifecycle)) { throw 'lifecycle_library_unavailable' }
+    . $lifecycle
+    if (-not (Initialize-AgcWorkerLifecycle)) { throw 'lifecycle_library_unavailable' }
+    Assert-AgcWorkerGateOpen | Out-Null
+}
 $state=$null; $oldHandle=$null; $lock=$null; $mutationStarted=$false
 $clients=New-Object 'Collections.Generic.List[object]'
 $SystemWsl="$env:SystemRoot\System32\wsl.exe"
@@ -300,8 +309,9 @@ try {
         if($worker.SID.Value -ne $ExpectedWorkerSid){throw 'Worker SID mismatch'}
         Assert-StaffObservation
         if((Hash $StartFile) -ne $OldStart){throw 'Expected old watchdog not installed'}
-        foreach($path in @($NewStartFile,(Join-Path $PSScriptRoot 'Invoke-WatchdogHandoverGuard.ps1'),(Join-Path $PSScriptRoot 'watchdog_handover_guard.py'))){Assert-Protected $path}
-        if((Hash $NewStartFile) -ne $NewStart -or (Hash (Join-Path $PSScriptRoot 'Invoke-WatchdogHandoverGuard.ps1')) -ne $GuardSha256 -or (Hash (Join-Path $PSScriptRoot 'watchdog_handover_guard.py')) -ne $GuestGuardSha256){throw 'Reviewed source mismatch'}
+        foreach($path in @($NewStartFile,(Join-Path $PSScriptRoot 'Invoke-WatchdogHandoverGuard.ps1'),(Join-Path $PSScriptRoot 'watchdog_handover_guard.py'),$LifecycleFile)){Assert-Protected $path}
+        if((Hash $NewStartFile) -ne $NewStart -or (Hash (Join-Path $PSScriptRoot 'Invoke-WatchdogHandoverGuard.ps1')) -ne $GuardSha256 -or (Hash (Join-Path $PSScriptRoot 'watchdog_handover_guard.py')) -ne $GuestGuardSha256 -or -not (Test-Path -LiteralPath $LifecycleFile)){throw 'Reviewed source mismatch'}
+        $lifecycleSha256=Hash $LifecycleFile
         foreach($path in @($NewStartFile,(Join-Path $PSScriptRoot 'Invoke-WatchdogHandoverGuard.ps1'))){$tokens=$null;$errors=$null;[void][Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors);if($errors.Count){throw 'PowerShell source does not parse'}}
         $oldHandle=[AgcPinnedProcess]::new($ExpectedPid)
         # Capture from native Get-Process.StartTime, never CIM CreationDate: CIM
@@ -312,7 +322,7 @@ try {
         if(-not $task.Enabled -or $definition.Actions.Count -ne 1 -or $definition.Actions.Item(1).Path -ine 'powershell.exe' -or $definition.Actions.Item(1).Arguments -cne $ExpectedArguments -or $definition.Principal.RunLevel -ne 0 -or $definition.Principal.LogonType -ne 1 -or (Principal-Sid $definition.Principal.UserId) -ne $worker.SID.Value){throw 'Unexpected Background task definition'}
         $cim=Get-CimInstance Win32_Process -Filter "ProcessId=$ExpectedPid"
         if($cim.CommandLine -cne "powershell.exe $ExpectedArguments" -and $cim.CommandLine -cne "`"powershell.exe`" $ExpectedArguments" -and $cim.CommandLine -cne "`"$ExpectedImage`" $ExpectedArguments" -and $cim.CommandLine -cne "$ExpectedImage $ExpectedArguments"){throw 'Unexpected watchdog command line'}
-        $state=@{version=1;transaction=$Transaction;state='prepared';worker_sid=$ExpectedWorkerSid;worker_boot_id=$WorkerBootId;staff_boot_id=$StaffBootId;staff_config_sha256=$StaffConfigSha256;staff_before_observed_at=$StaffObservedAt;old_pid=$ExpectedPid;old_parent_pid=$cim.ParentProcessId;old_command_line=$cim.CommandLine;creation_filetime=$creation;instance_guid=$ExpectedTaskInstance;task_definition=(Normalize-Task $task.Xml);original_enabled=$task.Enabled;old_start_sha256=$OldStart;new_start_sha256=$NewStart;start_sddl=(Get-Acl -LiteralPath $StartFile).Sddl;deadline=([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()+600);guard_sha256=$GuardSha256;guest_sha256=$GuestGuardSha256}
+        $state=@{version=1;transaction=$Transaction;state='prepared';lifecycle_sha256=$lifecycleSha256;worker_sid=$ExpectedWorkerSid;worker_boot_id=$WorkerBootId;staff_boot_id=$StaffBootId;staff_config_sha256=$StaffConfigSha256;staff_before_observed_at=$StaffObservedAt;old_pid=$ExpectedPid;old_parent_pid=$cim.ParentProcessId;old_command_line=$cim.CommandLine;creation_filetime=$creation;instance_guid=$ExpectedTaskInstance;task_definition=(Normalize-Task $task.Xml);original_enabled=$task.Enabled;old_start_sha256=$OldStart;new_start_sha256=$NewStart;start_sddl=(Get-Acl -LiteralPath $StartFile).Sddl;deadline=([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()+600);guard_sha256=$GuardSha256;guest_sha256=$GuestGuardSha256}
         Assert-Old
         if(Get-ScheduledTask -TaskName $GuardTask -ErrorAction SilentlyContinue){throw 'Existing guard task requires explicit reconciliation'}
         if(Test-Path -LiteralPath $GuardCode){throw 'Existing guard source directory requires reconciliation'}
@@ -323,8 +333,8 @@ try {
         Write-Durable (Join-Path $JournalDir 'background.before.xml') ([Text.UTF8Encoding]::new($false).GetBytes($task.Xml))
         Save-Journal
         New-Item -ItemType Directory -Path $GuardCode | Out-Null
-        foreach($name in @('Invoke-WatchdogHandoverGuard.ps1','watchdog_handover_guard.py')){Write-Durable (Join-Path $GuardCode $name) ([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot $name)))}
-        $plan=@{version=1;worker_sid=$state.worker_sid;worker_boot_id=$WorkerBootId;deadline=$state.deadline;guard_sha256=$GuardSha256;guest_sha256=$GuestGuardSha256}
+        foreach($name in @('Invoke-WatchdogHandoverGuard.ps1','watchdog_handover_guard.py','WorkerLifecycle.ps1')){Write-Durable (Join-Path $GuardCode $name) ([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot $name)))}
+        $plan=@{version=1;worker_sid=$state.worker_sid;worker_boot_id=$WorkerBootId;deadline=$state.deadline;guard_sha256=$GuardSha256;guest_sha256=$GuestGuardSha256;lifecycle_sha256=$lifecycleSha256}
         Write-Durable (Join-Path $GuardCode "$Transaction.json") ([Text.UTF8Encoding]::new($false).GetBytes(($plan | ConvertTo-Json -Compress)))
         $state.state='guard_start_intent';Save-Journal
         Add-Type -AssemblyName System.Security

@@ -6,6 +6,88 @@ Windows standard account (`agc-worker`) with its own WSL distribution
 Source is reviewed and installed by the root coordinator. Provisioning leaves an
 operator hold in place; creating an account is not acceptance of any workload.
 
+## Windows lifecycle gate (#206)
+
+This worker is an owner of the Windows `AGCLifecycle` coordinator. The common
+library is fixed at `C:\ProgramData\AGCLifecycle\Lifecycle.ps1`, admin-owned
+and read-only for `agc-worker`; `WorkerLifecycle.ps1` is only a thin adapter.
+Every ordinary WSL launch, telemetry delivery, keepalive restart and recovery
+path uses `Invoke-AgcBoundedProcess -RequireAdmission -Owner worker` (or
+`Start-AgcAdmittedProcess` for the finite keepalive), which holds the shared
+global launch mutex, rechecks admission under it and refuses with
+`Started=false`/`Suppressed=true` without creating a process. Only the fixed
+owner stop/drain/list/terminate helper omits admission and acts under its bound
+request/phase deadline. If the library lacks this API, the worker fails closed. A closed gate or a stop request suppresses the
+start (`exit 0`) before any distribution can be started. `Dispatch-Worker.ps1`
+also refuses `start`/`stage` while stopping and bounds both its stdin read and
+RPC call.
+
+The stop budget is shared with the coordinator's 25-second internal budget:
+12 seconds of stop-phase supervisor drain, 8 seconds of exact-distro
+`wsl.exe --terminate AGC-Worker` fallback, and 3 seconds of independent
+running-list verification. Dispatch captures RPC replies up to 1 MiB, fails
+closed on truncation or a reply above the 512 KiB protocol maximum, and never
+writes partial JSON. Receipt outcomes are mapped to the shared
+`graceful`/`forced`/`unconfirmed` vocabulary; a failed shared write is visible in
+the local receipt. It never runs `wsl --shutdown`, kills
+`WSLService`/`vmcompute`/`vmmem`, unregisters the distro, or uses
+`wsl -d ... --exec` on a stopped distro. `Stop-Worker.ps1` remains the transient
+rollback task used by `Provision-Worker.ps1 -Phase Disable`; the coordinator uses
+the persistent task below.
+
+`Install-LifecycleStopTask.ps1` (administrator context) installs
+`AGC-Worker-LifecycleStop` with the fixed action
+`owners\worker-stop.ps1 -FromTask`, the existing `agc-worker` password-task
+principal and the existing DPAPI credential. It never disables the account,
+rotates the password or changes other tasks. The owner helper rejects SYSTEM
+and non-worker identities, reads `requests\worker\current.json`, validates
+schema/owner/request/boot/deadline against the registry gate, and runs only the
+requested `stop`, `terminate` or `verify` phase (an absent/unknown phase
+defaults to `verify`). Receipts bind owner/request/boot/SID/distro and are also
+retained locally for rollback diagnosis.
+
+Every host/owner WSL hook loaded from this directory is gate-covered:
+`Start-Worker`, `Dispatch-Worker`, `Invoke-WorkerSetup`, `Initialize-Distro`,
+`Invoke-WatchdogHandoverGuard`, `Install-OrganizerCredential` and the
+display-owner staff read in `Verify-WorkerPolicy`. `Setup-Worker`,
+`Provision-Worker` (`Import`/`Runtime`) and `Handover-WorkerWatchdog`
+(`Prepare`/`Finalize`) refuse before starting maintenance tasks when the
+lifecycle library or a Ready gate is unavailable. `Provision-Worker -Phase
+Disable` remains an un-gated parent branch; existing stop-helper semantics are unchanged (missing library = unconfirmed), with no new fallback helper. Missing library means fail closed;
+there is no managed-laptop fallback. The fixed `worker-stop.ps1` task is the only
+closed-gate request/phase-bound path. The handover keeper uses
+`Start-AgcWorkerAdmittedProcessInfo`, which holds the shared launch mutex only
+for gate recheck + process creation and releases it before stdin/output.
+
+The live worker `worker.py 43EA09CB…` and old seal `c6dacde9…` are stale relative
+to this source. Keep the holds and requalify the installed hash; do not rewrite
+the seal or reuse receipts.
+
+Managed-mode installation writes `/etc/agc-worker/managed-mode`, removes the
+unit's independent `[Install]` enablement, disables any older enable link, and
+sets `Restart=no`. It stages only: it never starts or restarts the supervisor;
+the gated Windows launcher performs the first start and recovery. Guest journald
+is capped at 128 MiB / 8 MiB files / 7 days with `ForwardToSyslog=no`; legacy
+`/var/log/syslog*`-family files older than seven days are pruned from a fixed
+allowlist instead of stopping rsyslog globally. The supervisor writes a
+nonthrowing JSONL transition log to `/var/log/agc-worker/worker.log` with 1 MiB
+rotation, seven backups plus the active file (8 MiB total), daily rotation and
+7-day pruning driven by the oldest bounded record timestamp; a fresh mtime
+cannot preserve an old record. Receipts, objects, jobs and leases are never
+retention candidates.
+
+A `SIGTERM` closes admission through a lock-free event before the supervisor
+requests a checkpoint (when the adapter supports it) and stops an active job. Shutdown defers result inventory (`result_deferred`) for
+central reconciliation instead of hashing artifacts inside the 25-second host
+budget; ordinary job completion keeps the full inventory contract. The
+75-second lease-loss constants remain lease detection, not shutdown grace.
+
+The changed `worker.py` hash invalidates the existing Windows qualification
+seal. Keep the Linux and central holds, deploy the reviewed files through the
+bounded Setup lane, and re-run native/toolchain qualification before releasing
+only the Linux hold. Never rewrite the seal or reuse old receipts. Details,
+rollback and unverified limits: `docs/2026-10-22-worker-lifecycle.md`.
+
 ## Per-job filesystem visibility
 
 The daemon and its `jobs` parent remain root-only 0700. Each job root is explicitly
@@ -63,7 +145,10 @@ for hostile code: only reviewed source and fixed adapters may execute here.
   or power-on change. The startup task exits before WSL on Monday/Tuesday or
   battery. A five-minute task retry during permitted days allows recovery after
   AC reconnect or staff pressure; it never overlaps an existing watchdog. Two
-  minutes startup and three healthy minutes precede admission.
+  minutes startup and three healthy minutes precede admission. The Background
+  task is registered with `-AllowStartIfOnBatteries` and
+  `-DontStopIfGoingOnBatteries`, so an AC loss does not kill an already-draining
+  wrapper; `Start-Worker.ps1` still refuses new WSL when off AC.
 * CPU over 85% or available memory below max(8 GiB, 25% of host RAM) reduces
   the jobs slice to one CPU equivalent. Sustained memory pressure requests a
   checkpoint immediately, stops the job at 60 seconds, and stops only the worker

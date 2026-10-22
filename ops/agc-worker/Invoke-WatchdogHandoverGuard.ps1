@@ -16,11 +16,14 @@ if(($deadline-$now).TotalSeconds -lt 480 -or ($deadline-$now).TotalSeconds -gt 6
 $guest=Join-Path $Code 'watchdog_handover_guard.py'
 if((Get-FileHash -LiteralPath $guest -Algorithm SHA256).Hash.ToLowerInvariant() -ne $plan.guest_sha256){throw 'Guard source mismatch'}
 if((Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $plan.guard_sha256){throw 'Guard launcher mismatch'}
+$lifecycleFile=Join-Path $PSScriptRoot 'WorkerLifecycle.ps1'
+if(-not (Test-Path -LiteralPath $lifecycleFile)){throw 'lifecycle_library_unavailable'}
+if((Get-FileHash -LiteralPath $lifecycleFile -Algorithm SHA256).Hash.ToLowerInvariant() -ne [string]$plan.lifecycle_sha256){throw 'Worker lifecycle adapter mismatch'}
+. $lifecycleFile -DataPath $Data
+if(-not (Initialize-AgcWorkerLifecycle)){throw 'lifecycle_library_unavailable'}
 # The old pinned watchdog is still alive during this one connection establishment.
 # This list is not a promise against disappearance: same-boot handshake must pass
 # BEFORE the operator may kill it. Once connected, never invoke WSL again.
-$running=((& "$env:SystemRoot\System32\wsl.exe" --list --running --quiet) -replace "`0",'') | ForEach-Object {$_.Trim()}
-if($LASTEXITCODE -ne 0 -or $running -notcontains 'AGC-Worker'){throw 'Existing worker distro is unavailable'}
 $process=$null
 $result=@{version=1;transaction=$Transaction;guard_pid=$PID;worker_sid=$self.User.Value;deadline=$plan.deadline;state='starting'}
 function Save-Guard {
@@ -31,13 +34,22 @@ function Save-Guard {
 }
 try {
     Save-Guard
+    $gate=Get-AgcWorkerGate
+    if (-not $gate.Allowed) { throw 'lifecycle_gate_closed' }
+    $running=@(Get-AgcWorkerRunningDistros -WslPath "$env:SystemRoot\System32\wsl.exe" -TimeoutMilliseconds 5000)
+    if($running -notcontains 'AGC-Worker'){throw 'Existing worker distro is unavailable'}
+    Assert-AgcWorkerGateOpen | Out-Null
     $info=New-Object Diagnostics.ProcessStartInfo
     $info.FileName="$env:SystemRoot\System32\wsl.exe"
     $info.Arguments="-d AGC-Worker -u root --exec /usr/bin/python3 -I -u - $($plan.worker_boot_id) $($plan.deadline)"
     $info.UseShellExecute=$false; $info.CreateNoWindow=$true
     $info.RedirectStandardInput=$true; $info.RedirectStandardOutput=$true; $info.RedirectStandardError=$true
-    $process=[Diagnostics.Process]::Start($info)
+    $process=Start-AgcWorkerAdmittedProcessInfo -StartInfo $info -TimeoutMilliseconds 2000
+    if($null -eq $process){throw 'Guard keeper admission refused'}
     $result.keeper_pid=$process.Id
+    # Recheck after creation; if the gate closed in the narrow window, kill
+    # only this just-created exact process before writing any guest input.
+    if(-not (Get-AgcWorkerGate).Allowed){$process.Kill(); throw 'lifecycle_gate_closed'}
     $process.StandardInput.Write([IO.File]::ReadAllText($guest))
     $process.StandardInput.Close()
     $errors=$process.StandardError.ReadToEndAsync()
