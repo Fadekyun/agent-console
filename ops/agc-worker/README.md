@@ -145,7 +145,10 @@ for hostile code: only reviewed source and fixed adapters may execute here.
   or power-on change. The startup task exits before WSL on Monday/Tuesday or
   battery. A five-minute task retry during permitted days allows recovery after
   AC reconnect or staff pressure; it never overlaps an existing watchdog. Two
-  minutes startup and three healthy minutes precede admission.
+  minutes startup and three healthy minutes precede admission. The Background
+  task is registered with `-AllowStartIfOnBatteries` and
+  `-DontStopIfGoingOnBatteries`, so an AC loss does not kill an already-draining
+  wrapper; `Start-Worker.ps1` still refuses new WSL when off AC.
 * CPU over 85% or available memory below max(8 GiB, 25% of host RAM) reduces
   the jobs slice to one CPU equivalent. Sustained memory pressure requests a
   checkpoint immediately, stops the job at 60 seconds, and stops only the worker

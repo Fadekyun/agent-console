@@ -152,6 +152,14 @@ branch; it reuses the existing stop helper semantics, which require the common
 library and report unconfirmed if it is missing. No fallback stop helper was
 added, and no missing-library fallback exists in the managed laptop path.
 
+The Runtime Background task uses `-AllowStartIfOnBatteries` and
+`-DontStopIfGoingOnBatteries` so Windows does not abruptly stop a wrapper that
+is draining after AC loss. `Start-Worker.ps1` still refuses new WSL launches
+when off AC; the settings do not add a wake timer or power-plan change. These
+flags apply **only** to Background: the one-shot Setup/Bootstrap maintenance
+tasks keep their default battery behavior and remain AC-only; no staff-resource
+work is enabled on battery.
+
 All ordinary process creation that can launch WSL uses the shared
 `RequireAdmission` path or `Start-AgcWorkerAdmittedProcessInfo`; the handover
 keeper is the only caller-built `ProcessStartInfo`, and it writes stdin/reads

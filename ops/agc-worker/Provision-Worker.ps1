@@ -324,7 +324,7 @@ if ($Phase -eq 'Runtime') {
     # machine. IgnoreNew keeps the already-running watchdog single-instance.
     $weekly.Repetition = (New-ScheduledTaskTrigger -Once -At '00:01' -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 1)).Repetition
     $triggers = @((New-ScheduledTaskTrigger -AtStartup),$weekly)
-    $settings = New-ScheduledTaskSettingsSet -Hidden -ExecutionTimeLimit (New-TimeSpan -Days 6) -MultipleInstances IgnoreNew -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+    $settings = New-ScheduledTaskSettingsSet -Hidden -ExecutionTimeLimit (New-TimeSpan -Days 6) -MultipleInstances IgnoreNew -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers -Settings $settings -User $credential.UserName -Password $credential.GetNetworkCredential().Password -RunLevel Limited -Force | Out-Null
     Start-ScheduledTask -TaskName $TaskName
     [pscustomobject]@{phase=$Phase;state='runtime_started_but_held';next='verify independent VM/cgroup/host telemetry before explicit hold removal'} | ConvertTo-Json -Compress

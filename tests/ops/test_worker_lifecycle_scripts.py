@@ -90,6 +90,16 @@ class WorkerScriptContractTests(unittest.TestCase):
         self.assertIn("Get-AgcWorkerGate", source("Invoke-WatchdogHandoverGuard.ps1"))
         self.assertIn("Start-AgcWorkerAdmittedProcessInfo", source("WorkerLifecycle.ps1"))
 
+    def test_background_runtime_task_survives_ac_loss_to_drain(self):
+        script = source("Provision-Worker.ps1")
+        runtime = [line for line in script.splitlines() if "-Days 6" in line]
+        self.assertEqual(len(runtime), 1)
+        self.assertIn("-AllowStartIfOnBatteries", runtime[0])
+        self.assertIn("-DontStopIfGoingOnBatteries", runtime[0])
+        start = source("Start-Worker.ps1")
+        self.assertIn("OnAC", start)
+        self.assertIn("worker_start_suppressed", start)
+
     def test_guest_install_is_managed_and_bounds_journald(self):
         script = source("install-linux.sh")
         self.assertIn("managed-mode", script)
