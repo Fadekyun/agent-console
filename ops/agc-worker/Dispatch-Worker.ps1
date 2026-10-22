@@ -50,8 +50,10 @@ try {
     if (-not $gate.Allowed) { throw 'worker_stopping' }
     $running = @(Get-AgcWorkerRunningDistros -WslPath 'wsl.exe' -TimeoutMilliseconds 3000)
     if ($running -notcontains 'AGC-Worker') { throw 'worker_offline' }
-    $result = Invoke-AgcWorkerAdmittedWsl -Arguments @('-d','AGC-Worker','-u','root','--exec','/usr/local/bin/agc-worker','rpc') -TimeoutMilliseconds 60000 -StandardInput ($line + "`n")
+    $result = Invoke-AgcWorkerAdmittedWsl -Arguments @('-d','AGC-Worker','-u','root','--exec','/usr/local/bin/agc-worker','rpc') -TimeoutMilliseconds 60000 -StandardInput ($line + "`n") -MaxOutputBytes 1048576
     if ($result.Started -ne $true -or $result.TimedOut -eq $true -or [string]::IsNullOrEmpty([string]$result.Stdout)) { throw 'rpc' }
+    if ($result.OutputTruncated -eq $true) { throw 'rpc_output_truncated' }
+    if ([Text.Encoding]::UTF8.GetByteCount([string]$result.Stdout) -gt 524288) { throw 'rpc_reply_too_large' }
     [Console]::Write([string]$result.Stdout)
     if ($null -ne $result.ExitCode -and [int]$result.ExitCode -ne 0) { exit 1 }
 } catch {

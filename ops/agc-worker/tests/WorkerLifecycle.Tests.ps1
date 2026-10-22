@@ -45,7 +45,7 @@ function Invoke-AgcBoundedProcess {
 }
 function Start-AgcAdmittedProcess { param([string]$FilePath,[string[]]$ArgumentList=@(),[string]$Owner='',[int]$TimeoutMilliseconds=2000,[switch]$PassThru) if ($global:FakeSuppressAdmission) { return $null }; return (New-Object Diagnostics.Process) }
 function Write-AgcLifecycleLog { param([string]$Stream,[string]$Event,[hashtable]$Data=@{}) Add-Content -LiteralPath $script:FakeLog -Value ($Event) }
-function Write-AgcStopReceipt { param([string]$Owner,[string]$RequestId,[string]$Outcome,[hashtable]$Data,[string]$Phase='stop') Add-Content -LiteralPath $script:FakeReceipt -Value ((@{requestId=$RequestId;outcome=$Outcome;phase=$Phase;data=$Data} | ConvertTo-Json -Compress -Depth 8)) }
+function Write-AgcStopReceipt { param([string]$Owner,[string]$RequestId,[ValidateSet('graceful','forced','unconfirmed')][string]$Outcome,[hashtable]$Data,[string]$Phase='stop') if ($global:FakeReceiptFailure) { throw 'forced_receipt_failure' } Add-Content -LiteralPath $script:FakeReceipt -Value ((@{requestId=$RequestId;outcome=$Outcome;phase=$Phase;data=$Data} | ConvertTo-Json -Compress -Depth 8)) }
 '@ | Set-Content -LiteralPath $library -Encoding UTF8
 $script:FakeLog = Join-Path $root 'lifecycle.log'
 $script:FakeReceipt = Join-Path $root 'receipt.log'
@@ -82,7 +82,7 @@ $env:FAKE_WSL_STATE = $state
 
 . (Join-Path $PSScriptRoot '..\WorkerLifecycle.ps1') -LibraryPath $library -DataPath $data
 Assert-True (Initialize-AgcWorkerLifecycle -Path $library) 'fake library loads'
-Assert-True ($null -ne (Get-Command Invoke-AgcWorkerGracefulDrain)) 'adapter functions loaded'
+Assert-True ($null -ne (Get-Command Invoke-AgcWorkerScopedTerminate)) 'adapter functions loaded'
 $remaining = Get-AgcWorkerRemainingMilliseconds -StopRequest ([pscustomobject]@{DeadlineUtc=[DateTimeOffset]::UtcNow.AddSeconds(10).ToString('o')})
 Assert-True ($remaining -gt 9000 -and $remaining -le 10000) 'remaining milliseconds from deadline'
 Assert-Equal (Get-AgcWorkerRemainingMilliseconds -StopRequest ([pscustomobject]@{DeadlineUtc=[DateTimeOffset]::UtcNow.AddSeconds(60).ToString('o')})) 25000 'remaining milliseconds clamped to 25s'
@@ -119,29 +119,9 @@ $calls = Get-Content -LiteralPath (Join-Path $state 'calls')
 Assert-True (($calls -join "`n") -match '--terminate AGC-Worker') 'scoped terminate exact distro'
 Assert-True (($calls -join "`n") -notmatch '-d AGC-Worker') 'fallback never uses -d launch path'
 
-# Graceful drain stops the supervisor before the scoped fallback.
-New-Item -ItemType Directory -Path $state -Force | Out-Null
-'1' | Set-Content -LiteralPath (Join-Path $state 'running')
-'1' | Set-Content -LiteralPath (Join-Path $state 'graceful_works')
-Remove-Item -LiteralPath (Join-Path $state 'calls') -ErrorAction SilentlyContinue
-$result = Invoke-AgcWorkerGracefulDrain -RequestId ('d' * 32) -ExpectedSid 'S-1-5-21-1' -StopRequest $stopObject -WslPath $fakeWsl -DataPath $data
-Assert-True ($result.termination_confirmed -eq $true) 'graceful drain confirmed'
-Assert-Equal $result.outcome 'graceful' 'graceful outcome'
-Assert-True ((Get-Content -LiteralPath $script:FakeReceipt -Raw) -match 'phase.*stop') 'stop phase forwarded to library receipt'
-$calls = @(Get-Content -LiteralPath (Join-Path $state 'calls'))
-Assert-True (($calls -join "`n") -match 'systemctl stop agc-worker.service') 'graceful drain stops supervisor'
-$firstLaunch = ($calls | Where-Object { $_ -match '^--list|^-d|^--terminate' } | Select-Object -First 1)
-Assert-True ($firstLaunch -match '^--list') 'graceful drain observes running state first'
-
-# Graceful failure falls back to exact-distro termination.
-'1' | Set-Content -LiteralPath (Join-Path $state 'running')
-Remove-Item -LiteralPath (Join-Path $state 'graceful_works') -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath (Join-Path $state 'calls') -ErrorAction SilentlyContinue
-$result = Invoke-AgcWorkerGracefulDrain -RequestId ('e' * 32) -ExpectedSid 'S-1-5-21-1' -StopRequest $stopObject -WslPath $fakeWsl -DataPath $data
-Assert-True ($result.termination_confirmed -eq $true) 'fallback drain confirmed'
-Assert-Equal $result.outcome 'forced_scoped' 'fallback drain outcome'
-$calls = Get-Content -LiteralPath (Join-Path $state 'calls')
-Assert-True (($calls -join "`n") -match '--terminate AGC-Worker') 'fallback uses exact distro termination'
+# Fixed-helper phases own graceful stop; the launcher adapter only exposes
+# exact scoped termination for local pressure and no -d drain path.
+Assert-True ($null -eq (Get-Command Invoke-AgcWorkerGracefulDrain -ErrorAction SilentlyContinue)) 'no launcher graceful -d helper'
 
 # Missing library is fail-safe; no WSL command is attempted.
 Remove-Item -LiteralPath (Join-Path $state 'calls') -ErrorAction SilentlyContinue
@@ -174,6 +154,17 @@ try { [void](Get-AgcWorkerRunningDistros -WslPath $fakeWsl -TimeoutMilliseconds 
 Assert-True $threw 'truncated output is not absence'
 $global:FakeTruncated = $false
 
+# A failed shared receipt is visible in the local receipt instead of silent.
+. $library
+[void](Initialize-AgcWorkerLifecycle -Path $library)
+'1' | Set-Content -LiteralPath (Join-Path $state 'running')
+$global:FakeReceiptFailure = $true
+$result = Invoke-AgcWorkerScopedTerminate -RequestId ('1' * 32) -ExpectedSid 'S-1-5-21-1' -StopRequest $stopObject -WslPath $fakeWsl -DataPath $data -Phase terminate
+Assert-True ($result.termination_confirmed -eq $true -and $result.shared_receipt_written -eq $false) 'failed shared receipt is visible'
+$local = Get-Content -LiteralPath (Join-Path $data (('1' * 32) + '.terminate.json')) -Raw | ConvertFrom-Json
+Assert-True ($local.sharedReceiptError -match 'forced_receipt_failure') 'local receipt records shared write failure'
+$global:FakeReceiptFailure = $false
+
 # Atomic admission refusal returns Suppressed without a process.
 . $library
 [void](Initialize-AgcWorkerLifecycle -Path $library)
@@ -191,6 +182,7 @@ $dispatch = Get-Content -LiteralPath (Join-Path $workerDir 'Dispatch-Worker.ps1'
 $owner = Get-Content -LiteralPath (Join-Path $workerDir 'worker-stop.ps1') -Raw
 $installer = Get-Content -LiteralPath (Join-Path $workerDir 'install-linux.sh') -Raw
 Assert-True ($start.IndexOf('Get-AgcWorkerGate') -lt $start.IndexOf('Start-AgcWorkerKeepAlive')) 'start gate precedes first launch'
+Assert-True ($start -match 'worker_coordinator_stop' -and $start -notmatch 'Invoke-AgcWorkerGracefulDrain') 'coordinator stop delegates to fixed helper'
 Assert-True ($start -notmatch '(?m)^\s*&\s*wsl\.exe') 'start has no unbounded wsl invocation'
 Assert-True ($stop -notmatch 'WaitForExit\(\s*\)') 'stop has no unbounded WaitForExit'
 Assert-True ($stop -notmatch 'wsl\.exe\s+-d') 'stop never uses -d launch path'

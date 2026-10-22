@@ -93,7 +93,7 @@ try {
         $gate = Get-AgcWorkerGate
         if ($null -ne $gate.StopRequest -or -not $gate.Allowed) {
             $stopRequest = $gate.StopRequest
-            Write-AgcWorkerLog -Event 'worker_stop_observed' -Data @{reason=$gate.Reason; request_id=$gate.StopRequest.RequestId}
+            Write-AgcWorkerLog -Event 'worker_stop_observed' -Data @{reason=$gate.Reason; request_id=(Get-AgcWorkerValue $gate.StopRequest 'RequestId')}
             break
         }
         $memory = [AgcHost]::ReadMemory()
@@ -119,11 +119,11 @@ try {
         $qualificationFile = Join-Path $Code 'policy-verified.json'
         if (Test-Path $qualificationFile) {
             $qualification = Get-Content -LiteralPath $qualificationFile -Raw | ConvertFrom-Json
-            $verified = $qualification.worker_sid -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -and $qualification.cgroup_verified -eq $true -and $qualification.quota_verified -eq $true -and $qualification.separate_vm_verified -eq $true -and $qualification.gpu_enabled -eq $false
+            $verified = (Get-AgcWorkerValue $qualification 'worker_sid') -eq [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -and (Get-AgcWorkerValue $qualification 'cgroup_verified') -eq $true -and (Get-AgcWorkerValue $qualification 'quota_verified') -eq $true -and (Get-AgcWorkerValue $qualification 'separate_vm_verified') -eq $true -and (Get-AgcWorkerValue $qualification 'gpu_enabled') -eq $false
         }
         $sample = @{observed_at=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()/1000.0;cpu_count=$logical;memory_total_bytes=$memory.totalPhysical;memory_available_bytes=$memory.availablePhysical;commit_total_bytes=$memory.totalCommit;commit_available_bytes=$memory.availableCommit;worker_memory_bytes=$workerBytes;disk_total_bytes=$drive.TotalSize;disk_free_bytes=$drive.AvailableFreeSpace;worker_disk_used_bytes=$diskBytes;cpu_percent=[Math]::Max(0,[Math]::Min(100,$cpuPercent));on_ac=[AgcHost]::OnAC();policy_verified=$verified;gpu_qualified=$false;memory_accounting='all_wsl_private_commit_plus_watchdog'}
         $sample.quota_total_bytes=$drive.QuotaTotalBytes
-        $sample.qualified_worker_sha256=if ($verified) {$qualification.worker_sha256} else {$null}
+        $sample.qualified_worker_sha256=if ($verified) {Get-AgcWorkerValue $qualification 'worker_sha256'} else {$null}
         $sample.quota_available_bytes=$drive.QuotaAvailableBytes
         $sample.disk_accounting=$drive.Source
         $payload = $sample | ConvertTo-Json -Compress
@@ -161,23 +161,33 @@ try {
         Start-Sleep -Seconds 2
     }
 } finally {
-    # Graceful phase: stop the supervisor first so it can checkpoint and
-    # terminate only its exact job cgroup. Admission is already closed by the
-    # gate/stop request; the scoped fallback never starts a stopped distro.
-    $requestId = if ($stopRequest -and $stopRequest.RequestId) { [string]$stopRequest.RequestId } else { 'local-' + [Guid]::NewGuid().ToString('N') }
-    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    # A coordinator stop with an exhausted deadline must remain unconfirmed;
-    # only a local, non-coordinator drain gets the ordinary 21 s budget.
-    $budget = if ($stopRequest) { Get-AgcWorkerRemainingMilliseconds -StopRequest $stopRequest } else { 21000 }
-    if ($suppressed) {
-        # A refused admitted launch must never fall back to a wsl -d path that
-        # could start the distro. Only exact-distro termination/verification.
-        [void](Invoke-AgcWorkerScopedTerminate -RequestId $requestId -ExpectedSid $sid -StopRequest $stopRequest `
-            -Reason 'admission_refused' -TotalBudgetMilliseconds $budget -Distro $Distro -DataPath $Data -Phase 'terminate')
+    # Release only the owned keeper first. A validated coordinator stop is
+    # owned by the fixed AGC-Worker-LifecycleStop helper (grace/terminate/
+    # verify phases); the launcher must not run wsl -d or --terminate and race
+    # that graceful checkpoint. An unhealthy gate with no validated request
+    # fails closed: release the keeper and perform no WSL operation. A local
+    # schedule/pressure drain while admission is still open may gracefully stop
+    # the guest supervisor, then use one scoped exact-distro fallback budget.
+    [void](Stop-AgcWorkerKeepAlive -Process $keepAlive -WaitMilliseconds 2000)
+    $requestId = [string](Get-AgcWorkerValue $stopRequest 'RequestId')
+    $deadlineUtc = [string](Get-AgcWorkerValue $stopRequest 'DeadlineUtc')
+    $failSafe = (Get-AgcWorkerValue $stopRequest 'FailSafe') -eq $true
+    $validatedStop = $stopRequest -and $requestId -and $deadlineUtc -and -not $failSafe
+    if ($validatedStop) {
+        Write-AgcWorkerLog -Event 'worker_coordinator_stop' -Data @{request_id=$requestId; owner='fixed_lifecycle_stop_helper'}
+    } elseif ($stopRequest -or $suppressed -or -not (Get-AgcWorkerGate).Allowed) {
+        Write-AgcWorkerLog -Event 'worker_drain_suppressed' -Data @{reason='no_validated_stop_request'}
     } else {
-        [void](Invoke-AgcWorkerGracefulDrain -RequestId $requestId -ExpectedSid $sid -StopRequest $stopRequest `
-            -Reason $(if ($stopRequest) { 'coordinator_stop' } else { 'worker_drain' }) `
-            -TotalBudgetMilliseconds $budget -Distro $Distro -DataPath $Data -KeepAlive $keepAlive)
+        $localBudget = 21000
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            [void](Invoke-AgcWorkerAdmittedWsl -Arguments @('-d',$Distro,'-u','root','--exec','/usr/bin/systemctl','stop','agc-worker.service') -TimeoutMilliseconds ([int][Math]::Min(10000,$localBudget)))
+        } catch { }
+        $remaining = [int64]$localBudget - $clock.ElapsedMilliseconds
+        if ($remaining -lt 0) { $remaining = 0 }
+        [void](Invoke-AgcWorkerScopedTerminate -RequestId ('local-' + [Guid]::NewGuid().ToString('N')) `
+            -ExpectedSid ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) `
+            -Reason 'local_drain' -TotalBudgetMilliseconds $remaining -Distro $Distro -DataPath $Data -Phase 'terminate')
     }
 }
 

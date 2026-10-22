@@ -89,8 +89,39 @@ class ShutdownAdmissionTests(InstanceTests):
         # Lease-loss constants are not shutdown budgets. The supervisor's stop
         # path must be independently bounded and much shorter.
         self.assertEqual(worker.LEASE_STOP_SECONDS, 75)
-        self.assertLessEqual(worker.SUPERVISOR_STOP_BUDGET_SECONDS, 10)
+        self.assertLessEqual(worker.SUPERVISOR_STOP_BUDGET_SECONDS, 12)
         self.assertLess(worker.SUPERVISOR_STOP_BUDGET_SECONDS, worker.LEASE_STOP_SECONDS)
+        self.assertEqual(
+            worker.WATCHDOG_JOIN_SECONDS + worker.STATE_LOCK_TIMEOUT_SECONDS
+            + worker.CHECKPOINT_TIMEOUT_SECONDS + worker.JOB_STOP_TIMEOUT_SECONDS
+            + worker.UNIT_QUERY_TIMEOUT_SECONDS,
+            worker.SUPERVISOR_STOP_BUDGET_SECONDS)
+        self.assertLessEqual(worker.SUPERVISOR_STOP_BUDGET_SECONDS, 12)
+
+    def test_actual_shutdown_termination_returns_within_phase_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = self.make_worker(tmp)
+            self.active(instance)
+            calls = []
+
+            def slow_run(args, check=True, timeout=None):
+                calls.append((args, timeout))
+                if "stop" in args:
+                    time.sleep(0.02)
+
+            def slow_empty(_unit):
+                time.sleep(0.02)
+                return True
+
+            started = time.monotonic()
+            with patch.object(worker, "run", side_effect=slow_run), \
+                 patch.object(instance, "unit_empty", side_effect=slow_empty), \
+                 patch.object(instance, "stop_lease_timer"):
+                instance.terminate("host_shutdown", defer_result=True)
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 1.0)
+            stop_call = next(call for call in calls if "stop" in call[0])
+            self.assertEqual(stop_call[1], worker.JOB_STOP_TIMEOUT_SECONDS)
 
 
 class DeferredResultTests(InstanceTests):
@@ -135,6 +166,8 @@ class DeferredResultTests(InstanceTests):
     def test_shutdown_defers_inventory_and_keeps_truthful_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
             instance = self.make_worker(tmp)
+            instance.adapters = {"agc.build": {"supports_checkpoint": True}}
+            instance.shutdown_event.set()
             receipt = self.active(instance)
             output = instance.state / "jobs" / instance.key(binding()) / "output"
             output.mkdir(parents=True)
@@ -142,8 +175,10 @@ class DeferredResultTests(InstanceTests):
             with patch.object(worker, "run"), \
                  patch.object(instance, "unit_empty", return_value=True), \
                  patch.object(instance, "collect_result") as collect, \
+                 patch.object(instance, "checkpoint") as checkpoint, \
                  patch.object(instance, "stop_lease_timer"):
                 instance.terminate("host_shutdown", defer_result=True)
+            checkpoint.assert_called_once()
             collect.assert_not_called()
             saved = instance.bound_receipt(binding())
             self.assertTrue(saved["termination_confirmed"])

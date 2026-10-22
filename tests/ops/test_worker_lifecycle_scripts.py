@@ -26,7 +26,12 @@ class WorkerScriptContractTests(unittest.TestCase):
         self.assertNotRegex(script, r"(?m)^\s*&\s*wsl\.exe")
         self.assertNotIn("WaitForExit()", script)
         self.assertNotIn("wsl.exe --shutdown", script)
-        self.assertIn("Invoke-AgcWorkerGracefulDrain", script)
+        self.assertIn("worker_coordinator_stop", script)
+        self.assertNotIn("Invoke-AgcWorkerGracefulDrain", script)
+        branch = script[script.index("if ($validatedStop)"):script.index("} elseif ($stopRequest")]
+        self.assertNotIn("Invoke-AgcWorker", branch)
+        self.assertNotIn("-d", branch)
+        self.assertNotIn("--terminate", branch)
 
     def test_stop_task_reads_gate_and_has_no_unbounded_wait(self):
         script = source("Stop-Worker.ps1")
@@ -60,6 +65,9 @@ class WorkerScriptContractTests(unittest.TestCase):
         self.assertIn("Read-BoundedRequest", script)
         self.assertIn("Get-AgcWorkerGate", script)
         self.assertIn("TimeoutMilliseconds 60000", script)
+        self.assertIn("MaxOutputBytes 1048576", script)
+        self.assertIn("rpc_output_truncated", script)
+        self.assertIn("rpc_reply_too_large", script)
         self.assertNotIn("WaitForExit()", script)
 
     def test_guest_install_is_managed_and_bounds_journald(self):
@@ -80,9 +88,27 @@ class WorkerScriptContractTests(unittest.TestCase):
     def test_worker_shutdown_constants_are_not_lease_grace(self):
         worker = (WORKER / "worker.py").read_text(encoding="utf-8")
         self.assertIn("LEASE_STOP_SECONDS = 75", worker)
-        self.assertIn("SUPERVISOR_STOP_BUDGET_SECONDS = 10", worker)
+        self.assertIn("SUPERVISOR_STOP_BUDGET_SECONDS = 11", worker)
+        self.assertIn("CHECKPOINT_TIMEOUT_SECONDS = 2", worker)
         self.assertIn("defer_result", worker)
         self.assertIn("shutdown_event", worker)
+
+
+REAL_LIBRARY = os.environ.get("AGC_LIFECYCLE_REAL_LIBRARY", "")
+
+
+@unittest.skipUnless(shutil.which("pwsh") and REAL_LIBRARY and Path(REAL_LIBRARY).is_file(),
+                     "pwsh/real Lifecycle.ps1 not available")
+class RealLibraryTests(unittest.TestCase):
+    def test_real_library_cross_integration(self):
+        env = {**os.environ, "AGC_LIFECYCLE_REAL_LIBRARY": REAL_LIBRARY,
+               "POWERSHELL_TELEMETRY_OPTOUT": "1"}
+        result = subprocess.run(
+            [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-File",
+             str(WORKER / "tests/RealLifecycle.Tests.ps1")],
+            cwd=ROOT, capture_output=True, text=True, timeout=120, env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("real lifecycle tests: PASS", result.stdout)
 
 
 @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")

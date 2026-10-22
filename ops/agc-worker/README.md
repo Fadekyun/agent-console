@@ -25,7 +25,11 @@ RPC call.
 The stop budget is shared with the coordinator's 25-second internal budget:
 12 seconds of stop-phase supervisor drain, 8 seconds of exact-distro
 `wsl.exe --terminate AGC-Worker` fallback, and 3 seconds of independent
-running-list verification. It never runs `wsl --shutdown`, kills
+running-list verification. Dispatch captures RPC replies up to 1 MiB, fails
+closed on truncation or a reply above the 512 KiB protocol maximum, and never
+writes partial JSON. Receipt outcomes are mapped to the shared
+`graceful`/`forced`/`unconfirmed` vocabulary; a failed shared write is visible in
+the local receipt. It never runs `wsl --shutdown`, kills
 `WSLService`/`vmcompute`/`vmmem`, unregisters the distro, or uses
 `wsl -d ... --exec` on a stopped distro. `Stop-Worker.ps1` remains the transient
 rollback task used by `Provision-Worker.ps1 -Phase Disable`; the coordinator uses
@@ -56,7 +60,7 @@ cannot preserve an old record. Receipts, objects, jobs and leases are never
 retention candidates.
 
 A `SIGTERM` closes admission through a lock-free event before the supervisor
-stops an active job. Shutdown defers result inventory (`result_deferred`) for
+requests a checkpoint (when the adapter supports it) and stops an active job. Shutdown defers result inventory (`result_deferred`) for
 central reconciliation instead of hashing artifacts inside the 25-second host
 budget; ordinary job completion keeps the full inventory contract. The
 75-second lease-loss constants remain lease detection, not shutdown grace.

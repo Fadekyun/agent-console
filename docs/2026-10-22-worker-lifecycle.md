@@ -17,14 +17,21 @@ policy is changed here.
 before each telemetry delivery, keepalive restart and supervisor start. A
 refused start logs `worker_start_suppressed` and exits `0`. A stop request is
 read through `Get-AgcStopRequest`; its `RequestId` and `DeadlineUtc` are bound to
-the drain receipt. `Dispatch-Worker.ps1` also refuses `start` and `stage` when
-the gate is closed and bounds both its stdin read and RPC call. Host telemetry
+the drain receipt. `Dispatch-Worker.ps1` refuses all RPC forwarding when the gate is closed and
+bounds both its stdin read and RPC call. It captures up to 1 MiB, rejects
+`OutputTruncated` as `rpc_output_truncated`, and rejects a reply above the
+512 KiB protocol maximum as `rpc_reply_too_large`; it never writes partial JSON
+to the central client. Host telemetry
 uses the existing per-SID quota counters for `worker_disk_used_bytes` instead of
 a recursive data-tree scan; an unavailable quota fails closed at the 300 GB
 ceiling. Missing-library startup exits without any synchronous fallback log I/O.
 
 The protected library is fixed at
-`C:\ProgramData\AGCLifecycle\Lifecycle.ps1`. Ordinary `wsl -d` commands use
+`C:\ProgramData\AGCLifecycle\Lifecycle.ps1`. The adapter restores
+`Set-StrictMode -Off` after dot-sourcing the library and uses explicit null-safe
+property access, so a real-library StrictMode 2.0 cannot turn an observed
+gate/qualification null into `PropertyNotFoundException`. Ordinary `wsl -d`
+commands use
 `Invoke-AgcBoundedProcess -RequireAdmission -Owner worker`, which holds the same
 global launch mutex as the coordinator, rechecks admission under it, starts
 under the lock and releases before stdin/output/wait. A refusal returns
@@ -46,6 +53,13 @@ Owner budget fits the coordinator's 25 s internal budget:
 
 The fallback never uses `wsl -d ... --exec` (which can start a stopped distro),
 never `wsl --shutdown`, and never kills `WSLService`, `vmcompute` or `vmmem`.
+When `Start-Worker` observes a validated coordinator stop, it releases only its
+owned keeper and exits: the fixed `AGC-Worker-LifecycleStop` helper owns the
+grace/terminate/verify phases. The launcher never runs `wsl -d` or `--terminate`
+for a coordinator stop. For a local schedule/pressure drain while admission is
+still open it may run an admitted bounded guest `systemctl stop` and then one
+scoped exact-distro fallback. An unhealthy gate with no validated request fails
+closed after releasing the keeper and performs no WSL operation.
 A running-list result is evidence only with `Started=true`, `ExitCode=0`, no
 timeout and no truncated output. `Started=false`, null exit, timeout, truncation
 or an exhausted timeout is an error and can never become an empty "stopped"
@@ -84,6 +98,10 @@ has been attempted. The request schema uses `phase=stop|terminate|verify`.
 Owner receipts are phase-bound: `receipts\worker\<requestId>.<phase>.json`, with
 top-level `phase` plus `schema`, `owner`, `requestId`, `bootId`, `outcome`,
 `stopped`, `verified`, `scope`, `source`, account name/SID, distro and details.
+The adapter maps local `forced_scoped`/`stopped_absent` to the library's
+`forced`/`graceful` vocabulary and preserves the local word in `details`; a
+failed shared-receipt write sets `shared_receipt_written=false` and a visible
+`sharedReceiptError` in the local receipt.
 The helper forwards the explicit `-Phase` to `Write-AgcStopReceipt`; it does not
 write an unphased receipt that the coordinator would reject.
 
@@ -99,12 +117,13 @@ write an unphased receipt that the coordinator would reject.
 - Ordinary job completion keeps the existing full inventory contract; there is
   no global scan deadline. An in-progress scan observes shutdown cancellation
   between files/chunks.
-- `LEASE_STOP_SECONDS = 75` remains lease-loss detection only. The systemd stop
-  budget is `SUPERVISOR_STOP_BUDGET_SECONDS = 10`. The supervisor's own shutdown
-  worst case is 3 s watchdog join + 1 s state-lock wait (original value, not
-  increased) + 8 s `systemctl stop` + 2 s empty check, about 14 s; the stop-phase
-  host budget is 12 s and the coordinator then records a failed/unconfirmed
-  phase rather than extending it.
+- `LEASE_STOP_SECONDS = 75` remains lease-loss detection only. The supervisor's
+  constrained shutdown budget is 11 s: 1 s watchdog join + 1 s state-lock wait
+  (original value, not increased) + 2 s checkpoint signal + 5 s bounded job
+  `systemctl stop` + 2 s empty check, inside the 12 s host stop phase. A stop command timeout is not treated
+  as proof; `unit_empty` still decides and the coordinator records an
+  unconfirmed phase rather than extending its deadline. Actual Windows timing
+  remains root-owned; the arithmetic is a bound, not a measured guarantee.
 - Guest fencing, generation checks, duplicate-start receipts and unknown
   external-write handling are unchanged.
 

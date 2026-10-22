@@ -26,7 +26,7 @@ function Write-Unconfirmed {
         accountName=$account;accountSid=$sid;distro=$Distro;
         details=@{phase=$Phase;reason=$Reason}}
     if (Get-Command Write-AgcWorkerStopReceipt -ErrorAction SilentlyContinue) {
-        [void](Write-AgcWorkerStopReceipt -Data $receipt -RequestId $(if($RequestId){$RequestId}else{'unknown'}) -Outcome 'unconfirmed' -Phase $Phase)
+        $receipt.shared_receipt_written = Write-AgcWorkerStopReceipt -Data $receipt -RequestId $(if($RequestId){$RequestId}else{'unknown'}) -Outcome 'unconfirmed' -Phase $Phase
     }
     [void](Save-AgcWorkerLocalStopReceipt -Receipt $receipt -DataPath $Data -RequestId $(if($RequestId){$RequestId}else{'unknown'}) -Phase $Phase)
     exit 1
@@ -120,7 +120,7 @@ try {
 $finished = [DateTimeOffset]::UtcNow
 $receipt.finishedUtc = $finished.ToString('o')
 $receipt.durationMs = [int]($finished - $started).TotalMilliseconds
-[void](Write-AgcWorkerStopReceipt -Data $receipt -RequestId $requestId -Outcome $receipt.outcome -Phase $phase)
+$receipt.shared_receipt_written = Write-AgcWorkerStopReceipt -Data $receipt -RequestId $requestId -Outcome $receipt.outcome -Phase $phase
 [void](Save-AgcWorkerLocalStopReceipt -Receipt $receipt -DataPath $Data -RequestId $requestId -Phase $phase)
 Write-AgcWorkerLog -Event 'worker_lifecycle_stop_phase' -Data @{request_id=$requestId;phase=$phase;outcome=$receipt.outcome;duration_ms=$receipt.durationMs}
 if ($phase -eq 'stop') { exit 0 }

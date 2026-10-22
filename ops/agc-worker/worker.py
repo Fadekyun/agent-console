@@ -38,10 +38,15 @@ LEASE_STOP_SECONDS = 75
 LEASE_TIMER_SECONDS = 80
 # A host lifecycle stop is not a lost lease. systemd stops this supervisor with
 # a bounded budget; result inventories are deferred for later reconciliation.
-# Total worst case: 3s watchdog join + 1s state-lock wait + 8s systemctl stop
-# + 2s unit query = 14s. The coordinator records an unconfirmed phase instead
-# of extending that deadline.
-SUPERVISOR_STOP_BUDGET_SECONDS = 10
+# Total worst case: 1s watchdog join + 1s state-lock wait + 2s checkpoint signal
+# + 5s bounded job stop + 2s unit query = 11s, inside the host 12s stop phase.
+# The coordinator records an unconfirmed phase instead of extending its deadline.
+WATCHDOG_JOIN_SECONDS = 1
+STATE_LOCK_TIMEOUT_SECONDS = 1
+CHECKPOINT_TIMEOUT_SECONDS = 2
+JOB_STOP_TIMEOUT_SECONDS = 5
+UNIT_QUERY_TIMEOUT_SECONDS = 2
+SUPERVISOR_STOP_BUDGET_SECONDS = 11
 LOG_DIR = Path("/var/log/agc-worker")
 LOG_MAX_BYTES = 1024 * 1024
 LOG_BACKUPS = 7
@@ -298,10 +303,11 @@ def read_line(fd, limit, timeout):
     raise ValueError("request_size")
 
 
-def run(args, check=True):
-    timeout = 20
-    if args and args[0] == "systemctl":
-        timeout = 8 if len(args) > 1 and args[1] == "stop" else 2
+def run(args, check=True, timeout=None):
+    if timeout is None:
+        timeout = 20
+        if args and args[0] == "systemctl":
+            timeout = 8 if len(args) > 1 and args[1] == "stop" else 2
     result = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
                             env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"})
     if check and result.returncode:
@@ -558,7 +564,8 @@ class Worker:
         atomic_json(self.receipt_path({k: receipt[k] for k in BINDING}), receipt)
 
     def unit_info(self, unit):
-        result = run(["systemctl", "show", unit, "--property=ActiveState,SubState,Result,ExecMainStatus,ControlGroup,MemoryPeak"], check=False)
+        result = run(["systemctl", "show", unit, "--property=ActiveState,SubState,Result,ExecMainStatus,ControlGroup,MemoryPeak"],
+                    check=False, timeout=UNIT_QUERY_TIMEOUT_SECONDS)
         return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
 
     def unit_empty(self, unit):
@@ -744,7 +751,21 @@ class Worker:
             return
         defer_result = defer_result or self.shutdown_event.is_set()
         started = time.monotonic()
-        run(["systemctl", "stop", receipt["unit"]], check=False)
+        if self.shutdown_event.is_set() and self.adapters.get(receipt["kind"], {}).get("supports_checkpoint"):
+            # Ask the adapter to persist its checkpoint before the bounded stop.
+            # This is a durable intent request, not proof the adapter finished;
+            # output and the deferred receipt remain preserved either way.
+            try:
+                self.checkpoint(receipt)
+            except (ValueError, KeyError, OSError, subprocess.TimeoutExpired):
+                pass
+        try:
+            run(["systemctl", "stop", receipt["unit"]], check=False,
+                timeout=JOB_STOP_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            # systemd may still be stopping this exact unit; unit_empty below
+            # decides whether termination is proven. Never wait past the budget.
+            pass
         receipt.update(state="unknown" if receipt["production_writes"] else "interrupted",
                        reason=reason, termination_confirmed=self.unit_empty(receipt["unit"]),
                        shutdown_requested=bool(self.shutdown_requested))
@@ -1118,8 +1139,8 @@ def main():
             finally:
                 stopping.set()
                 instance.request_shutdown("supervisor_shutdown")
-                watchdog.join(timeout=3)
-                if instance.lock.acquire(timeout=1):
+                watchdog.join(timeout=WATCHDOG_JOIN_SECONDS)
+                if instance.lock.acquire(timeout=STATE_LOCK_TIMEOUT_SECONDS):
                     try:
                         instance.terminate("supervisor_shutdown", defer_result=True)
                     finally:

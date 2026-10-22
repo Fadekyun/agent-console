@@ -24,6 +24,9 @@ $script:AgcWorkerVerifyMilliseconds = 3000
 # Load at script scope so functions remain available after initialization.
 if (Test-Path -LiteralPath $script:AgcWorkerLifecyclePath -PathType Leaf) {
     try { . $script:AgcWorkerLifecyclePath } catch { }
+    # The real library sets StrictMode 2.0 in this scope; worker scripts use
+    # explicit null guards and must not inherit property-throwing behaviour.
+    Set-StrictMode -Off
 }
 
 function Get-AgcWorkerIdentity {
@@ -60,6 +63,14 @@ function Initialize-AgcWorkerLifecycle {
         $script:AgcWorkerLoaded = $false
         return $false
     }
+}
+
+function Get-AgcWorkerValue {
+    param($Object, [string]$Name, $Default = $null)
+    if ($null -eq $Object) { return $Default }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) { return $Default }
+    return $property.Value
 }
 
 function Write-AgcWorkerLog {
@@ -150,13 +161,14 @@ function Invoke-AgcWorkerAdmittedWsl {
         [Parameter(Mandatory)][string[]]$Arguments,
         [Parameter(Mandatory)][int]$TimeoutMilliseconds,
         [string]$StandardInput,
+        [int]$MaxOutputBytes = 1048576,
         [string]$WslPath = 'wsl.exe'
     )
     if (-not (Test-AgcWorkerAdmissionApi)) { throw 'atomic_admission_unavailable' }
     if ($TimeoutMilliseconds -le 0) { throw 'lifecycle_deadline_exhausted' }
     $result = Invoke-AgcBoundedProcess -FilePath $WslPath -ArgumentList $Arguments `
         -TimeoutMilliseconds $TimeoutMilliseconds -StandardInput $StandardInput `
-        -RequireAdmission -Owner $script:AgcWorkerOwner
+        -MaxOutputBytes $MaxOutputBytes -RequireAdmission -Owner $script:AgcWorkerOwner
     if ($null -eq $result) { throw 'admission_result_missing' }
     if ($result.Started -ne $true) {
         if ($result.Suppressed -eq $true) { return $result }  # refused, no process
@@ -233,13 +245,28 @@ function Write-AgcWorkerStopReceipt {
         [ValidateSet('stop','terminate','verify')][string]$Phase = 'stop'
     )
     $Data['phase'] = $Phase
+    # The shared library only accepts graceful/forced/unconfirmed. Keep the
+    # richer local wording in details and never let a binding exception look
+    # like a successful shared receipt.
+    $sharedOutcome = switch ($Outcome) {
+        'forced_scoped' { 'forced' }
+        'stopped_absent' { 'graceful' }
+        'graceful' { 'graceful' }
+        'forced' { 'forced' }
+        default { 'unconfirmed' }
+    }
+    $Data['outcomeDetail'] = $Outcome
     $written = $false
     if ($script:AgcWorkerLoaded) {
         try {
-            Write-AgcStopReceipt -Owner $script:AgcWorkerOwner -RequestId $RequestId `
-                -Outcome $Outcome -Data $Data -Phase $Phase
+            $null = Write-AgcStopReceipt -Owner $script:AgcWorkerOwner -RequestId $RequestId `
+                -Outcome $sharedOutcome -Data $Data -Phase $Phase
             $written = $true
-        } catch { }
+        } catch {
+            $Data['sharedReceiptError'] = $_.Exception.GetType().Name + ': ' + $_.Exception.Message
+        }
+    } else {
+        $Data['sharedReceiptError'] = 'lifecycle_library_unavailable'
     }
     return $written
 }
@@ -324,88 +351,10 @@ function Invoke-AgcWorkerScopedTerminate {
     $receipt.finished_at = $finished.ToString('o')
     $receipt.duration_ms = [int]($finished - $started).TotalMilliseconds
     $receipt.phase = $Phase
-    [void](Write-AgcWorkerStopReceipt -Data $receipt -RequestId $RequestId -Outcome $receipt.outcome -Phase $Phase)
+    $receipt.shared_receipt_written = Write-AgcWorkerStopReceipt -Data $receipt -RequestId $RequestId -Outcome $receipt.outcome -Phase $Phase
     [void](Save-AgcWorkerLocalStopReceipt -Receipt $receipt -DataPath $DataPath -RequestId $RequestId -Phase $Phase)
     if ($receipt.termination_confirmed -eq $true) {
         Write-AgcWorkerLog -Event 'worker_stopped' -Data @{request_id = $RequestId; outcome = $receipt.outcome; duration_ms = $receipt.duration_ms}
     }
-    return [pscustomobject]$receipt
-}
-
-function Invoke-AgcWorkerGracefulDrain {
-    [CmdletBinding()]
-    param(
-        [string]$RequestId = 'local',
-        [string]$ExpectedSid = '',
-        [object]$StopRequest = $null,
-        [string]$Reason = 'lifecycle_stop',
-        [int]$TotalBudgetMilliseconds = -1,
-        [string]$WslPath = 'wsl.exe',
-        [string]$Distro = 'AGC-Worker',
-        [string]$DataPath = $script:AgcWorkerDataPath,
-        $KeepAlive = $null
-    )
-    if ($TotalBudgetMilliseconds -lt 0) {
-        $TotalBudgetMilliseconds = Get-AgcWorkerRemainingMilliseconds -StopRequest $StopRequest
-    }
-    $budgetExhausted = ($TotalBudgetMilliseconds -eq 0)
-    $started = [DateTimeOffset]::UtcNow
-    $deadline = $started.AddMilliseconds($TotalBudgetMilliseconds)
-    $identity = Get-AgcWorkerIdentity
-    function Remaining([int]$Cap) {
-        $value = [int64]($deadline - [DateTimeOffset]::UtcNow).TotalMilliseconds
-        if ($value -lt 0) { $value = 0 }
-        if ($value -gt $Cap) { $value = $Cap }
-        return [int]$value
-    }
-    $receipt = @{
-        version = 1; request_id = $RequestId; worker_sid = $(if($ExpectedSid){$ExpectedSid}else{$identity.Sid}); owner = 'worker'
-        account = $identity.Name
-        distro = $Distro; reason = $Reason; state = 'draining'
-        termination_confirmed = $false; outcome = 'unconfirmed'
-        started_at = $started.ToString('o')
-    }
-    try {
-        if ($budgetExhausted) { throw 'lifecycle_deadline_exhausted' }
-        # Admission was closed by the caller before this function. Graceful
-        # phase: supervisor SIGTERM first (it checkpoints and terminates only
-        # its exact job cgroup). Never stop the jobs slice before admission.
-        $running = @(Get-AgcWorkerRunningDistros -WslPath $WslPath -TimeoutMilliseconds (Remaining 3000))
-        if ($running -contains $Distro) {
-            $graceful = Invoke-AgcWorkerWsl -Arguments @('-d',$Distro,'-u','root','--exec',
-                '/usr/bin/systemctl','stop','agc-worker.service') -TimeoutMilliseconds (Remaining 10000) -WslPath $WslPath
-            $receipt.graceful_ms = 10000
-            if ($graceful.TimedOut -eq $true) { $receipt.graceful_timed_out = $true }
-            if ($null -ne $graceful.ExitCode -and [int]$graceful.ExitCode -ne 0) {
-                $receipt.graceful_exit_code = [int]$graceful.ExitCode
-            }
-        }
-        [void](Stop-AgcWorkerKeepAlive -Process $KeepAlive -WaitMilliseconds (Remaining 2000))
-        $running = @(Get-AgcWorkerRunningDistros -WslPath $WslPath -TimeoutMilliseconds (Remaining 2000))
-        if ($running -contains $Distro) {
-            # Scoped fallback phase: terminate only this account's exact distro.
-            $receipt.terminate_used = $true
-            $terminate = Invoke-AgcWorkerWsl -Arguments @('--terminate',$Distro) `
-                -TimeoutMilliseconds (Remaining 8000) -WslPath $WslPath
-            if ($terminate.TimedOut -eq $true) { $receipt.terminate_timed_out = $true }
-        }
-        $running = @(Get-AgcWorkerRunningDistros -WslPath $WslPath -TimeoutMilliseconds (Remaining 3000))
-        if ($running -contains $Distro) { throw 'worker_distro_still_running' }
-        $receipt.state = 'stopped'
-        $receipt.termination_confirmed = $true
-        $receipt.outcome = if ($receipt.ContainsKey('terminate_used') -or $receipt.ContainsKey('graceful_timed_out') -or $receipt.ContainsKey('graceful_exit_code')) { 'forced_scoped' } else { 'graceful' }
-    } catch {
-        $receipt.state = 'unknown'
-        $receipt.error_type = $_.Exception.GetType().Name
-        $receipt.message = 'Worker shutdown not confirmed; retain queue reservations and inspect the stop receipt'
-        Write-AgcWorkerLog -Event 'worker_drain_unconfirmed' -Data @{request_id = $RequestId; error = $receipt.error_type}
-    }
-    $finished = [DateTimeOffset]::UtcNow
-    $receipt.finished_at = $finished.ToString('o')
-    $receipt.duration_ms = [int]($finished - $started).TotalMilliseconds
-    $receipt.phase = 'stop'
-    [void](Write-AgcWorkerStopReceipt -Data $receipt -RequestId $RequestId -Outcome $receipt.outcome -Phase 'stop')
-    [void](Save-AgcWorkerLocalStopReceipt -Receipt $receipt -DataPath $DataPath -RequestId $RequestId -Phase 'stop')
-    Write-AgcWorkerLog -Event 'worker_drain_finished' -Data @{request_id = $RequestId; outcome = $receipt.outcome; duration_ms = $receipt.duration_ms}
     return [pscustomobject]$receipt
 }
