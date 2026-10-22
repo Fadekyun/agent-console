@@ -88,7 +88,7 @@ if ($existing) {
 $credential = Read-TaskCredential
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $ExpectedArguments
 $settings = New-ScheduledTaskSettingsSet -Hidden -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
-    -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    -MultipleInstances Queue -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $TaskName -Action $action -Settings $settings `
     -User $credential.UserName -Password $credential.GetNetworkCredential().Password `
     -RunLevel Limited -Force | Out-Null
