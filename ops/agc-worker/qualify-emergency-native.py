@@ -68,7 +68,7 @@ def wait_for(predicate, seconds, label):
 
 
 native_run = worker.run
-def isolated_run(args, check=True):
+def isolated_run(args, check=True, timeout=None):
     args = list(args)
     if args[0] == 'systemd-run':
         unit = next(v.split('=', 1)[1] for v in args if v.startswith('--unit='))
@@ -79,7 +79,7 @@ def isolated_run(args, check=True):
             units.add(unit); launched.append(unit)
             assert not any(v.startswith('--property=LoadCredential=') for v in args)
             args.insert(args.index('--'), '--property=PrivateNetwork=yes')
-    return native_run(args, check)
+    return native_run(args, check, timeout=timeout)
 worker.run = isolated_run
 original_admission = worker.admission_holds
 worker.admission_holds = lambda host, now=None, required_memory=0: [

@@ -38,8 +38,11 @@ the persistent task below.
 `Install-LifecycleStopTask.ps1` (administrator context) installs
 `AGC-Worker-LifecycleStop` with the fixed action
 `owners\worker-stop.ps1 -FromTask`, the existing `agc-worker` password-task
-principal and the existing DPAPI credential. It never disables the account,
-rotates the password or changes other tasks. The owner helper rejects SYSTEM
+principal and the existing DPAPI credential. The fixed stop task is registered
+with `-MultipleInstances Queue`; an immediate next phase is queued even if the
+previous helper has written its receipt but not yet exited. Background keeps
+`IgnoreNew`. It never disables the account, rotates the password or changes
+other tasks. The owner helper rejects SYSTEM
 and non-worker identities, reads `requests\worker\current.json`, validates
 schema/owner/request/boot/deadline against the registry gate, and runs only the
 requested `stop`, `terminate` or `verify` phase (an absent/unknown phase
@@ -336,7 +339,10 @@ not yet implemented; full disks hold new work rather than discard unacknowledged
 output. Acknowledged build scratch is reclaimed immediately.
 
 `qualify-native.sh` is an operator-only qualification script for the installed
-worker core. Run it through `Setup-Worker.ps1` with a reviewed SHA and a 360-second
+worker core. Its `scoped_run`/`command` shim accepts and forwards the optional
+bounded `timeout` used by `worker.run`, including job cleanup; the emergency
+native shim does the same. This changes no qualification case or assertion.
+Run it through `Setup-Worker.ps1` with a reviewed SHA and a 360-second
 timeout after toolchain work finishes. It requires the production worker held
 and drained, creates its own registry/state and cgroup slice, and runs five jobs
 sequentially: success/duplicate, real 64 MiB OOM, timeout with a child process,

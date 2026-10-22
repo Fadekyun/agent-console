@@ -43,8 +43,10 @@ spec = importlib.util.spec_from_file_location('qualified_worker', source)
 worker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(worker)
 
-def command(args, *, check=True):
-    result = subprocess.run(args, capture_output=True, text=True, timeout=25,
+def command(args, *, check=True, timeout=None):
+    if timeout is None:
+        timeout = 25
+    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
                             env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C'})
     if check and result.returncode:
         raise RuntimeError('native control failed: ' + args[0] + ' ' + result.stderr[-2000:])
@@ -68,7 +70,7 @@ def qualification_admission(host, now=None, required_memory=0):
             if hold != 'policy_unverified']
 worker.admission_holds = qualification_admission
 
-def scoped_run(args, check=True):
+def scoped_run(args, check=True, timeout=None):
     args = list(args)
     if args[0] == 'systemd-run':
         unit = next(value.split('=', 1)[1] for value in args if value.startswith('--unit='))
@@ -85,7 +87,7 @@ def scoped_run(args, check=True):
     if args[:3] == ['systemctl', 'set-property', '--runtime']:
         assert args[3] == qual_slice
         args = [value.replace('CPUQuota=1200%', 'CPUQuota=100%') for value in args]
-    return command(args, check=check)
+    return command(args, check=check, timeout=timeout)
 worker.run = scoped_run
 
 adapter = base / 'harmless-adapter.py'

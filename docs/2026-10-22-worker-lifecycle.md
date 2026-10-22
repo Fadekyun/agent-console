@@ -89,7 +89,12 @@ with the registry gate before any WSL command.
 **Task mapping:** Windows coordinator configuration must map `stopTask`,
 `terminateTask` and `verifyTask` to the same phase-aware
 `AGC-Worker-LifecycleStop` task; the helper selects the phase from the request
-file and writes `<requestId>.<phase>.json`.
+file and writes `<requestId>.<phase>.json`. The fixed stop task is registered
+with `-MultipleInstances Queue`: a phase receipt can be written before the
+helper process exits, so the coordinator's immediate next phase must queue
+rather than be dropped by `IgnoreNew`. The Background watchdog keeps
+`IgnoreNew` (one wrapper only). This is a scheduler-setting correction only;
+credentials, request/deadline binding and helper phase semantics are unchanged.
 
 **Coordinator interface dependency:** the request file must include a `phase`
 field with `stop`, `terminate` or `verify`. The helper defaults an absent or
@@ -180,12 +185,20 @@ objects, jobs, leases and data are never retention candidates.
 
 ## Qualification state (do not infer acceptance)
 
-The live laptop worker is currently `worker.py 43EA09CB…` while the existing
-policy seal still names `c6dacde9…`; the distro is `held`. This patch's reviewed
-worker source is a new hash again. Keep both the Linux and central holds and
-produce fresh native/toolchain receipts for the installed hash before releasing
-only the Linux hold. Never rewrite `policy-verified.json` or reuse historical
-receipts. The stale seal is expected, not evidence of a passed qualification.
+The live post-recovery inspection shows installed `worker.py 7157f540…` with
+`hold=true` and the service active; the existing policy seal still names
+`c6dacde9…`, so the worker remains held/out of seal. The native qualifier ran but
+failed inside `unit_info()` because its monkey-patched `scoped_run()` shim did
+not accept the new `timeout` keyword (`scoped_run() got an unexpected keyword
+argument 'timeout'`). The native and emergency-native shims now accept the
+optional bounded timeout and forward it to the real runner; the cleanup path
+uses the same shim. This is a qualification-plumbing fix only — no test case,
+assertion, receipt requirement or hold is bypassed.
+
+Keep both the Linux and central holds and produce fresh native/toolchain
+receipts for the installed hash before releasing only the Linux hold. Never
+rewrite `policy-verified.json` or reuse historical receipts. A failed or stale
+receipt remains unconfirmed, not evidence of a passed qualification.
 
 ## Verification performed locally
 

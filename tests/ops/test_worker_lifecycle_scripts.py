@@ -90,6 +90,24 @@ class WorkerScriptContractTests(unittest.TestCase):
         self.assertIn("Get-AgcWorkerGate", source("Invoke-WatchdogHandoverGuard.ps1"))
         self.assertIn("Start-AgcWorkerAdmittedProcessInfo", source("WorkerLifecycle.ps1"))
 
+    def test_stop_task_queues_while_background_stays_single_instance(self):
+        installer = source("Install-LifecycleStopTask.ps1")
+        provision = source("Provision-Worker.ps1")
+        self.assertIn("-MultipleInstances Queue", installer)
+        self.assertNotIn("-MultipleInstances IgnoreNew", installer)
+        background = [line for line in provision.splitlines() if "-Days 6" in line]
+        self.assertEqual(len(background), 1)
+        self.assertIn("-MultipleInstances IgnoreNew", background[0])
+        # Queue is the only intended change: the existing password-task
+        # principal/credential path and limited run level stay intact.
+        self.assertIn("Read-TaskCredential", installer)
+        self.assertIn("$credential.GetNetworkCredential().Password", installer)
+        self.assertIn("-User $credential.UserName", installer)
+        self.assertIn("-RunLevel Limited", installer)
+        self.assertNotIn("Disable-LocalUser", installer)
+        self.assertNotIn("Set-LocalUser", installer)
+        self.assertNotIn("New-TaskPassword", installer)
+
     def test_background_runtime_task_survives_ac_loss_to_drain(self):
         script = source("Provision-Worker.ps1")
         runtime = [line for line in script.splitlines() if "-Days 6" in line]
