@@ -1,3 +1,13 @@
+## Worker lifecycle gate and bounded shutdown — 2026-10-22 (#206)
+
+The deployed worker consumes the Windows AGCLifecycle gate instead of launching WSL independently. Owner stop handling is split into explicit stop, exact-distro fallback and verification phases; guest SIGTERM closure no longer depends on the watchdog lock and shutdown defers expensive result inventory.
+
+- [x] Gate every ordinary WSL launch/recovery through the atomic `RequireAdmission` API and suppress closed-gate/refused starts with exit 0; bind phase receipts to gate request/boot/deadline.
+- [x] Add a nonthrowing worker-side adapter, bounded WSL/RPC helpers and a persistent fixed `AGC-Worker-LifecycleStop` task using the existing password principal/DPAPI credential without disabling the account.
+- [x] Close guest admission before job termination and defer artifact hashing on shutdown while preserving truthful unknown/deferred receipts and fences.
+- [x] Ship stage-only managed guest install (no independent boot enablement, `Restart=no`), 128 MiB/7-day journald, 1 MiB × 8 worker log rotation and record-age 7-day pruning.
+- [ ] Root requalifies the changed worker hash and actually verifies task registration, WSL termination, attended shutdown and physical sleep behavior.
+
 ## AGC laptop workload migration — 2026-10-17 (#203)
 
 Temporary artifact capacity now defers safely, and authenticated owners have a compute-page pause/resume control. Dedicated organizer credential provisioning and isolated TV Python test support are included.

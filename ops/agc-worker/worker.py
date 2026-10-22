@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import pwd
+import queue
 import re
 import select
 import shutil
@@ -35,6 +36,18 @@ CHUNK = 256 * 1024
 MAX_ARTIFACT = 2 * 1024**3
 LEASE_STOP_SECONDS = 75
 LEASE_TIMER_SECONDS = 80
+# A host lifecycle stop is not a lost lease. systemd stops this supervisor with
+# a bounded budget; result inventories are deferred for later reconciliation.
+# Total worst case: 3s watchdog join + 1s state-lock wait + 8s systemctl stop
+# + 2s unit query = 14s. The coordinator records an unconfirmed phase instead
+# of extending that deadline.
+SUPERVISOR_STOP_BUDGET_SECONDS = 10
+LOG_DIR = Path("/var/log/agc-worker")
+LOG_MAX_BYTES = 1024 * 1024
+LOG_BACKUPS = 7
+LOG_TOTAL_BYTES = 8 * 1024 * 1024
+LOG_WRITE_LOCK = threading.RLock()
+LOG_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 STATE_ROOT = Path("/var/lib/agc-worker")
 CONFIG_ROOT = Path("/etc/agc-worker")
 RUNTIME_ROOT = Path("/run/agc-worker")
@@ -52,6 +65,132 @@ HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 
 
+class ResultDeferred(Exception):
+    """Result inventory could not finish inside its bounded collection budget."""
+
+
+def _log_line(event, fields):
+    record = {"ts": dt.datetime.now(dt.timezone.utc).isoformat(), "event": event}
+    record.update({key: value for key, value in fields.items()
+                   if isinstance(value, (str, int, float, bool)) or value is None})
+    return (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def _rotate_log(path):
+    for index in range(LOG_BACKUPS - 1, 0, -1):
+        source = path.with_name(path.name + "." + str(index))
+        if source.exists():
+            os.replace(source, path.with_name(path.name + "." + str(index + 1)))
+    if path.exists():
+        os.replace(path, path.with_name(path.name + ".1"))
+
+
+def _oldest_record_epoch(path):
+    """Read one bounded first line; unknown/legacy content falls back to mtime."""
+    try:
+        with Path(path).open("rb") as stream:
+            line = stream.readline(4096)
+        record = json.loads(line.decode("utf-8", "strict"))
+        stamp = str(record.get("ts", ""))
+        if stamp:
+            return dt.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except (OSError, ValueError, TypeError, UnicodeDecodeError):
+        pass
+    try:
+        return Path(path).stat().st_mtime
+    except OSError:
+        return None
+
+
+def prune_logs(directory=LOG_DIR, now=None):
+    """Age/size-prune only this worker's own log stream.
+
+    Receipts, leases, objects, jobs and configured data are never candidates.
+    The oldest bounded record controls eviction, so a fresh mtime cannot keep
+    an eight-day-old first record alive. Whole-segment eviction is deliberate
+    and may shorten retention; it never lengthens it.
+    """
+    now = time.time() if now is None else now
+    directory = Path(directory)
+    try:
+        with LOG_WRITE_LOCK:
+            paths = [path for path in directory.glob("worker.log*")
+                     if path.is_file() and not path.is_symlink()]
+            for path in paths:
+                oldest = _oldest_record_epoch(path)
+                if oldest is None or now - oldest > LOG_MAX_AGE_SECONDS:
+                    path.unlink()
+                    continue
+            remaining = sorted((path for path in paths if path.exists()),
+                               key=lambda path: path.stat().st_mtime)
+            total = sum(path.stat().st_size for path in remaining)
+            while total > LOG_TOTAL_BYTES and remaining:
+                oldest = remaining.pop(0)
+                total -= oldest.stat().st_size
+                oldest.unlink()
+    except OSError:
+        pass
+
+
+LOG_QUEUE = queue.Queue(maxsize=256)
+LOG_THREAD = None
+LOG_THREAD_LOCK = threading.Lock()
+
+
+def _write_log(directory, data, now=None):
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = directory / "worker.log"
+    now = time.time() if now is None else now
+    with LOG_WRITE_LOCK:
+        if path.exists():
+            current_day = dt.datetime.fromtimestamp(path.stat().st_mtime, dt.timezone.utc).date()
+            today = dt.datetime.fromtimestamp(now, dt.timezone.utc).date()
+            if current_day != today or path.stat().st_size + len(data) > LOG_MAX_BYTES:
+                _rotate_log(path)
+        descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+        try:
+            os.write(descriptor, data)
+        finally:
+            os.close(descriptor)
+        prune_logs(directory, now=now)
+
+
+def _log_writer():
+    while True:
+        directory, data = LOG_QUEUE.get()
+        try:
+            _write_log(directory, data)
+        except (OSError, ValueError):
+            pass
+        finally:
+            LOG_QUEUE.task_done()
+
+
+def log_event(directory, event, **fields):
+    """Queue a low-volume JSONL transition; a stalled disk cannot block work."""
+    global LOG_THREAD
+    try:
+        data = _log_line(event, fields)
+        if LOG_THREAD is None or not LOG_THREAD.is_alive():
+            with LOG_THREAD_LOCK:
+                if LOG_THREAD is None or not LOG_THREAD.is_alive():
+                    LOG_THREAD = threading.Thread(target=_log_writer, name="agc-worker-log",
+                                                  daemon=True)
+                    LOG_THREAD.start()
+        try:
+            LOG_QUEUE.put_nowait((str(directory), data))
+        except queue.Full:
+            pass  # Dropping a diagnostic record never changes lifecycle state.
+    except (OSError, ValueError, RuntimeError, TypeError):
+        pass
+
+
+def flush_logs():
+    """Test/operator helper; never called inside the shutdown deadline."""
+    LOG_QUEUE.join()
+
+
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"),
                       ensure_ascii=False, allow_nan=False).encode("utf-8")
@@ -62,6 +201,19 @@ def digest_file(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def digest_file_bounded(path, deadline=None, cancel=None):
+    """Hash one result file with optional deadline/cancellation checks."""
+    hasher = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            if cancel is not None and cancel.is_set():
+                raise ResultDeferred("result_collection_cancelled")
+            if deadline is not None and time.monotonic() > deadline:
+                raise ResultDeferred("result_collection_deadline")
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 def fsync_directory(path):
     fd = os.open(path, os.O_DIRECTORY)
     try:
@@ -70,11 +222,14 @@ def fsync_directory(path):
         os.close(fd)
 
 
-def install_object(objects, digest, size, stream):
+def install_object(objects, digest, size, stream, deadline=None, cancel=None):
     """A named object is durable and hash-verified, or does not exist yet."""
     target = Path(objects) / digest
-    if target.exists() and target.stat().st_size == size and digest_file(target) == digest:
-        return target
+    if target.exists() and target.stat().st_size == size:
+        existing_digest = (digest_file_bounded(target, deadline, cancel)
+                           if deadline is not None or cancel is not None else digest_file(target))
+        if existing_digest == digest:
+            return target
     descriptor, temporary_name = tempfile.mkstemp(prefix=digest + ".", suffix=".tmp", dir=objects)
     os.close(descriptor)
     temporary = Path(temporary_name)
@@ -82,6 +237,10 @@ def install_object(objects, digest, size, stream):
     try:
         with temporary.open("wb") as output:
             while chunk := stream.read(1024 * 1024):
+                if cancel is not None and cancel.is_set():
+                    raise ResultDeferred("result_collection_cancelled")
+                if deadline is not None and time.monotonic() > deadline:
+                    raise ResultDeferred("result_collection_deadline")
                 written += len(chunk)
                 if written > size:
                     raise ValueError("object_size_mismatch")
@@ -318,11 +477,16 @@ def admission_holds(host, now=None, required_memory=0):
 
 
 class Worker:
-    def __init__(self, state=None, config=None):
+    def __init__(self, state=None, config=None, log_dir=None):
         self.state = Path(state) if state is not None else STATE_ROOT
         self.config = Path(config) if config is not None else CONFIG_ROOT
+        self.log_dir = Path(log_dir) if log_dir is not None else LOG_DIR
         self.lock = threading.RLock()
         self.active = None
+        self.shutdown_requested = False
+        self.shutdown_reason = None
+        self.shutdown_event = threading.Event()
+        self.last_log_prune = 0.0
         self.boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
         self.started = time.monotonic()
         self.healthy_since = None
@@ -360,6 +524,23 @@ class Worker:
                 except (ValueError, subprocess.TimeoutExpired):
                     pass
         atomic_json(self.state / "fences.json", self.fences)
+        prune_logs(self.log_dir)
+        self.last_log_prune = time.monotonic()
+        self.log("supervisor_start")
+
+    def log(self, event, **fields):
+        payload = {"boot_id": self.boot_id}
+        payload.update(fields)
+        log_event(self.log_dir, event, **payload)
+
+    def request_shutdown(self, reason):
+        """Close admission without waiting for a watchdog-owned state lock."""
+        self.shutdown_requested = True
+        if self.shutdown_reason is None:
+            self.shutdown_reason = reason
+        self.shutdown_event.set()
+        # No lock and no logging here: a watchdog-owned state lock or a stalled
+        # log sink must never delay admission closure.
 
     def key(self, binding):
         return hashlib.sha256(canonical(binding)).hexdigest()
@@ -434,6 +615,8 @@ class Worker:
 
     def start(self, request):
         preparation_started = time.monotonic()
+        if self.shutdown_event.is_set():
+            raise ValueError("worker_stopping")
         binding = validate_binding(request)
         old = self.bound_receipt(binding)
         if old["state"] != "not_found":
@@ -508,6 +691,12 @@ class Worker:
             self.persist(receipt)
             self.active = None
             return receipt
+        if self.shutdown_event.is_set():
+            receipt.update(state="interrupted", reason="shutdown_during_preparation", termination_confirmed=True)
+            self.persist(receipt)
+            self.active = None
+            self.log("job_start_suppressed", job_id=binding["job_id"], reason="shutdown_during_preparation")
+            return receipt
         properties = {"Slice": JOB_SLICE, "MemoryHigh": str(memory * 9 // 10),
                       "RemainAfterExit": "yes",
                       "MemoryMax": str(memory), "MemorySwapMax": "0", "CPUQuota": str(cpu_quota) + "%",
@@ -549,22 +738,39 @@ class Worker:
             self.active = None
         return receipt
 
-    def terminate(self, reason):
+    def terminate(self, reason, defer_result=False):
         receipt = self.active
         if receipt is None:
             return
+        defer_result = defer_result or self.shutdown_event.is_set()
+        started = time.monotonic()
         run(["systemctl", "stop", receipt["unit"]], check=False)
         receipt.update(state="unknown" if receipt["production_writes"] else "interrupted",
-                       reason=reason, termination_confirmed=self.unit_empty(receipt["unit"]))
+                       reason=reason, termination_confirmed=self.unit_empty(receipt["unit"]),
+                       shutdown_requested=bool(self.shutdown_requested))
         if receipt["termination_confirmed"]:
             self.stop_lease_timer(receipt)
-            try:
-                receipt["result"] = self.collect_result(receipt)
-            except (OSError, ValueError):
-                receipt["checkpoint_unavailable"] = True
+            if defer_result:
+                # The host lifecycle budget is shorter than an artifact scan.
+                # Preserve the receipt and output; central reconciliation owns
+                # the deferred inventory. Never claim a collected result.
+                receipt.update(result_deferred=True, result_deferred_reason=reason)
+                self.log("job_result_deferred", job_id=receipt["job_id"], reason=reason)
+            else:
+                try:
+                    receipt["result"] = self.collect_result(receipt, cancel=self.shutdown_event)
+                except ResultDeferred as error:
+                    reason = str(error)
+                    receipt.update(result_deferred=True, result_deferred_reason=reason)
+                    self.log("job_result_deferred", job_id=receipt["job_id"], reason=reason)
+                except (OSError, ValueError):
+                    receipt["checkpoint_unavailable"] = True
+        receipt["shutdown_duration_ms"] = int((time.monotonic() - started) * 1000)
         self.persist(receipt)
         if receipt["termination_confirmed"]:
             self.active = None
+            self.log("job_terminated", job_id=receipt["job_id"], reason=reason,
+                     state=receipt["state"], result_deferred=bool(receipt.get("result_deferred")))
 
     def checkpoint(self, receipt):
         if receipt.get("checkpoint_requested"):
@@ -576,6 +782,9 @@ class Worker:
 
     def tick(self):
         with self.lock:
+            if time.monotonic() - self.last_log_prune >= 3600:
+                prune_logs(self.log_dir)
+                self.last_log_prune = time.monotonic()
             try:
                 self.host = read_json(RUNTIME_ROOT / "host.json")
             except (OSError, ValueError):
@@ -592,7 +801,7 @@ class Worker:
             # Start graceful stop early; the five-second cgroup kill grace must
             # fit inside the 90-second termination budget, not follow it.
             if idle >= LEASE_STOP_SECONDS:
-                self.terminate("lease_lost")
+                self.terminate("lease_lost", defer_result=self.shutdown_requested)
                 return
             if idle >= 60:
                 self.checkpoint(receipt)
@@ -601,7 +810,7 @@ class Worker:
                     self.staff_pressure_since = time.monotonic()
                     self.checkpoint(receipt)
                 elif time.monotonic() - self.staff_pressure_since >= 60:
-                    self.terminate("staff_memory_pressure")
+                    self.terminate("staff_memory_pressure", defer_result=self.shutdown_requested)
                     return
             else:
                 self.staff_pressure_since = None
@@ -609,7 +818,7 @@ class Worker:
             if self.host.get("memory_available_bytes", 0) < CRITICAL_HOST_MEMORY_BYTES:
                 critical.add("staff_memory_critical")
             if critical:
-                self.terminate(",".join(sorted(critical)))
+                self.terminate(",".join(sorted(critical)), defer_result=self.shutdown_requested)
                 return
             quota = PRESSURE_CPU_QUOTA if holds else SLICE_CPU_QUOTA
             run(["systemctl", "set-property", "--runtime", JOB_SLICE, "CPUQuota=" + quota])
@@ -626,7 +835,12 @@ class Worker:
                                finished_at=time.time(), systemd_result=result,
                                memory_peak_bytes=info.get("MemoryPeak"), unit_cleanup_pending=True)
                 try:
-                    receipt["result"] = self.collect_result(receipt)
+                    receipt["result"] = self.collect_result(receipt, cancel=self.shutdown_event)
+                except ResultDeferred as error:
+                    reason = str(error)
+                    receipt.update(result_deferred=True, result_deferred_reason=reason,
+                                   state="unknown" if receipt["production_writes"] else "failed")
+                    self.log("job_result_deferred", job_id=receipt["job_id"], reason=reason)
                 except (OSError, ValueError):
                     receipt.update(state="unknown" if receipt["production_writes"] else "failed",
                                    reason="invalid_result_artifacts")
@@ -642,28 +856,52 @@ class Worker:
                 except (ValueError, subprocess.TimeoutExpired):
                     pass  # Safe to retry on daemon boot; completion is durable.
 
-    def collect_result(self, receipt):
+    def collect_result(self, receipt, deadline=None, cancel=None):
+        # Ordinary completion keeps the existing complete-inventory contract.
+        # A lifecycle shutdown defers collection entirely before reaching here;
+        # an in-progress scan still observes cancellation between chunks.
         output = self.state / "jobs" / self.key({k: receipt[k] for k in BINDING}) / "output"
+        # os.walk does not follow directory symlinks, but it would silently skip
+        # them. The previous rglob inventory rejected every link, so do the same
+        # before collecting deterministic sorted relative paths.
+        paths = []
+        for root, directories, files in os.walk(output):
+            if cancel is not None and cancel.is_set():
+                raise ResultDeferred("result_collection_cancelled")
+            for name in directories:
+                if (Path(root) / name).is_symlink():
+                    raise ValueError("result_symlink")
+            directories.sort()
+            for name in sorted(files):
+                path = Path(root) / name
+                if path.is_symlink():
+                    raise ValueError("result_symlink")
+                if path.is_file():
+                    paths.append(path)
+        paths.sort(key=lambda path: path.relative_to(output).as_posix())
         inventory = []
-        # Outputs are immutable only AFTER the cgroup is empty.
-        for path in sorted(output.rglob("*")):
-            if path.is_symlink():
-                raise ValueError("result_symlink")
-            if not path.is_file():
-                continue
+        for path in paths:
+            if cancel is not None and cancel.is_set():
+                raise ResultDeferred("result_collection_cancelled")
+            if deadline is not None and time.monotonic() > deadline:
+                raise ResultDeferred("result_collection_deadline")
             if path.stat().st_size > MAX_ARTIFACT or len(inventory) >= 4096:
                 raise ValueError("result_limit")
-            digest = digest_file(path)
+            digest = digest_file_bounded(path, deadline, cancel)
             with path.open("rb") as stream:
-                install_object(self.state / "objects", digest, path.stat().st_size, stream)
-            inventory.append({"path": path.relative_to(output).as_posix(), "sha256": digest, "size": path.stat().st_size})
+                install_object(self.state / "objects", digest, path.stat().st_size, stream,
+                               deadline, cancel)
+            inventory.append({"path": path.relative_to(output).as_posix(), "sha256": digest,
+                              "size": path.stat().st_size})
+        if cancel is not None and cancel.is_set():
+            raise ResultDeferred("result_collection_cancelled")
         result = {"version": 1, "binding": {k: receipt[k] for k in BINDING}, "files": inventory}
         data = canonical(result)
         if len(data) > 2 * 1024**2:
             raise ValueError("inventory_limit")
         digest = hashlib.sha256(data).hexdigest()
         import io
-        install_object(self.state / "objects", digest, len(data), io.BytesIO(data))
+        install_object(self.state / "objects", digest, len(data), io.BytesIO(data), deadline, cancel)
         checkpoints = [entry for entry in inventory if entry["path"] == "checkpoint.json"]
         if checkpoints:
             receipt["checkpoint_sha256"] = checkpoints[0]["sha256"]
@@ -681,6 +919,8 @@ class Worker:
                 "inventory_artifact": {"sha256": digest, "size": len(data)}}
 
     def stage(self, request):
+        if self.shutdown_event.is_set():
+            raise ValueError("worker_stopping")
         if self.active:
             raise ValueError("stage_while_active")
         digest = request.get("artifact_id", "")
@@ -856,8 +1096,15 @@ def main():
             sock.unlink()
         instance = Worker()
         stopping = threading.Event()
+        def _stop(signum, _frame):
+            # Publish admission closure immediately; the main loop performs the
+            # bounded, lock-held termination after the current request returns.
+            instance.shutdown_requested = True
+            instance.shutdown_reason = "signal_" + str(signum)
+            instance.shutdown_event.set()
+            stopping.set()
         for signum in (signal.SIGTERM, signal.SIGINT):
-            signal.signal(signum, lambda *_: stopping.set())
+            signal.signal(signum, _stop)
         with socketserver.UnixStreamServer(str(sock), Handler) as server:
             os.chmod(sock, 0o600)
             server.worker = instance
@@ -870,12 +1117,19 @@ def main():
                     server.handle_request()
             finally:
                 stopping.set()
+                instance.request_shutdown("supervisor_shutdown")
                 watchdog.join(timeout=3)
                 if instance.lock.acquire(timeout=1):
                     try:
-                        instance.terminate("supervisor_shutdown")
+                        instance.terminate("supervisor_shutdown", defer_result=True)
                     finally:
                         instance.lock.release()
+                else:
+                    # systemd's bounded stop remains the last resort. The next
+                    # boot classifies any receipt that this shutdown could not
+                    # update; never invent a collected result.
+                    instance.log("supervisor_stop_lock_unavailable", reason=instance.shutdown_reason)
+                instance.log("supervisor_stop", reason=instance.shutdown_reason)
 
 
 if __name__ == "__main__":
