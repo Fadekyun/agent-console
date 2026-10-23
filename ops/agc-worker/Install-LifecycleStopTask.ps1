@@ -58,6 +58,11 @@ Protect-Directory $Code $enrolled.sid
 Copy-Item -LiteralPath (Join-Path $SourceDirectory 'worker-stop.ps1') -Destination $OwnerScript -Force
 Copy-Item -LiteralPath (Join-Path $SourceDirectory 'WorkerLifecycle.ps1') -Destination (Join-Path $Code 'WorkerLifecycle.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $SourceDirectory 'Stop-Worker.ps1') -Destination (Join-Path $Code 'Stop-Worker.ps1') -Force
+# The optional cycle protocol is enabled by native coordinator configuration only
+# after this helper advertises its exact protocol marker. Legacy phase requests
+# keep working on the same fixed task.
+$helperText = Get-Content -LiteralPath $OwnerScript -Raw
+$cycleProtocolSupported = [bool]($helperText -match '(?m)^# AGC_OWNER_CYCLE_PROTOCOL=1\s*$')
 # Owner entrypoint is admin/SYSTEM-owned, worker read-only. The worker only
 # needs to read it; it must never be able to replace its own stop helper.
 $ownerAcl = Get-Acl -LiteralPath $OwnerScript
@@ -98,6 +103,11 @@ $taskSid = (Get-LocalUser -Name $WorkerName).SID.Value
 if ($principal.UserId -notmatch "(^|\\)$WorkerName$" -or $principal.RunLevel -ne 'Limited') {
     throw 'Lifecycle stop task principal verification failed'
 }
+$action = @($task.Actions)[0]
+$actionMatchesFixed = ([string]$action.Execute -match '(^|\\)powershell\.exe$' -and [string]$action.Arguments -eq $ExpectedArguments)
+if (-not $actionMatchesFixed) {
+    throw 'Lifecycle stop task action does not match the fixed owner-cycle helper action'
+}
 $taskXml = $task | Export-ScheduledTask
 $receipt = @{
     version = 1; task = $TaskName; state = 'installed'; worker_sid = $taskSid
@@ -105,6 +115,8 @@ $receipt = @{
     arguments = $ExpectedArguments; account_enabled = $true
     owner_script = $OwnerScript; owner_script_sha256 = (Hash $OwnerScript)
     worker_lifecycle_sha256 = (Hash (Join-Path $Code 'WorkerLifecycle.ps1'))
+    cycle_protocol_supported = $cycleProtocolSupported
+    task_action_matches_fixed = $actionMatchesFixed
     stop_worker_sha256 = (Hash (Join-Path $Code 'Stop-Worker.ps1'))
     task_definition_sha256 = ([BitConverter]::ToString(
         [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($taskXml)))).Replace('-','').ToLowerInvariant()

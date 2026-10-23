@@ -110,6 +110,82 @@ failed shared-receipt write sets `shared_receipt_written=false` and a visible
 The helper forwards the explicit `-Phase` to `Write-AgcStopReceipt`; it does not
 write an unphased receipt that the coordinator would reject.
 
+### Owner cycle protocol (#210, 2026-10-23)
+
+A per-phase request used to cold-start one PowerShell per owner phase. Under
+load the terminate launch could start after its own deadline. The fixed
+`AGC-Worker-LifecycleStop` task can instead carry one immutable **cycle**
+request, executed once per cycle in a single bounded helper process:
+
+| Field | Meaning |
+|---|---|
+| `schema=1`, `owner=worker`, `phase=cycle` | existing binding |
+| `requestId`, `bootId`, `issuedUtc` | existing binding |
+| `coordinatorProcessId`, `reason` | coordinator audit context |
+| `gracefulDeadlineUtc` | issued + 13 s (parallel owner drain window) |
+| `terminateDeadlineUtc` | issued + 21 s (scoped fallback window) |
+| `deadlineUtc` | issued + 24 s (final verification cutoff) |
+
+The helper validates the ordering and the absolute +13/+21/+24 s caps (the
+native 25 s / SCM 30 s budget) before any effect. A request issued more than
+250 ms in the helper's future is unconfirmed (`cycle_request_future`), so a
+skewed clock cannot stretch the advertised window, and the remaining-time
+arithmetic is anchored to the single launch instant (wall clock plus stopwatch)
+so setup work is charged once. A 400 ms receipt-publication margin is reserved
+after the final running-list query. `worker-stop.ps1` advertises
+`# AGC_OWNER_CYCLE_PROTOCOL=1`; `Install-LifecycleStopTask.ps1` requires the
+installed task action to equal the fixed owner action and reports
+`cycle_protocol_supported` plus `task_action_matches_fixed` in its receipt. The
+worker installer does not enable native configuration; native installer
+configuration owns its optional cycle task. The marker is additive: `stop`,
+`terminate` and `verify` requests keep their existing semantics for
+mixed-version rollout.
+
+One process executes, against one absolute clock:
+
+1. Initial bounded `--list --running --quiet`. Absence is already a verified
+   graceful stop; no command is issued.
+2. Bounded `systemctl stop agc-worker.service`. Exit 0 with no timeout is the
+   only explicit successful drain. If the distro disappeared, that is verified
+   graceful. If the VM remains, an **early** exact-distro `--terminate` is
+   allowed immediately after that drain.
+3. Otherwise the helper waits until `gracefulDeadlineUtc` and terminates once,
+   bounded by `terminateDeadlineUtc` and by the time left after reserving the
+   verification allowance.
+4. A fresh complete running list after the last effect. Only `Started=true`,
+   exit 0, no timeout and no truncation is evidence; absence is required. A
+   failed or late list is unconfirmed, never stopped.
+
+The registry gate and the request-file hash/binding are rechecked immediately
+before every effect, so a restore, foreign request or replaced cycle stops the
+helper with no late guest command. An expired request, or a cold launch that
+already consumed the budget, returns `unconfirmed` with a visible reason; the
+protocol does not guarantee success when the initial launch itself is late.
+
+Duplicate execution is bounded two ways: a per-cycle exclusive lock file
+(`<requestId>.cycle.lock`) rejects a concurrent executor without writing a
+receipt, and a completed valid `<requestId>.cycle.json` is reused without any
+guest command. Neither path overwrites a proven receipt. The final receipt has
+`phase=cycle`, `outcome` in `graceful|forced|unconfirmed`, and the existing
+owner/request/boot/SID/distro binding. The owner SID binding reads
+`owners.worker.accountSid` from the admin-owned
+`C:\ProgramData\AGCLifecycle\config\lifecycle.json`, which grants Users RX and
+is the same configuration the native service validates (bounded, reparse
+guarded, 64 KiB cap, with `owner_sid_missing`/`owner_sid_mismatch`/
+`owner_distro_mismatch` reasons). It never reads
+`C:\ProgramData\AGC-Worker\control`: live ACL evidence (2026-10-23) shows that
+directory and `account.json` grant only SYSTEM/Administrators, so the limited
+`agc-worker` account cannot read it; the DPAPI credential there is never
+touched.
+
+Rollout order matters: deploy this backward-compatible helper first while the
+coordinator still sends legacy phases, then ship the native/shared-library bundle
+(the shared `Write-AgcStopReceipt` `ValidateSet` must accept `cycle`, agc-display
+#160) and only then map the optional cycle request/task. Until the shared library
+is updated, a cycle shared-receipt write fails visibly
+(`sharedReceiptWritten=false` + `sharedReceiptError`) while the local cycle
+receipt remains available.
+
 ## Guest shutdown
 
 - `SIGTERM` closes admission through a lock-free `threading.Event` before any

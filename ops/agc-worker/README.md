@@ -46,7 +46,16 @@ other tasks. The owner helper rejects SYSTEM
 and non-worker identities, reads `requests\worker\current.json`, validates
 schema/owner/request/boot/deadline against the registry gate, and runs only the
 requested `stop`, `terminate` or `verify` phase (an absent/unknown phase
-defaults to `verify`). Receipts bind owner/request/boot/SID/distro and are also
+defaults to `verify`). A `phase=cycle` request runs the whole bounded owner cycle
+in that one process: graceful `systemctl stop`, an early exact-distro terminate
+only after an explicit successful drain (otherwise wait to the +13 s cutoff), one
+scoped terminate, and a fresh complete running-list proof by the absolute
++24 s cutoff. Cycle receipts use `phase=cycle`; a per-cycle lock and any existing
+completed cycle receipt prevent duplicate execution without clobbering proof.
+The helper advertises `# AGC_OWNER_CYCLE_PROTOCOL=1`; the installer requires the
+exact fixed task action and records `cycle_protocol_supported` and
+`task_action_matches_fixed`. Native installer configuration, not this worker
+installer, decides whether the optional cycle task is enabled. Receipts bind owner/request/boot/SID/distro and are also
 retained locally for rollback diagnosis.
 
 Every host/owner WSL hook loaded from this directory is gate-covered:
