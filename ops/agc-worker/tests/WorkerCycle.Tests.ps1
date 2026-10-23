@@ -158,16 +158,30 @@ $validatedStrings = Get-AgcWorkerCycleRequest -Request $stringForm
 Assert-Equal $validatedStrings.GracefulDeadline.ToUniversalTime().Ticks $base.AddSeconds(13).ToUniversalTime().Ticks 'string timestamps keep subsecond ticks'
 
 # A deserialized fractional deadline must not cut the graceful wait short.
+# Use one coherent timeline (real elapsed + injected Wait) so the absolute
+# graceful deadline is reached exactly regardless of host load.
 Reset-State -Running
 '1' | Set-Content -LiteralPath (Join-Path $state 'stop_fail')
-$script:Clock = $base.AddSeconds(8)
+$script:FracBase = $base.AddSeconds(8)
+$fracWatch = [Diagnostics.Stopwatch]::StartNew()
+$fracNow = { $script:FracBase.AddMilliseconds($fracWatch.Elapsed.TotalMilliseconds) }
+$fracWait = {
+    param([int]$Milliseconds)
+    $target = (& $fracNow).AddMilliseconds($Milliseconds)
+    $script:FracBase = $target - [TimeSpan]::FromMilliseconds($fracWatch.Elapsed.TotalMilliseconds)
+    $script:Waits += $Milliseconds
+    $script:LastFracWait = & $fracNow
+}
 $script:Waits = @()
 $result = Invoke-AgcWorkerOwnerCycle -Request $round -RequestHash 'f' -WslPath $fakeWsl -Distro 'AGC-Worker' `
-    -DataPath $data -Now $Now -Wait $Wait -GateCheck { $true } -RequestCheck { $true }
+    -DataPath $data -Now $fracNow -Wait $fracWait -GateCheck { $true } -RequestCheck { $true }
 $waited = [int64](($script:Waits | Measure-Object -Sum).Sum)
-# Real setup time (stopwatch, typically <200 ms) is charged once; a truncated
-# deadline would lose the ~999 ms fractional second and wait near 4000 ms.
-Assert-True ($waited -ge 4500 -and $waited -le 5000) 'fractional graceful deadline is honoured to the tick'
+$gracefulTicks = $base.AddSeconds(13).ToUniversalTime().Ticks
+# Compare the coherent clock at the last Wait return (pre-terminate); later
+# effects naturally run after the cutoff. A truncated deadline lands ~999 ms early.
+$earlyTicks = $script:LastFracWait.ToUniversalTime().Ticks - $gracefulTicks
+Assert-True ($waited -gt 0) 'failed drain waits instead of terminating early'
+Assert-True ($earlyTicks -ge (-2 * [TimeSpan]::TicksPerMillisecond)) 'wait does not end before the absolute fractional graceful cutoff'
 Assert-Equal $result.outcome 'forced' 'fractional request still terminates after the graceful wait'
 
 $GateOk = { $true }
@@ -437,12 +451,28 @@ $result = Invoke-AgcWorkerOwnerCycle -Request $nearRequest -RequestHash 'f' -Wsl
 Assert-True ($result.reason -ne 'cycle_request_future') 'small clock skew is tolerated'
 
 # --- Publication margin: no final query when it would cross the 24 s cutoff ---
+# This case is timing-sensitive under load, so its injected clock and Wait share
+# one real-elapsed source (review #211). Wait snaps the synthetic timeline to the
+# requested instant instead of only adding milliseconds, keeping the final
+# deadline exactly 350 ms after the graceful cutoff regardless of real elapsed.
 Reset-State -Running
 '1' | Set-Content -LiteralPath (Join-Path $state 'stop_fail')
 $request = New-CycleRequest -Graceful $issued.AddSeconds(1) -Terminate $issued.AddSeconds(1.2) -Deadline $issued.AddSeconds(1.35)
-$script:Clock = $issued
+$script:PubBase = $issued
+$pubWatch = [Diagnostics.Stopwatch]::StartNew()
+$pubNow = { $script:PubBase.AddMilliseconds($pubWatch.Elapsed.TotalMilliseconds) }
+$pubWait = {
+    param([int]$Milliseconds)
+    $target = (& $pubNow).AddMilliseconds($Milliseconds)
+    $script:PubBase = $target - [TimeSpan]::FromMilliseconds($pubWatch.Elapsed.TotalMilliseconds)
+    $script:Waits += $Milliseconds
+}
+$script:Waits = @()
+# Explicit injected setup delay: the unified timeline must keep the final
+# deadline at cutoff+350 ms even when real elapsed time is several hundred ms.
+$pubGate = { Start-Sleep -Milliseconds 300; return $true }
 $result = Invoke-AgcWorkerOwnerCycle -Request $request -RequestHash 'f' -WslPath $fakeWsl -Distro 'AGC-Worker' `
-    -DataPath $data -Now $Now -Wait $Wait -GateCheck $GateOk -RequestCheck $RequestOk
+    -DataPath $data -Now $pubNow -Wait $pubWait -GateCheck $pubGate -RequestCheck $RequestOk
 Assert-Equal $result.reason 'verification_deadline_exhausted' 'publication margin stops a late final query'
 Assert-Equal (@(Get-Calls) | Where-Object { $_ -match '^--list' } | Measure-Object).Count 1 'only the initial list ran'
 Assert-True ($result.details.publicationReserveMs -ge 300 -and $result.details.publicationReserveMs -le 500) 'publication margin recorded'
