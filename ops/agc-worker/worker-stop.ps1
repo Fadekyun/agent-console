@@ -113,9 +113,8 @@ if ($phase -eq 'cycle') {
     exit 1
 }
 
-try {
-    $deadline = [DateTimeOffset]::Parse([string]$request.deadlineUtc, [Globalization.CultureInfo]::InvariantCulture)
-} catch { Write-Unconfirmed $requestId $bootId $phase 'deadline_invalid' }
+$deadline = ConvertTo-AgcWorkerTime $request.deadlineUtc
+if ($null -eq $deadline) { Write-Unconfirmed $requestId $bootId $phase 'deadline_invalid' }
 $now = [DateTimeOffset]::UtcNow
 if ($deadline -lt $now -or ($deadline - $now).TotalSeconds -gt 120) { Write-Unconfirmed $requestId $bootId $phase 'deadline_stale' }
 # The registry gate and request file must agree. A coordinator-side mismatch is

@@ -148,7 +148,7 @@ class WorkerScriptContractTests(unittest.TestCase):
         # Root's live owner run on the store laptop remains the runtime proof;
         # this guards the permissions regression where control/account.json was
         # admin-only and unreadable by agc-worker.
-        cycle_block = helper[helper.index("if ($phase -eq 'cycle') {"):helper.index("try {\n    $deadline = [DateTimeOffset]::Parse")]
+        cycle_block = helper[helper.index("if ($phase -eq 'cycle') {"):helper.index("$deadline = ConvertTo-AgcWorkerTime")]
         self.assertIn("Test-AgcWorkerOwnerSidBinding", cycle_block)
         self.assertIn("Get-AgcWorkerLifecycleConfigPath", cycle_block)
         self.assertNotIn("account.json", cycle_block)

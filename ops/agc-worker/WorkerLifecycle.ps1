@@ -236,6 +236,25 @@ function Start-AgcWorkerKeepAlive {
         -Owner $script:AgcWorkerOwner -PassThru
 }
 
+function ConvertTo-AgcWorkerTime {
+    # ConvertFrom-Json yields String on Windows PowerShell 5.1 but DateTime on
+    # PowerShell 7.4; casting either to [string] drops fractional seconds. Accept
+    # both representations and preserve ticks exactly.
+    [CmdletBinding()]
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [DateTimeOffset]) { return [DateTimeOffset]$Value }
+    if ($Value -is [DateTime]) { return [DateTimeOffset]$Value }
+    if ($Value -is [string]) {
+        if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+        try {
+            return [DateTimeOffset]::Parse($Value, [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind)
+        } catch { return $null }
+    }
+    return $null
+}
+
 function Get-AgcWorkerCycleRequest {
     <#
       Validate the immutable per-cycle request (schema 1, phase=cycle).
@@ -256,10 +275,8 @@ function Get-AgcWorkerCycleRequest {
     if ([string]::IsNullOrWhiteSpace($result.BootId)) { return $result }
     $times = @{}
     foreach ($name in @('issuedUtc','gracefulDeadlineUtc','terminateDeadlineUtc','deadlineUtc')) {
-        try {
-            $times[$name] = [DateTimeOffset]::Parse([string](Get-AgcWorkerValue $Request $name ''),
-                [Globalization.CultureInfo]::InvariantCulture)
-        } catch { $result.Reason = 'deadline_invalid'; return $result }
+        $times[$name] = ConvertTo-AgcWorkerTime (Get-AgcWorkerValue $Request $name $null)
+        if ($null -eq $times[$name]) { $result.Reason = 'deadline_invalid'; return $result }
     }
     $result.Issued = $times['issuedUtc']
     $result.GracefulDeadline = $times['gracefulDeadlineUtc']

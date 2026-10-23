@@ -24,7 +24,7 @@ $helperText = Get-Content -LiteralPath (Join-Path $workerRoot 'worker-stop.ps1')
 $startNeedle = 'if ($phase -eq ''cycle'') {'
 $startIndex = $helperText.IndexOf($startNeedle)
 Assert-True ($startIndex -ge 0) 'real cycle block found in worker-stop.ps1'
-$endIndex = $helperText.IndexOf("`ntry {`n    `$deadline", $startIndex)
+$endIndex = $helperText.IndexOf("`n`$deadline = ConvertTo-AgcWorkerTime", $startIndex)
 Assert-True ($endIndex -gt $startIndex) 'cycle block end marker found'
 $block = $helperText.Substring($startIndex, $endIndex - $startIndex)
 $block = $block -replace '\bexit 0\b', 'return 0' -replace '\bexit 1\b', 'return 1'

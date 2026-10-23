@@ -135,6 +135,41 @@ Assert-Equal (Get-AgcWorkerCycleRequest -Request $bad).Reason 'request_binding_i
 $bad = New-CycleRequest; $bad.phase = 'stop'
 Assert-Equal (Get-AgcWorkerCycleRequest -Request $bad).Reason 'request_binding_invalid' 'non-cycle phase rejected by cycle validator'
 
+# --- Serialized JSON timestamps keep subsecond precision (both runtimes) ---
+$base = [DateTimeOffset]::new(2026, 10, 23, 0, 0, 0, [TimeSpan]::Zero).AddTicks(9994999)
+$payload = [pscustomobject]@{
+    schema = 1; owner = 'worker'; phase = 'cycle'; requestId = ('7' * 32); bootId = 'boot-precision'
+    issuedUtc = $base.ToString('o'); gracefulDeadlineUtc = $base.AddSeconds(13).ToString('o')
+    terminateDeadlineUtc = $base.AddSeconds(21).ToString('o'); deadlineUtc = $base.AddSeconds(24).ToString('o')
+    coordinatorProcessId = 4242; reason = 'precision regression'
+}
+$round = ($payload | ConvertTo-Json -Depth 5 | ConvertFrom-Json)
+Assert-True ($round.gracefulDeadlineUtc -is [DateTime]) 'PowerShell 7 ConvertFrom-Json yields DateTime'
+$validated = Get-AgcWorkerCycleRequest -Request $round
+Assert-True ($validated.Valid -eq $true) 'serialized request remains valid'
+Assert-Equal $validated.Issued.ToUniversalTime().Ticks $base.ToUniversalTime().Ticks 'issuedUtc keeps subsecond ticks'
+Assert-Equal $validated.GracefulDeadline.ToUniversalTime().Ticks $base.AddSeconds(13).ToUniversalTime().Ticks 'gracefulDeadline keeps subsecond ticks'
+Assert-Equal $validated.Deadline.ToUniversalTime().Ticks $base.AddSeconds(24).ToUniversalTime().Ticks 'deadline keeps subsecond ticks'
+# PowerShell 5.1 leaves ISO strings; both forms must preserve ticks.
+$stringForm = [pscustomobject]@{schema=1;owner='worker';phase='cycle';requestId=('8'*32);bootId='boot-precision';
+    issuedUtc=$payload.issuedUtc;gracefulDeadlineUtc=$payload.gracefulDeadlineUtc;
+    terminateDeadlineUtc=$payload.terminateDeadlineUtc;deadlineUtc=$payload.deadlineUtc;coordinatorProcessId=4242;reason='string form'}
+$validatedStrings = Get-AgcWorkerCycleRequest -Request $stringForm
+Assert-Equal $validatedStrings.GracefulDeadline.ToUniversalTime().Ticks $base.AddSeconds(13).ToUniversalTime().Ticks 'string timestamps keep subsecond ticks'
+
+# A deserialized fractional deadline must not cut the graceful wait short.
+Reset-State -Running
+'1' | Set-Content -LiteralPath (Join-Path $state 'stop_fail')
+$script:Clock = $base.AddSeconds(8)
+$script:Waits = @()
+$result = Invoke-AgcWorkerOwnerCycle -Request $round -RequestHash 'f' -WslPath $fakeWsl -Distro 'AGC-Worker' `
+    -DataPath $data -Now $Now -Wait $Wait -GateCheck { $true } -RequestCheck { $true }
+$waited = [int64](($script:Waits | Measure-Object -Sum).Sum)
+# Real setup time (stopwatch, typically <200 ms) is charged once; a truncated
+# deadline would lose the ~999 ms fractional second and wait near 4000 ms.
+Assert-True ($waited -ge 4500 -and $waited -le 5000) 'fractional graceful deadline is honoured to the tick'
+Assert-Equal $result.outcome 'forced' 'fractional request still terminates after the graceful wait'
+
 $GateOk = { $true }
 $RequestOk = { $true }
 
