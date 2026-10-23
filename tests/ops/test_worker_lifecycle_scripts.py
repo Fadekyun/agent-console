@@ -133,6 +133,35 @@ class WorkerScriptContractTests(unittest.TestCase):
         self.assertIn("find /var/log", script)
         self.assertNotIn("WantedBy=multi-user.target", script)
 
+    def test_owner_cycle_protocol_is_single_bounded_entrypoint(self):
+        helper = source("worker-stop.ps1")
+        adapter = source("WorkerLifecycle.ps1")
+        installer = source("Install-LifecycleStopTask.ps1")
+        self.assertRegex(helper, r"(?m)^# AGC_OWNER_CYCLE_PROTOCOL=1$")
+        # Phase is parsed before the legacy deadline refusal, and the cycle is one
+        # function call inside this fixed helper (no per-phase task launch).
+        self.assertLess(helper.index("$phase = ([string]$request.phase)"), helper.index("'deadline_stale'"))
+        self.assertIn("Invoke-AgcWorkerOwnerCycle", helper)
+        self.assertIn("-Phase 'cycle'", helper)
+        self.assertNotIn("credential.dpapi", helper)
+        self.assertIn("owner_sid_mismatch", helper)
+        # Legacy phases remain compatible.
+        for phase in ("stop", "terminate", "verify", "cycle"):
+            self.assertIn("'" + phase + "'", helper)
+        for name in ("Get-AgcWorkerCycleRequest", "Get-AgcWorkerCycleReceipt", "Invoke-AgcWorkerOwnerCycle"):
+            self.assertIn("function " + name, adapter)
+        self.assertIn("[ValidateSet('stop','terminate','verify','cycle')]", adapter)
+        self.assertIn("duplicate_executor", adapter)
+        self.assertIn("cycle_receipt_reused", adapter)
+        # The optional native cycle configuration is enabled only after the
+        # installed helper advertises the marker and the fixed task action.
+        self.assertIn("AGC_OWNER_CYCLE_PROTOCOL=1", installer)
+        self.assertIn("cycle_protocol_supported", installer)
+        self.assertIn("task_action_matches_fixed", installer)
+        # No worker-installer toggle may imply it enables native configuration.
+        self.assertNotIn("EnableCycleProtocol", installer)
+        self.assertNotIn("Disable-LocalUser", installer)
+
     def test_worker_shutdown_constants_are_not_lease_grace(self):
         worker = (WORKER / "worker.py").read_text(encoding="utf-8")
         self.assertIn("LEASE_STOP_SECONDS = 75", worker)
@@ -160,7 +189,17 @@ class RealLibraryTests(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
-class PowerShellAdapterTests(unittest.TestCase):
+class PowerShellCycleTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
+    def test_owner_cycle_fake_wsl_regression_passes(self):
+        result = subprocess.run(
+            [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-File",
+             str(WORKER / "tests/WorkerCycle.Tests.ps1")],
+            cwd=ROOT, capture_output=True, text=True, timeout=180,
+            env={**os.environ, "POWERSHELL_TELEMETRY_OPTOUT": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("worker cycle tests: PASS", result.stdout)
+
     def test_local_fake_cli_adapter_tests_pass(self):
         result = subprocess.run(
             [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-File",

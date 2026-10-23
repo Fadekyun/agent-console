@@ -236,15 +236,307 @@ function Start-AgcWorkerKeepAlive {
         -Owner $script:AgcWorkerOwner -PassThru
 }
 
+function Get-AgcWorkerCycleRequest {
+    <#
+      Validate the immutable per-cycle request (schema 1, phase=cycle).
+      Windows coordinator deadlines are absolute and capped at +13 s graceful,
+      +21 s terminate and +24 s final (native 25 s / SCM 30 s).
+    #>
+    [CmdletBinding()]
+    param($Request)
+    $result = [pscustomobject]@{Valid=$false;Reason='request_binding_invalid';RequestId='';BootId='';
+        Issued=$null;GracefulDeadline=$null;TerminateDeadline=$null;Deadline=$null;
+        CoordinatorProcessId=0;ReasonText=''}
+    if ($null -eq $Request) { return $result }
+    $result.RequestId = [string](Get-AgcWorkerValue $Request 'requestId' '')
+    $result.BootId = [string](Get-AgcWorkerValue $Request 'bootId' '')
+    if ((Get-AgcWorkerValue $Request 'schema' 0) -ne 1 -or (Get-AgcWorkerValue $Request 'owner' '') -ne 'worker' -or
+        (Get-AgcWorkerValue $Request 'phase' '') -ne 'cycle') { return $result }
+    if ($result.RequestId -notmatch '^[a-f0-9]{32}$') { $result.Reason = 'request_id_invalid'; return $result }
+    if ([string]::IsNullOrWhiteSpace($result.BootId)) { return $result }
+    $times = @{}
+    foreach ($name in @('issuedUtc','gracefulDeadlineUtc','terminateDeadlineUtc','deadlineUtc')) {
+        try {
+            $times[$name] = [DateTimeOffset]::Parse([string](Get-AgcWorkerValue $Request $name ''),
+                [Globalization.CultureInfo]::InvariantCulture)
+        } catch { $result.Reason = 'deadline_invalid'; return $result }
+    }
+    $result.Issued = $times['issuedUtc']
+    $result.GracefulDeadline = $times['gracefulDeadlineUtc']
+    $result.TerminateDeadline = $times['terminateDeadlineUtc']
+    $result.Deadline = $times['deadlineUtc']
+    $result.CoordinatorProcessId = [int](Get-AgcWorkerValue $Request 'coordinatorProcessId' 0)
+    $result.ReasonText = [string](Get-AgcWorkerValue $Request 'reason' '')
+    $graceful = ($result.GracefulDeadline - $result.Issued).TotalMilliseconds
+    if ($graceful -le 0 -or $graceful -gt 13000) { $result.Reason = 'graceful_deadline_out_of_bounds'; return $result }
+    if (($result.TerminateDeadline - $result.Issued).TotalMilliseconds -gt 21000) { $result.Reason = 'terminate_deadline_out_of_bounds'; return $result }
+    if (($result.Deadline - $result.Issued).TotalMilliseconds -gt 24000) { $result.Reason = 'deadline_out_of_bounds'; return $result }
+    if ($result.GracefulDeadline -gt $result.TerminateDeadline -or $result.TerminateDeadline -ge $result.Deadline) {
+        $result.Reason = 'deadline_order_invalid'; return $result
+    }
+    $result.Valid = $true
+    $result.Reason = 'ok'
+    return $result
+}
+
+function Get-AgcWorkerCycleReceipt {
+    # A completed cycle must never be re-run or overwritten by a queued duplicate.
+    [CmdletBinding()]
+    param([string]$DataPath = $script:AgcWorkerDataPath, [string]$RequestId, [string]$BootId, [string]$Distro = 'AGC-Worker')
+    if ($RequestId -notmatch '^[a-f0-9]{32}$') { return $null }
+    $path = Join-Path $DataPath ($RequestId + '.cycle.json')
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    try { $receipt = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json } catch { return $null }
+    if ((Get-AgcWorkerValue $receipt 'schema' 0) -ne 1 -or (Get-AgcWorkerValue $receipt 'owner' '') -ne 'worker' -or
+        (Get-AgcWorkerValue $receipt 'phase' '') -ne 'cycle' -or
+        [string](Get-AgcWorkerValue $receipt 'requestId' '') -ne $RequestId -or
+        [string](Get-AgcWorkerValue $receipt 'bootId' '') -ne $BootId -or
+        [string](Get-AgcWorkerValue $receipt 'distro' '') -ne $Distro -or
+        (Get-AgcWorkerValue $receipt 'stopped' $false) -ne $true -or (Get-AgcWorkerValue $receipt 'verified' $false) -ne $true -or
+        [string](Get-AgcWorkerValue $receipt 'outcome' '') -notin @('graceful','forced') -or
+        [string](Get-AgcWorkerValue (Get-AgcWorkerValue $receipt 'details' $null) 'verification' '') -ne 'running-list' -or
+        [string](Get-AgcWorkerValue (Get-AgcWorkerValue $receipt 'details' $null) 'verifyComplete' '') -ne 'true') { return $null }
+    # Normalize to the same hashtable shape the fresh executor returns so a
+    # queued caller can hand it straight back to the receipt writer.
+    $source = Get-AgcWorkerValue $receipt 'details' $null
+    $details = @{}
+    foreach ($key in @('verification','verifyComplete','reason','requestSha256','drained','earlyTerminate',
+                       'verificationPhase','launchLatencyMs','issuedUtc','gracefulDeadlineUtc',
+                       'terminateDeadlineUtc','deadlineUtc','coordinatorProcessId','reasonText','initialRunning')) {
+        $details[$key] = Get-AgcWorkerValue $source $key ''
+    }
+    return @{schema=1;owner='worker';requestId=$RequestId;bootId=$BootId;phase='cycle';
+        outcome=[string](Get-AgcWorkerValue $receipt 'outcome' 'unconfirmed');stopped=$true;verified=$true;
+        scope='distro';source='owner';
+        startedUtc=[string](Get-AgcWorkerValue $receipt 'startedUtc' '');
+        finishedUtc=[string](Get-AgcWorkerValue $receipt 'finishedUtc' '');
+        durationMs=[int](Get-AgcWorkerValue $receipt 'durationMs' 0);
+        accountName=[string](Get-AgcWorkerValue $receipt 'accountName' '');
+        accountSid=[string](Get-AgcWorkerValue $receipt 'accountSid' '');
+        distro=$Distro;details=$details}
+}
+
+function Get-AgcWorkerCycleRemaining {
+    # Wall-clock remaining time bounded by an anchored stopwatch so a backwards
+    # clock correction can never extend the absolute cycle budget.
+    [CmdletBinding()]
+    param([DateTimeOffset]$Deadline, [int64]$Anchor, [scriptblock]$Now, [Diagnostics.Stopwatch]$Clock)
+    $wall = [int64](($Deadline - (& $Now)).TotalMilliseconds)
+    $monotonic = [int64]($Anchor - $Clock.ElapsedMilliseconds)
+    $value = [Math]::Min($wall, $monotonic)
+    if ($value -lt 0) { return [int64]0 }
+    return [int64]$value
+}
+
+function Get-AgcWorkerCycleSharedData {
+    # The shared library flattens Data values to strings; native CycleEvidence
+    # reads details.verification and details.verifyComplete from that flattened
+    # receipt, so the cycle must pass flat scalars rather than a nested details
+    # hashtable (which would serialize as "System.Collections.Hashtable").
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Receipt)
+    function Read-CycleValue($Object, [string]$Name, $Default) {
+        if ($null -eq $Object) { return $Default }
+        if ($Object -is [System.Collections.IDictionary]) {
+            if ($Object.Contains($Name) -and $null -ne $Object[$Name]) { return $Object[$Name] }
+            return $Default
+        }
+        return (Get-AgcWorkerValue $Object $Name $Default)
+    }
+    $details = Read-CycleValue $Receipt 'details' $null
+    return @{
+        distro = [string](Read-CycleValue $Receipt 'distro' '')
+        startedUtc = [string](Read-CycleValue $Receipt 'startedUtc' '')
+        durationMs = [int](Read-CycleValue $Receipt 'durationMs' 0)
+        reason = [string](Read-CycleValue $details 'reason' '')
+        verification = [string](Read-CycleValue $details 'verification' '')
+        verifyComplete = [string](Read-CycleValue $details 'verifyComplete' '')
+        requestSha256 = [string](Read-CycleValue $details 'requestSha256' '')
+        drained = [string](Read-CycleValue $details 'drained' '')
+        earlyTerminate = [string](Read-CycleValue $details 'earlyTerminate' '')
+        verificationPhase = [string](Read-CycleValue $details 'verificationPhase' '')
+    }
+}
+
+function Invoke-AgcWorkerOwnerCycle {
+    <#
+      One bounded owner process per shutdown cycle: graceful stop, optional early
+      exact-distro termination only after an explicit successful drain, otherwise
+      wait to the graceful cutoff, then exactly one terminate and a fresh
+      complete running-list proof. One monotonic absolute budget (wall clock and
+      an anchored stopwatch, so a clock rollback can never extend it); no phase
+      spawns an extra PowerShell. An unknown outcome is never reported stopped.
+    #>
+    [CmdletBinding()]
+    param(
+        $Request,
+        [string]$RequestHash = '',
+        [string]$WslPath = 'wsl.exe',
+        [string]$Distro = 'AGC-Worker',
+        [string]$DataPath = $script:AgcWorkerDataPath,
+        [scriptblock]$Now = { [DateTimeOffset]::UtcNow },
+        [scriptblock]$Wait = { param([int]$Milliseconds) Start-Sleep -Milliseconds $Milliseconds },
+        [scriptblock]$GateCheck = { $true },
+        [scriptblock]$RequestCheck = { $true },
+        [scriptblock]$OnComplete = $null,
+        [int]$VerifyReserveMilliseconds = 2500
+    )
+    $identity = Get-AgcWorkerIdentity
+    $validation = Get-AgcWorkerCycleRequest -Request $Request
+    $started = & $Now
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $receipt = @{schema=1;owner='worker';requestId=$validation.RequestId;bootId=$validation.BootId;
+        phase='cycle';outcome='unconfirmed';stopped=$false;verified=$false;scope='distro';source='owner';
+        startedUtc=$started.ToString('o');accountName=$identity.Name;accountSid=$identity.Sid;distro=$Distro
+        details=@{phase='cycle';reason=$validation.Reason;requestSha256=$RequestHash;
+            issuedUtc=$(if($validation.Issued){$validation.Issued.ToString('o')}else{''});
+            gracefulDeadlineUtc=$(if($validation.GracefulDeadline){$validation.GracefulDeadline.ToString('o')}else{''});
+            terminateDeadlineUtc=$(if($validation.TerminateDeadline){$validation.TerminateDeadline.ToString('o')}else{''});
+            deadlineUtc=$(if($validation.Deadline){$validation.Deadline.ToString('o')}else{''});
+            coordinatorProcessId=$validation.CoordinatorProcessId;reasonText=$validation.ReasonText}}
+    $finish = {
+        param([string]$Outcome, [string]$Reason)
+        $receipt.outcome = $Outcome
+        $receipt.details.reason = $Reason
+        $done = & $Now
+        $receipt.finishedUtc = $done.ToString('o')
+        $receipt.durationMs = [int]($done - $started).TotalMilliseconds
+        [void](Save-AgcWorkerLocalStopReceipt -Receipt $receipt -DataPath $DataPath -RequestId $(if($validation.RequestId){$validation.RequestId}else{'unknown'}) -Phase 'cycle')
+        if ($null -ne $OnComplete) {
+            # The primary executor publishes the shared receipt while it still
+            # holds the per-cycle lock, so a queued duplicate never races it.
+            try { $receipt.shared_receipt_written = [bool](& $OnComplete $receipt) }
+            catch { $receipt.shared_receipt_written = $false; $receipt.sharedReceiptError = $_.Exception.GetType().Name }
+            [void](Save-AgcWorkerLocalStopReceipt -Receipt $receipt -DataPath $DataPath -RequestId $(if($validation.RequestId){$validation.RequestId}else{'unknown'}) -Phase 'cycle')
+        }
+        return [pscustomobject]@{outcome=$Outcome;stopped=[bool]$receipt.stopped;verified=[bool]$receipt.verified;
+            reused=$false;duplicate=$false;reason=$Reason;receipt=$receipt;details=$receipt.details}
+    }
+    if ($Distro -ne 'AGC-Worker') { return (& $finish 'unconfirmed' 'distro_not_owned') }
+    if (-not $validation.Valid) { return (& $finish 'unconfirmed' $validation.Reason) }
+    $existing = Get-AgcWorkerCycleReceipt -DataPath $DataPath -RequestId $validation.RequestId -BootId $validation.BootId -Distro $Distro
+    if ($null -ne $existing) {
+        return [pscustomobject]@{outcome=[string]$existing.outcome;stopped=$true;verified=$true;reused=$true;
+            duplicate=$false;reason='cycle_receipt_reused';receipt=$existing;details=$existing.details;duplicateReason=''}
+    }
+    $stream = $null
+    try { $stream = [IO.File]::Open((Join-Path $DataPath ($validation.RequestId + '.cycle.lock')), 'OpenOrCreate', 'ReadWrite', 'None') }
+    catch { return [pscustomobject]@{outcome='unconfirmed';stopped=$false;verified=$false;reused=$false;
+        duplicate=$true;reason='duplicate_executor';receipt=$receipt;details=$receipt.details;duplicateReason='duplicate_executor'} }
+    try {
+        $existing = Get-AgcWorkerCycleReceipt -DataPath $DataPath -RequestId $validation.RequestId -BootId $validation.BootId -Distro $Distro
+        if ($null -ne $existing) {
+            return [pscustomobject]@{outcome=[string]$existing.outcome;stopped=$true;verified=$true;reused=$true;
+                duplicate=$true;reason='cycle_receipt_reused';receipt=$existing;details=$existing.details;duplicateReason=''}
+        }
+        $receipt.details.launchLatencyMs = [int64]($started - $validation.Issued).TotalMilliseconds
+        # Absolute remaining time: the wall clock is bounded by an anchored
+        # stopwatch so a backwards clock correction cannot extend the budget.
+        $wallDeadline = [int64](($validation.Deadline - (& $Now)).TotalMilliseconds)
+        $wallGraceful = [int64](($validation.GracefulDeadline - (& $Now)).TotalMilliseconds)
+        $wallTerminate = [int64](($validation.TerminateDeadline - (& $Now)).TotalMilliseconds)
+        $remaining = {
+            param([DateTimeOffset]$Deadline, [int64]$Anchor)
+            return (Get-AgcWorkerCycleRemaining -Deadline $Deadline -Anchor $Anchor -Now $Now -Clock $clock)
+        }
+        if ((& $remaining $validation.Deadline $wallDeadline) -le 0) { return (& $finish 'unconfirmed' 'cycle_deadline_exhausted') }
+        if (-not (& $GateCheck)) { return (& $finish 'unconfirmed' 'gate_request_mismatch') }
+        if (-not (& $RequestCheck)) { return (& $finish 'unconfirmed' 'cycle_request_replaced') }
+        $listBudget = [Math]::Min([int64]3000, (& $remaining $validation.Deadline $wallDeadline))
+        if ($listBudget -le 0) { return (& $finish 'unconfirmed' 'cycle_deadline_exhausted') }
+        try { $running = @(Get-AgcWorkerRunningDistros -WslPath $WslPath -TimeoutMilliseconds ([int]$listBudget)) }
+        catch { return (& $finish 'unconfirmed' 'running_list_unverified') }
+        $receipt.details.initialRunning = ($running -contains $Distro)
+        $drained = $false
+        if ($running -notcontains $Distro) {
+            $receipt.stopped = $true; $receipt.verified = $true
+            $receipt.details.verification = 'running-list'; $receipt.details.verifyComplete = 'true'
+            $receipt.details.verificationFresh = $true; $receipt.details.verificationPhase = 'before_stop'
+            return (& $finish 'graceful' 'absent_before_stop')
+        }
+        $gracefulBudget = [Math]::Min([int64]10000, (& $remaining $validation.GracefulDeadline $wallGraceful))
+        if ($gracefulBudget -gt 0) {
+            if (-not (& $GateCheck)) { return (& $finish 'unconfirmed' 'gate_request_mismatch') }
+            if (-not (& $RequestCheck)) { return (& $finish 'unconfirmed' 'cycle_request_replaced') }
+            try {
+                $stop = Invoke-AgcWorkerWsl -Arguments @('-d',$Distro,'-u','root','--exec','/usr/bin/systemctl','stop','agc-worker.service') `
+                    -TimeoutMilliseconds ([int]$gracefulBudget) -WslPath $WslPath
+                $receipt.details.stopTimedOut = [bool]($stop.TimedOut -eq $true)
+                $receipt.details.stopExitCode = $(if ($null -ne $stop.ExitCode) { [int]$stop.ExitCode } else { -1 })
+                $drained = ($stop.TimedOut -ne $true -and $null -ne $stop.ExitCode -and [int]$stop.ExitCode -eq 0)
+            } catch { $receipt.details.stopError = $_.Exception.GetType().Name }
+        }
+        $receipt.details.drained = $drained
+        if ($drained) {
+            $verifyBudget = [Math]::Min([int64]3000, (& $remaining $validation.Deadline $wallDeadline)) - $VerifyReserveMilliseconds
+            if ($verifyBudget -gt 0) {
+                try { $afterStop = @(Get-AgcWorkerRunningDistros -WslPath $WslPath -TimeoutMilliseconds ([int]$verifyBudget)) }
+                catch { $afterStop = $null }
+                if ($null -ne $afterStop -and $afterStop -notcontains $Distro) {
+                    $receipt.stopped = $true; $receipt.verified = $true
+                    $receipt.details.verification = 'running-list'; $receipt.details.verifyComplete = 'true'
+                    $receipt.details.verificationFresh = $true; $receipt.details.verificationPhase = 'post_drain'
+                    return (& $finish 'graceful' 'drained_and_absent')
+                }
+            }
+            $receipt.details.earlyTerminate = $true
+        } else {
+            $untilGraceful = (& $remaining $validation.GracefulDeadline $wallGraceful)
+            if ($untilGraceful -gt 0) { & $Wait ([int]$untilGraceful); $receipt.details.waitedForGracefulMs = [int]$untilGraceful }
+        }
+        if (-not (& $GateCheck)) { return (& $finish 'unconfirmed' 'gate_request_mismatch') }
+        if (-not (& $RequestCheck)) { return (& $finish 'unconfirmed' 'cycle_request_replaced') }
+        $terminateBudget = [Math]::Min([int64]8000, (& $remaining $validation.TerminateDeadline $wallTerminate))
+        $finalRoom = (& $remaining $validation.Deadline $wallDeadline) - $VerifyReserveMilliseconds
+        $terminateBudget = [Math]::Min($terminateBudget, $finalRoom)
+        if ($terminateBudget -gt 0) {
+            try {
+                $terminate = Invoke-AgcWorkerWsl -Arguments @('--terminate',$Distro) -TimeoutMilliseconds ([int]$terminateBudget) -WslPath $WslPath
+                $receipt.details.terminateTimedOut = [bool]($terminate.TimedOut -eq $true)
+                $receipt.details.terminateExitCode = $(if ($null -ne $terminate.ExitCode) { [int]$terminate.ExitCode } else { -1 })
+            } catch { $receipt.details.terminateError = $_.Exception.GetType().Name }
+        } else {
+            # No room to terminate safely: skip the command but still spend any
+            # remaining verification time on a fresh final query.
+            $receipt.details.terminateSkipped = 'budget'
+        }
+        $verifyBudget = [Math]::Min([int64]3000, (& $remaining $validation.Deadline $wallDeadline))
+        if ($verifyBudget -le 0) { return (& $finish 'unconfirmed' 'verification_deadline_exhausted') }
+        try { $after = @(Get-AgcWorkerRunningDistros -WslPath $WslPath -TimeoutMilliseconds ([int]$verifyBudget)) }
+        catch { return (& $finish 'unconfirmed' 'verification_unverified') }
+        $receipt.details.verificationFresh = $true
+        $receipt.details.verificationPhase = 'post_terminate'
+        if ($after -contains $Distro) {
+            if ($receipt.details.ContainsKey('terminateSkipped')) {
+                return (& $finish 'unconfirmed' 'terminate_deadline_exhausted')
+            }
+            return (& $finish 'unconfirmed' 'distro_still_running')
+        }
+        $receipt.stopped = $true; $receipt.verified = $true
+        $receipt.details.verification = 'running-list'; $receipt.details.verifyComplete = 'true'
+        if ($receipt.details.ContainsKey('terminateExitCode')) { return (& $finish 'forced' 'terminated_and_absent') }
+        return (& $finish 'graceful' 'absent_and_verified')
+    } catch {
+        $receipt.details.errorType = $_.Exception.GetType().Name
+        return (& $finish 'unconfirmed' 'cycle_error')
+    } finally {
+        if ($null -ne $stream) { try { $stream.Dispose() } catch { } }
+    }
+}
+
 function Write-AgcWorkerStopReceipt {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][hashtable]$Data,
         [string]$RequestId = 'local',
         [string]$Outcome = 'unconfirmed',
-        [ValidateSet('stop','terminate','verify')][string]$Phase = 'stop'
+        [ValidateSet('stop','terminate','verify','cycle')][string]$Phase = 'stop'
     )
-    $Data['phase'] = $Phase
+    # The shared library stringifies every Data value, so a nested details
+    # hashtable would appear as "System.Collections.Hashtable". A cycle receipt
+    # is flattened to the scalar keys the native CycleEvidence parser reads.
+    $sharedData = if ($Phase -eq 'cycle') { Get-AgcWorkerCycleSharedData -Receipt $Data } else { $Data }
+    $sharedData['phase'] = $Phase
     # The shared library only accepts graceful/forced/unconfirmed. Keep the
     # richer local wording in details and never let a binding exception look
     # like a successful shared receipt.
@@ -255,12 +547,12 @@ function Write-AgcWorkerStopReceipt {
         'forced' { 'forced' }
         default { 'unconfirmed' }
     }
-    $Data['outcomeDetail'] = $Outcome
+    $sharedData['outcomeDetail'] = $Outcome
     $written = $false
     if ($script:AgcWorkerLoaded) {
         try {
             $null = Write-AgcStopReceipt -Owner $script:AgcWorkerOwner -RequestId $RequestId `
-                -Outcome $sharedOutcome -Data $Data -Phase $Phase
+                -Outcome $sharedOutcome -Data $sharedData -Phase $Phase
             $written = $true
         } catch {
             $Data['sharedReceiptError'] = $_.Exception.GetType().Name + ': ' + $_.Exception.Message
@@ -274,7 +566,7 @@ function Write-AgcWorkerStopReceipt {
 function Save-AgcWorkerLocalStopReceipt {
     [CmdletBinding()]
     param([hashtable]$Receipt, [string]$DataPath = $script:AgcWorkerDataPath,
-          [string]$RequestId = 'local', [ValidateSet('stop','terminate','verify')][string]$Phase = 'stop')
+          [string]$RequestId = 'local', [ValidateSet('stop','terminate','verify','cycle')][string]$Phase = 'stop')
     try {
         $json = $Receipt | ConvertTo-Json -Depth 10
         foreach ($name in @("$RequestId.$Phase.json", "stop-$RequestId.json")) {

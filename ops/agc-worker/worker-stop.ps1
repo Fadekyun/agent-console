@@ -2,6 +2,10 @@
 # C:\ProgramData\AGCLifecycle\owners\worker-stop.ps1 and invoked only by the
 # fixed AGC-Worker-LifecycleStop task as the agc-worker account.
 #
+# Cycle-capable owner helper (issue #210). Legacy stop/terminate/verify remain
+# supported for mixed-version rollout.
+# AGC_OWNER_CYCLE_PROTOCOL=1
+#
 # Phases come from the admin-owned request file written by the coordinator.
 # The helper must never force-terminate before the explicit stop phase has been
 # attempted; an unknown/missing phase defaults to Verify.
@@ -47,19 +51,77 @@ try {
         Write-Unconfirmed '' '' 'verify' 'request_file_invalid'
     }
     $request = Get-Content -LiteralPath $RequestFile -Raw -ErrorAction Stop | ConvertFrom-Json
+    $requestHash = (Get-FileHash -LiteralPath $RequestFile -Algorithm SHA256).Hash.ToLowerInvariant()
 } catch { Write-Unconfirmed '' '' 'verify' 'request_file_unreadable' }
 if ($request.schema -ne 1 -or $request.owner -ne 'worker') { Write-Unconfirmed ([string]$request.requestId) ([string]$request.bootId) 'verify' 'request_binding_invalid' }
 $requestId = [string]$request.requestId
 $bootId = [string]$request.bootId
 if ($requestId -notmatch '^[a-f0-9]{32}$') { Write-Unconfirmed $requestId $bootId 'verify' 'request_id_invalid' }
-try {
-    $deadline = [DateTimeOffset]::Parse([string]$request.deadlineUtc, [Globalization.CultureInfo]::InvariantCulture)
-} catch { Write-Unconfirmed $requestId $bootId 'verify' 'deadline_invalid' }
-$now = [DateTimeOffset]::UtcNow
-if ($deadline -lt $now -or ($deadline - $now).TotalSeconds -gt 120) { Write-Unconfirmed $requestId $bootId 'verify' 'deadline_stale' }
+# Phase is parsed before any deadline refusal so a legacy/cycle decision never
+# depends on the current time.
 $phase = ([string]$request.phase).ToLowerInvariant()
 if ($phase -eq 'graceful') { $phase = 'stop' }
-if ($phase -notin @('stop','terminate','verify')) { $phase = 'verify' }
+if ($phase -notin @('stop','terminate','verify','cycle')) { $phase = 'verify' }
+
+if ($phase -eq 'cycle') {
+    # Exact owner SID binding comes from the enrolled account marker. This file
+    # contains no credential material; the DPAPI credential is never read here.
+    try {
+        $markerPath = 'C:\ProgramData\AGC-Worker\control\account.json'
+        $markerItem = Get-Item -LiteralPath $markerPath -Force -ErrorAction Stop
+        if ($markerItem.PSIsContainer -or ($markerItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $markerItem.Length -gt 4096) {
+            Write-Unconfirmed $requestId $bootId 'cycle' 'owner_marker_invalid'
+        }
+        $enrolled = Get-Content -LiteralPath $markerPath -Raw -ErrorAction Stop | ConvertFrom-Json
+    } catch { Write-Unconfirmed $requestId $bootId 'cycle' 'owner_marker_unreadable' }
+    if ([string]$enrolled.sid -ne $sid) { Write-Unconfirmed $requestId $bootId 'cycle' 'owner_sid_mismatch' }
+    $validated = Get-AgcWorkerCycleRequest -Request $request
+    if (-not $validated.Valid) { Write-Unconfirmed $requestId $bootId 'cycle' $validated.Reason }
+    if ($validated.Deadline -le [DateTimeOffset]::UtcNow) { Write-Unconfirmed $requestId $bootId 'cycle' 'cycle_deadline_exhausted' }
+    $gateCheck = {
+        $current = Get-AgcStopRequest
+        return ($null -ne $current -and [string]$current.RequestId -eq $requestId -and [string]$current.BootId -eq $bootId)
+    }.GetNewClosure()
+    $requestCheck = {
+        try {
+            $currentHash = (Get-FileHash -LiteralPath $RequestFile -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($currentHash -ne $requestHash) { return $false }
+            $currentRequest = Get-Content -LiteralPath $RequestFile -Raw -ErrorAction Stop | ConvertFrom-Json
+            return ([string]$currentRequest.requestId -eq $requestId -and [string]$currentRequest.bootId -eq $bootId -and
+                [string]$currentRequest.phase -eq 'cycle')
+        } catch { return $false }
+    }.GetNewClosure()
+    # Primary executor publishes the shared receipt while it holds the per-cycle
+    # lock (flat data only: the shared library stringifies nested values).
+    $onComplete = {
+        param($cycleReceipt)
+        return (Write-AgcWorkerStopReceipt -Data $cycleReceipt -RequestId $requestId -Outcome $cycleReceipt.outcome -Phase 'cycle')
+    }.GetNewClosure()
+    $result = Invoke-AgcWorkerOwnerCycle -Request $request -RequestHash $requestHash -WslPath 'wsl.exe' `
+        -Distro $Distro -DataPath $Data -GateCheck $gateCheck -RequestCheck $requestCheck -OnComplete $onComplete
+    if ($result.duplicate -eq $true -or $result.reused -eq $true) {
+        Write-AgcWorkerLog -Event 'worker_lifecycle_cycle_duplicate' -Data @{request_id=$requestId;reason=$result.reason;outcome=$result.outcome;reused=[string]$result.reused}
+        if ($result.reused -eq $true) {
+            # Repair a crash-gap shared receipt from the proven local evidence.
+            # It carries the same graceful/forced outcome, never a refusal.
+            try {
+                $repaired = Write-AgcWorkerStopReceipt -Data $result.receipt -RequestId $requestId -Outcome $result.receipt.outcome -Phase 'cycle'
+            } catch { $repaired = $false }
+            Write-AgcWorkerLog -Event 'worker_lifecycle_cycle_reused' -Data @{request_id=$requestId;outcome=$result.outcome;shared_repair=[string]$repaired}
+            exit 0
+        }
+        exit 1
+    }
+    Write-AgcWorkerLog -Event 'worker_lifecycle_owner_cycle' -Data @{request_id=$requestId;outcome=$result.outcome;stopped=[string]$result.stopped;verified=[string]$result.verified;duration_ms=$result.receipt.durationMs;launch_latency_ms=$result.receipt.details.launchLatencyMs}
+    if ($result.verified -eq $true) { exit 0 }
+    exit 1
+}
+
+try {
+    $deadline = [DateTimeOffset]::Parse([string]$request.deadlineUtc, [Globalization.CultureInfo]::InvariantCulture)
+} catch { Write-Unconfirmed $requestId $bootId $phase 'deadline_invalid' }
+$now = [DateTimeOffset]::UtcNow
+if ($deadline -lt $now -or ($deadline - $now).TotalSeconds -gt 120) { Write-Unconfirmed $requestId $bootId $phase 'deadline_stale' }
 # The registry gate and request file must agree. A coordinator-side mismatch is
 # never proof that this worker should stop.
 $gate = Get-AgcStopRequest

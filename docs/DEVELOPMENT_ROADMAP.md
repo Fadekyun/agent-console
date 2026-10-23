@@ -7,6 +7,7 @@ The deployed worker consumes the Windows AGCLifecycle gate instead of launching 
 - [x] Close guest admission before job termination and defer artifact hashing on shutdown while preserving truthful unknown/deferred receipts and fences.
 - [x] Ship stage-only managed guest install (no independent boot enablement, `Restart=no`), 128 MiB/7-day journald, 1 MiB × 8 worker log rotation and record-age 7-day pruning.
 - [ ] Root requalifies the changed worker hash and actually verifies task registration, WSL termination, attended shutdown and physical sleep behavior.
+- [x] Run one bounded owner cycle per shutdown (graceful drain, conditional early terminate, fresh running-list proof, absolute +13/+21/+24 s bounds, duplicate protection) while keeping legacy stop/terminate/verify compatibility for mixed rollout (#210).
 
 ## AGC laptop workload migration — 2026-10-17 (#203)
 
