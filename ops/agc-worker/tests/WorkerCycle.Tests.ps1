@@ -138,6 +138,15 @@ Assert-Equal (Get-AgcWorkerCycleRequest -Request $bad).Reason 'request_binding_i
 $GateOk = { $true }
 $RequestOk = { $true }
 
+# Malformed requests must refuse without throwing from the Invoke entrypoint.
+$bad = [pscustomobject]@{schema=1;owner='worker';phase='cycle';requestId='bad'}
+$result = Invoke-AgcWorkerOwnerCycle -Request $bad -DataPath $data -Now $Now -Wait $Wait -GateCheck $GateOk -RequestCheck $RequestOk
+Assert-Equal $result.outcome 'unconfirmed' 'malformed request refuses without throwing'
+Assert-Equal $result.reason 'request_id_invalid' 'malformed request reason'
+$result = Invoke-AgcWorkerOwnerCycle -Request $null -DataPath $data -Now $Now -Wait $Wait -GateCheck $GateOk -RequestCheck $RequestOk
+Assert-Equal $result.reason 'request_binding_invalid' 'null request refuses without throwing'
+
+
 # --- Owner binding uses the readable lifecycle configuration, not control ---
 $configDir = Join-Path $root 'lifecycleconfig'
 New-Item -ItemType Directory -Path $configDir -Force | Out-Null

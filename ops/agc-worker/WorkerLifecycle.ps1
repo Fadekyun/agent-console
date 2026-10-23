@@ -441,11 +441,6 @@ function Invoke-AgcWorkerOwnerCycle {
     $validation = Get-AgcWorkerCycleRequest -Request $Request
     $started = & $Now
     $clock = [Diagnostics.Stopwatch]::StartNew()
-    # Budgets are anchored to the single launch instant, before any setup, so
-    # remaining time is never charged twice for validation/lock/receipt reads.
-    $anchorDeadline = [int64](($validation.Deadline - $started).TotalMilliseconds)
-    $anchorGraceful = [int64](($validation.GracefulDeadline - $started).TotalMilliseconds)
-    $anchorTerminate = [int64](($validation.TerminateDeadline - $started).TotalMilliseconds)
     $receipt = @{schema=1;owner='worker';requestId=$validation.RequestId;bootId=$validation.BootId;
         phase='cycle';outcome='unconfirmed';stopped=$false;verified=$false;scope='distro';source='owner';
         startedUtc=$started.ToString('o');accountName=$identity.Name;accountSid=$identity.Sid;distro=$Distro
@@ -475,6 +470,14 @@ function Invoke-AgcWorkerOwnerCycle {
     }
     if ($Distro -ne 'AGC-Worker') { return (& $finish 'unconfirmed' 'distro_not_owned') }
     if (-not $validation.Valid) { return (& $finish 'unconfirmed' $validation.Reason) }
+    # Budgets are anchored to the single launch instant, before any effect, so
+    # remaining time is never charged twice for setup/lock/receipt reads. The
+    # anchors are computed only for a validated request (no null-date maths).
+    # Budgets are anchored to the single launch instant, before any setup, so
+    # remaining time is never charged twice for validation/lock/receipt reads.
+    $anchorDeadline = [int64](($validation.Deadline - $started).TotalMilliseconds)
+    $anchorGraceful = [int64](($validation.GracefulDeadline - $started).TotalMilliseconds)
+    $anchorTerminate = [int64](($validation.TerminateDeadline - $started).TotalMilliseconds)
     # A request issued in the future is not a valid absolute budget: only a small
     # clock-skew tolerance is accepted, matching the legacy future-deadline cap.
     if (($validation.Issued - $started).TotalMilliseconds -gt 250) {

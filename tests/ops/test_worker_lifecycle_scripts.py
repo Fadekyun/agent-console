@@ -210,6 +210,19 @@ class PowerShellCycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("worker cycle tests: PASS", result.stdout)
 
+    @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
+    def test_owner_cycle_entrypoint_block_regression_passes(self):
+        # Executes the real bounded cycle block extracted from worker-stop.ps1
+        # with a fake library/gate/config; live Windows owner ACL/identity proof
+        # remains root's SCM rehearsal.
+        result = subprocess.run(
+            [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-File",
+             str(WORKER / "tests/WorkerStopCycleBlock.Tests.ps1")],
+            cwd=ROOT, capture_output=True, text=True, timeout=180,
+            env={**os.environ, "POWERSHELL_TELEMETRY_OPTOUT": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("worker stop cycle block tests: PASS", result.stdout)
+
     def test_local_fake_cli_adapter_tests_pass(self):
         result = subprocess.run(
             [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-File",
