@@ -127,7 +127,12 @@ request, executed once per cycle in a single bounded helper process:
 | `deadlineUtc` | issued + 24 s (final verification cutoff) |
 
 The helper validates the ordering and the absolute +13/+21/+24 s caps (the
-native 25 s / SCM 30 s budget) before any effect. `worker-stop.ps1` advertises
+native 25 s / SCM 30 s budget) before any effect. A request issued more than
+250 ms in the helper's future is unconfirmed (`cycle_request_future`), so a
+skewed clock cannot stretch the advertised window, and the remaining-time
+arithmetic is anchored to the single launch instant (wall clock plus stopwatch)
+so setup work is charged once. A 400 ms receipt-publication margin is reserved
+after the final running-list query. `worker-stop.ps1` advertises
 `# AGC_OWNER_CYCLE_PROTOCOL=1`; `Install-LifecycleStopTask.ps1` requires the
 installed task action to equal the fixed owner action and reports
 `cycle_protocol_supported` plus `task_action_matches_fixed` in its receipt. The

@@ -317,12 +317,18 @@ function Get-AgcWorkerCycleReceipt {
 }
 
 function Get-AgcWorkerCycleRemaining {
-    # Wall-clock remaining time bounded by an anchored stopwatch so a backwards
-    # clock correction can never extend the absolute cycle budget.
+    # Absolute remaining time: the wall clock is bounded by a monotonic anchor
+    # captured from the same launch instant. Anchor is the budget measured from
+    # the helper's start (not from a later setup instant), so setup time is
+    # charged exactly once and a backwards clock correction can never extend it.
+    # ElapsedMilliseconds exists only so the arithmetic can be tested without a
+    # real delay; production always passes the live Stopwatch.
     [CmdletBinding()]
-    param([DateTimeOffset]$Deadline, [int64]$Anchor, [scriptblock]$Now, [Diagnostics.Stopwatch]$Clock)
+    param([DateTimeOffset]$Deadline, [int64]$Anchor, [scriptblock]$Now,
+          [Diagnostics.Stopwatch]$Clock = $null, [int64]$ElapsedMilliseconds = 0)
+    $elapsed = if ($null -ne $Clock) { [int64]$Clock.ElapsedMilliseconds } else { [Math]::Max([int64]0, $ElapsedMilliseconds) }
     $wall = [int64](($Deadline - (& $Now)).TotalMilliseconds)
-    $monotonic = [int64]($Anchor - $Clock.ElapsedMilliseconds)
+    $monotonic = [int64]($Anchor - $elapsed)
     $value = [Math]::Min($wall, $monotonic)
     if ($value -lt 0) { return [int64]0 }
     return [int64]$value
@@ -435,6 +441,11 @@ function Invoke-AgcWorkerOwnerCycle {
     $validation = Get-AgcWorkerCycleRequest -Request $Request
     $started = & $Now
     $clock = [Diagnostics.Stopwatch]::StartNew()
+    # Budgets are anchored to the single launch instant, before any setup, so
+    # remaining time is never charged twice for validation/lock/receipt reads.
+    $anchorDeadline = [int64](($validation.Deadline - $started).TotalMilliseconds)
+    $anchorGraceful = [int64](($validation.GracefulDeadline - $started).TotalMilliseconds)
+    $anchorTerminate = [int64](($validation.TerminateDeadline - $started).TotalMilliseconds)
     $receipt = @{schema=1;owner='worker';requestId=$validation.RequestId;bootId=$validation.BootId;
         phase='cycle';outcome='unconfirmed';stopped=$false;verified=$false;scope='distro';source='owner';
         startedUtc=$started.ToString('o');accountName=$identity.Name;accountSid=$identity.Sid;distro=$Distro
@@ -464,6 +475,11 @@ function Invoke-AgcWorkerOwnerCycle {
     }
     if ($Distro -ne 'AGC-Worker') { return (& $finish 'unconfirmed' 'distro_not_owned') }
     if (-not $validation.Valid) { return (& $finish 'unconfirmed' $validation.Reason) }
+    # A request issued in the future is not a valid absolute budget: only a small
+    # clock-skew tolerance is accepted, matching the legacy future-deadline cap.
+    if (($validation.Issued - $started).TotalMilliseconds -gt 250) {
+        return (& $finish 'unconfirmed' 'cycle_request_future')
+    }
     $existing = Get-AgcWorkerCycleReceipt -DataPath $DataPath -RequestId $validation.RequestId -BootId $validation.BootId -Distro $Distro
     if ($null -ne $existing) {
         return [pscustomobject]@{outcome=[string]$existing.outcome;stopped=$true;verified=$true;reused=$true;
@@ -479,20 +495,19 @@ function Invoke-AgcWorkerOwnerCycle {
             return [pscustomobject]@{outcome=[string]$existing.outcome;stopped=$true;verified=$true;reused=$true;
                 duplicate=$true;reason='cycle_receipt_reused';receipt=$existing;details=$existing.details;duplicateReason=''}
         }
+        $publicationReserve = 400
         $receipt.details.launchLatencyMs = [int64]($started - $validation.Issued).TotalMilliseconds
+        $receipt.details.publicationReserveMs = $publicationReserve
         # Absolute remaining time: the wall clock is bounded by an anchored
         # stopwatch so a backwards clock correction cannot extend the budget.
-        $wallDeadline = [int64](($validation.Deadline - (& $Now)).TotalMilliseconds)
-        $wallGraceful = [int64](($validation.GracefulDeadline - (& $Now)).TotalMilliseconds)
-        $wallTerminate = [int64](($validation.TerminateDeadline - (& $Now)).TotalMilliseconds)
         $remaining = {
             param([DateTimeOffset]$Deadline, [int64]$Anchor)
             return (Get-AgcWorkerCycleRemaining -Deadline $Deadline -Anchor $Anchor -Now $Now -Clock $clock)
         }
-        if ((& $remaining $validation.Deadline $wallDeadline) -le 0) { return (& $finish 'unconfirmed' 'cycle_deadline_exhausted') }
+        if ((& $remaining $validation.Deadline $anchorDeadline) -le 0) { return (& $finish 'unconfirmed' 'cycle_deadline_exhausted') }
         if (-not (& $GateCheck)) { return (& $finish 'unconfirmed' 'gate_request_mismatch') }
         if (-not (& $RequestCheck)) { return (& $finish 'unconfirmed' 'cycle_request_replaced') }
-        $listBudget = [Math]::Min([int64]3000, (& $remaining $validation.Deadline $wallDeadline))
+        $listBudget = [Math]::Min([int64]3000, (& $remaining $validation.Deadline $anchorDeadline))
         if ($listBudget -le 0) { return (& $finish 'unconfirmed' 'cycle_deadline_exhausted') }
         try { $running = @(Get-AgcWorkerRunningDistros -WslPath $WslPath -TimeoutMilliseconds ([int]$listBudget)) }
         catch { return (& $finish 'unconfirmed' 'running_list_unverified') }
@@ -504,7 +519,7 @@ function Invoke-AgcWorkerOwnerCycle {
             $receipt.details.verificationFresh = $true; $receipt.details.verificationPhase = 'before_stop'
             return (& $finish 'graceful' 'absent_before_stop')
         }
-        $gracefulBudget = [Math]::Min([int64]10000, (& $remaining $validation.GracefulDeadline $wallGraceful))
+        $gracefulBudget = [Math]::Min([int64]10000, (& $remaining $validation.GracefulDeadline $anchorGraceful))
         if ($gracefulBudget -gt 0) {
             if (-not (& $GateCheck)) { return (& $finish 'unconfirmed' 'gate_request_mismatch') }
             if (-not (& $RequestCheck)) { return (& $finish 'unconfirmed' 'cycle_request_replaced') }
@@ -518,7 +533,7 @@ function Invoke-AgcWorkerOwnerCycle {
         }
         $receipt.details.drained = $drained
         if ($drained) {
-            $verifyBudget = [Math]::Min([int64]3000, (& $remaining $validation.Deadline $wallDeadline)) - $VerifyReserveMilliseconds
+            $verifyBudget = [Math]::Min([int64]3000, (& $remaining $validation.Deadline $anchorDeadline)) - $publicationReserve
             if ($verifyBudget -gt 0) {
                 try { $afterStop = @(Get-AgcWorkerRunningDistros -WslPath $WslPath -TimeoutMilliseconds ([int]$verifyBudget)) }
                 catch { $afterStop = $null }
@@ -531,13 +546,15 @@ function Invoke-AgcWorkerOwnerCycle {
             }
             $receipt.details.earlyTerminate = $true
         } else {
-            $untilGraceful = (& $remaining $validation.GracefulDeadline $wallGraceful)
+            $untilGraceful = (& $remaining $validation.GracefulDeadline $anchorGraceful)
             if ($untilGraceful -gt 0) { & $Wait ([int]$untilGraceful); $receipt.details.waitedForGracefulMs = [int]$untilGraceful }
         }
         if (-not (& $GateCheck)) { return (& $finish 'unconfirmed' 'gate_request_mismatch') }
         if (-not (& $RequestCheck)) { return (& $finish 'unconfirmed' 'cycle_request_replaced') }
-        $terminateBudget = [Math]::Min([int64]8000, (& $remaining $validation.TerminateDeadline $wallTerminate))
-        $finalRoom = (& $remaining $validation.Deadline $wallDeadline) - $VerifyReserveMilliseconds
+        $terminateBudget = [Math]::Min([int64]8000, (& $remaining $validation.TerminateDeadline $anchorTerminate))
+        # Leave the verification allowance plus a receipt-publication margin so
+        # the helper can still finish inside the native 24 s cutoff.
+        $finalRoom = (& $remaining $validation.Deadline $anchorDeadline) - ($VerifyReserveMilliseconds + $publicationReserve)
         $terminateBudget = [Math]::Min($terminateBudget, $finalRoom)
         if ($terminateBudget -gt 0) {
             try {
@@ -550,7 +567,7 @@ function Invoke-AgcWorkerOwnerCycle {
             # remaining verification time on a fresh final query.
             $receipt.details.terminateSkipped = 'budget'
         }
-        $verifyBudget = [Math]::Min([int64]3000, (& $remaining $validation.Deadline $wallDeadline))
+        $verifyBudget = [Math]::Min([int64]3000, (& $remaining $validation.Deadline $anchorDeadline)) - $publicationReserve
         if ($verifyBudget -le 0) { return (& $finish 'unconfirmed' 'verification_deadline_exhausted') }
         try { $after = @(Get-AgcWorkerRunningDistros -WslPath $WslPath -TimeoutMilliseconds ([int]$verifyBudget)) }
         catch { return (& $finish 'unconfirmed' 'verification_unverified') }

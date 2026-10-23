@@ -357,6 +357,52 @@ Assert-Equal $result.reason 'terminate_deadline_exhausted' 'skipped terminate ke
 Assert-Equal (@(Get-Calls) | Where-Object { $_ -match '^--terminate' } | Measure-Object).Count 0 'no terminate without verification room'
 Assert-True ((@(Get-Calls) | Where-Object { $_ -match '^--list' }).Count -ge 2) 'final running-list query still happens'
 
+# --- Setup delay is charged once: no early terminate after a failed drain ---
+$t0 = [DateTimeOffset]::Parse('2026-10-23T00:00:00.000Z')
+$arithmeticNow = { $t0.AddSeconds(8) }
+Assert-Equal (Get-AgcWorkerCycleRemaining -Deadline $t0.AddSeconds(13) -Anchor 13000 -Now $arithmeticNow -ElapsedMilliseconds 8000) 5000 'setup time is not charged twice'
+$rolledBackNow = { $t0.AddSeconds(2) }
+Assert-Equal (Get-AgcWorkerCycleRemaining -Deadline $t0.AddSeconds(13) -Anchor 13000 -Now $rolledBackNow -ElapsedMilliseconds 8000) 5000 'clock rollback cannot extend the anchored budget'
+Reset-State -Running
+'1' | Set-Content -LiteralPath (Join-Path $state 'stop_fail')
+$request = New-CycleRequest
+$script:Clock = $issued.AddSeconds(8)
+$script:Waits = @()
+$result = Invoke-AgcWorkerOwnerCycle -Request $request -RequestHash 'f' -WslPath $fakeWsl -Distro 'AGC-Worker' `
+    -DataPath $data -Now $Now -Wait $Wait -GateCheck $GateOk -RequestCheck $RequestOk
+Assert-Equal $result.outcome 'forced' 'setup delay still reaches forced termination'
+$waited = [int64](($script:Waits | Measure-Object -Sum).Sum)
+Assert-True ($waited -ge 4800 -and $waited -le 5200) 'failed drain still waits to the absolute graceful cutoff'
+Assert-Equal (@(Get-Calls) | Where-Object { $_ -match '^--terminate' } | Measure-Object).Count 1 'terminate follows the full graceful wait'
+
+# --- Future-dated request: only a small clock-skew tolerance is accepted ---
+Reset-State -Running
+$script:Clock = $issued
+$futureIssued = $issued.AddSeconds(5)
+$futureRequest = New-CycleRequest -Issued $futureIssued
+$result = Invoke-AgcWorkerOwnerCycle -Request $futureRequest -RequestHash 'f' -WslPath $fakeWsl -Distro 'AGC-Worker' `
+    -DataPath $data -Now $Now -Wait $Wait -GateCheck $GateOk -RequestCheck $RequestOk
+Assert-Equal $result.outcome 'unconfirmed' 'future-dated request unconfirmed'
+Assert-Equal $result.reason 'cycle_request_future' 'future-dated request reason'
+Assert-Equal (@(Get-Calls).Count) 0 'future-dated request launches nothing'
+$nearIssued = $issued.AddMilliseconds(200)
+$nearRequest = New-CycleRequest -Issued $nearIssued
+'1' | Set-Content -LiteralPath (Join-Path $state 'stop_removes_running')
+$result = Invoke-AgcWorkerOwnerCycle -Request $nearRequest -RequestHash 'f' -WslPath $fakeWsl -Distro 'AGC-Worker' `
+    -DataPath $data -Now $Now -Wait $Wait -GateCheck $GateOk -RequestCheck $RequestOk
+Assert-True ($result.reason -ne 'cycle_request_future') 'small clock skew is tolerated'
+
+# --- Publication margin: no final query when it would cross the 24 s cutoff ---
+Reset-State -Running
+'1' | Set-Content -LiteralPath (Join-Path $state 'stop_fail')
+$request = New-CycleRequest -Graceful $issued.AddSeconds(1) -Terminate $issued.AddSeconds(1.2) -Deadline $issued.AddSeconds(1.35)
+$script:Clock = $issued
+$result = Invoke-AgcWorkerOwnerCycle -Request $request -RequestHash 'f' -WslPath $fakeWsl -Distro 'AGC-Worker' `
+    -DataPath $data -Now $Now -Wait $Wait -GateCheck $GateOk -RequestCheck $RequestOk
+Assert-Equal $result.reason 'verification_deadline_exhausted' 'publication margin stops a late final query'
+Assert-Equal (@(Get-Calls) | Where-Object { $_ -match '^--list' } | Measure-Object).Count 1 'only the initial list ran'
+Assert-True ($result.details.publicationReserveMs -ge 300 -and $result.details.publicationReserveMs -le 500) 'publication margin recorded'
+
 # --- Receipt writers accept the cycle phase ---
 Remove-Item -LiteralPath $script:FakeReceipt -ErrorAction SilentlyContinue
 $receipt = @{schema=1;owner='worker';requestId=('a' * 32);bootId='b1';phase='cycle';outcome='graceful';
