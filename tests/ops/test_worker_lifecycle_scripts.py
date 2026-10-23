@@ -144,7 +144,17 @@ class WorkerScriptContractTests(unittest.TestCase):
         self.assertIn("Invoke-AgcWorkerOwnerCycle", helper)
         self.assertIn("-Phase 'cycle'", helper)
         self.assertNotIn("credential.dpapi", helper)
-        self.assertIn("owner_sid_mismatch", helper)
+        # Static extraction of the real cycle block (no execution on Linux).
+        # Root's live owner run on the store laptop remains the runtime proof;
+        # this guards the permissions regression where control/account.json was
+        # admin-only and unreadable by agc-worker.
+        cycle_block = helper[helper.index("if ($phase -eq 'cycle') {"):helper.index("try {\n    $deadline = [DateTimeOffset]::Parse")]
+        self.assertIn("Test-AgcWorkerOwnerSidBinding", cycle_block)
+        self.assertIn("Get-AgcWorkerLifecycleConfigPath", cycle_block)
+        self.assertNotIn("account.json", cycle_block)
+        self.assertNotIn("control\\", cycle_block)
+        self.assertIn("owner_sid_mismatch", adapter)
+        self.assertIn("lifecycle_config_invalid", adapter)
         # Legacy phases remain compatible.
         for phase in ("stop", "terminate", "verify", "cycle"):
             self.assertIn("'" + phase + "'", helper)

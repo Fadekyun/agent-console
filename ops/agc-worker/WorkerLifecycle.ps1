@@ -328,6 +328,56 @@ function Get-AgcWorkerCycleRemaining {
     return [int64]$value
 }
 
+function Get-AgcWorkerLifecycleConfigPath {
+    [CmdletBinding()]
+    param()
+    if (Get-Command Get-AgcLifecycleConfigPath -CommandType Function -ErrorAction SilentlyContinue) {
+        try {
+            $path = Get-AgcLifecycleConfigPath
+            if ($path) { return [string]$path }
+        } catch { }
+    }
+    $root = 'C:\ProgramData\AGCLifecycle'
+    if ($env:AGC_LIFECYCLE_ROOT) { $root = [string]$env:AGC_LIFECYCLE_ROOT }
+    return (Join-Path $root 'config\lifecycle.json')
+}
+
+function Test-AgcWorkerOwnerSidBinding {
+    <#
+      Bind the owner cycle to the admin-owned lifecycle configuration, which is
+      readable by Users/owners and is the same configuration the native service
+      validates. It grants Users RX; C:\ProgramData\AGC-Worker\control (including
+      the DPAPI credential) is admin-only and must never be read here.
+    #>
+    [CmdletBinding()]
+    param([string]$ConfigPath, [string]$ExpectedSid, [string]$ExpectedDistro = 'AGC-Worker')
+    $result = [pscustomobject]@{Bound=$false;Reason='lifecycle_config_unreadable';AccountSid='';AccountName=''}
+    try {
+        $item = Get-Item -LiteralPath $ConfigPath -Force -ErrorAction Stop
+        if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -gt 65536) {
+            $result.Reason = 'lifecycle_config_invalid'
+            return $result
+        }
+        $raw = Get-Content -LiteralPath $ConfigPath -Raw -ErrorAction Stop
+    } catch { return $result }
+    try { $config = $raw | ConvertFrom-Json -ErrorAction Stop } catch {
+        $result.Reason = 'lifecycle_config_invalid'
+        return $result
+    }
+    $worker = Get-AgcWorkerValue (Get-AgcWorkerValue $config 'owners' $null) 'worker' $null
+    if ($null -eq $worker) { $result.Reason = 'owner_sid_missing'; return $result }
+    $configured = [string](Get-AgcWorkerValue $worker 'accountSid' '')
+    $result.AccountSid = $configured
+    $result.AccountName = [string](Get-AgcWorkerValue $worker 'accountName' '')
+    if ($configured -notmatch '^S-1-5-21-[0-9-]+$') { $result.Reason = 'owner_sid_missing'; return $result }
+    if ($ExpectedSid -and $configured -ne $ExpectedSid) { $result.Reason = 'owner_sid_mismatch'; return $result }
+    $configuredDistro = [string](Get-AgcWorkerValue $worker 'distro' '')
+    if ($configuredDistro -and $configuredDistro -ne $ExpectedDistro) { $result.Reason = 'owner_distro_mismatch'; return $result }
+    $result.Bound = $true
+    $result.Reason = 'ok'
+    return $result
+}
+
 function Get-AgcWorkerCycleSharedData {
     # The shared library flattens Data values to strings; native CycleEvidence
     # reads details.verification and details.verifyComplete from that flattened

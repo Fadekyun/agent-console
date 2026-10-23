@@ -64,17 +64,13 @@ if ($phase -eq 'graceful') { $phase = 'stop' }
 if ($phase -notin @('stop','terminate','verify','cycle')) { $phase = 'verify' }
 
 if ($phase -eq 'cycle') {
-    # Exact owner SID binding comes from the enrolled account marker. This file
-    # contains no credential material; the DPAPI credential is never read here.
-    try {
-        $markerPath = 'C:\ProgramData\AGC-Worker\control\account.json'
-        $markerItem = Get-Item -LiteralPath $markerPath -Force -ErrorAction Stop
-        if ($markerItem.PSIsContainer -or ($markerItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $markerItem.Length -gt 4096) {
-            Write-Unconfirmed $requestId $bootId 'cycle' 'owner_marker_invalid'
-        }
-        $enrolled = Get-Content -LiteralPath $markerPath -Raw -ErrorAction Stop | ConvertFrom-Json
-    } catch { Write-Unconfirmed $requestId $bootId 'cycle' 'owner_marker_unreadable' }
-    if ([string]$enrolled.sid -ne $sid) { Write-Unconfirmed $requestId $bootId 'cycle' 'owner_sid_mismatch' }
+    # Exact owner SID binding comes from the admin-owned lifecycle configuration
+    # (Users RX), which the native service also validates. The worker control
+    # directory is admin-only because it holds the DPAPI credential; it is never
+    # read on the cycle path.
+    $binding = Test-AgcWorkerOwnerSidBinding -ConfigPath (Get-AgcWorkerLifecycleConfigPath) `
+        -ExpectedSid $sid -ExpectedDistro $Distro
+    if (-not $binding.Bound) { Write-Unconfirmed $requestId $bootId 'cycle' $binding.Reason }
     $validated = Get-AgcWorkerCycleRequest -Request $request
     if (-not $validated.Valid) { Write-Unconfirmed $requestId $bootId 'cycle' $validated.Reason }
     if ($validated.Deadline -le [DateTimeOffset]::UtcNow) { Write-Unconfirmed $requestId $bootId 'cycle' 'cycle_deadline_exhausted' }

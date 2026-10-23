@@ -138,6 +138,32 @@ Assert-Equal (Get-AgcWorkerCycleRequest -Request $bad).Reason 'request_binding_i
 $GateOk = { $true }
 $RequestOk = { $true }
 
+# --- Owner binding uses the readable lifecycle configuration, not control ---
+$configDir = Join-Path $root 'lifecycleconfig'
+New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+$configPath = Join-Path $configDir 'lifecycle.json'
+$fakeSid = 'S-1-5-21-1111-2222-3333-1001'
+function Write-Config([object]$Worker) {
+    @{schema=1;owners=@{worker=$Worker}} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding UTF8
+}
+Write-Config @{accountSid=$fakeSid;accountName='agc-worker';distro='AGC-Worker'}
+$bound = Test-AgcWorkerOwnerSidBinding -ConfigPath $configPath -ExpectedSid $fakeSid
+Assert-True ($bound.Bound -eq $true) 'configured worker SID binds the owner cycle'
+Assert-Equal $bound.Reason 'ok' 'binding reason ok'
+Write-Config @{accountSid='S-1-5-21-1111-2222-3333-1002';accountName='agc-worker';distro='AGC-Worker'}
+Assert-Equal (Test-AgcWorkerOwnerSidBinding -ConfigPath $configPath -ExpectedSid $fakeSid).Reason 'owner_sid_mismatch' 'foreign configured SID rejected'
+Write-Config @{accountName='agc-worker';distro='AGC-Worker'}
+Assert-Equal (Test-AgcWorkerOwnerSidBinding -ConfigPath $configPath -ExpectedSid $fakeSid).Reason 'owner_sid_missing' 'missing configured SID rejected'
+Write-Config @{accountSid=$fakeSid;distro='Other-Distro'}
+Assert-Equal (Test-AgcWorkerOwnerSidBinding -ConfigPath $configPath -ExpectedSid $fakeSid).Reason 'owner_distro_mismatch' 'configured distro mismatch rejected'
+'{ not json' | Set-Content -LiteralPath $configPath -Encoding UTF8
+Assert-Equal (Test-AgcWorkerOwnerSidBinding -ConfigPath $configPath -ExpectedSid $fakeSid).Reason 'lifecycle_config_invalid' 'malformed configuration rejected'
+(' ' * 70000) | Set-Content -LiteralPath $configPath -Encoding UTF8
+Assert-Equal (Test-AgcWorkerOwnerSidBinding -ConfigPath $configPath -ExpectedSid $fakeSid).Reason 'lifecycle_config_invalid' 'oversized configuration rejected'
+Assert-Equal (Test-AgcWorkerOwnerSidBinding -ConfigPath (Join-Path $configDir 'missing.json') -ExpectedSid $fakeSid).Reason 'lifecycle_config_unreadable' 'missing configuration rejected'
+Write-Config @{accountSid=$fakeSid;accountName='agc-worker';distro='AGC-Worker'}
+Assert-True (-not (Test-Path (Join-Path $configDir 'control/account.json'))) 'binding needs no worker control marker'
+
 # --- Fast drain after a 10s cold launch: one process, final fresh proof ---
 Reset-State -Running
 '1' | Set-Content -LiteralPath (Join-Path $state 'stop_removes_running')

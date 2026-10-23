@@ -162,8 +162,16 @@ Duplicate execution is bounded two ways: a per-cycle exclusive lock file
 receipt, and a completed valid `<requestId>.cycle.json` is reused without any
 guest command. Neither path overwrites a proven receipt. The final receipt has
 `phase=cycle`, `outcome` in `graceful|forced|unconfirmed`, and the existing
-owner/request/boot/SID/distro binding; the helper reads only the enrolled
-`account.json` SID marker, never the DPAPI credential.
+owner/request/boot/SID/distro binding. The owner SID binding reads
+`owners.worker.accountSid` from the admin-owned
+`C:\ProgramData\AGCLifecycle\config\lifecycle.json`, which grants Users RX and
+is the same configuration the native service validates (bounded, reparse
+guarded, 64 KiB cap, with `owner_sid_missing`/`owner_sid_mismatch`/
+`owner_distro_mismatch` reasons). It never reads
+`C:\ProgramData\AGC-Worker\control`: live ACL evidence (2026-10-23) shows that
+directory and `account.json` grant only SYSTEM/Administrators, so the limited
+`agc-worker` account cannot read it; the DPAPI credential there is never
+touched.
 
 Rollout order matters: deploy this backward-compatible helper first while the
 coordinator still sends legacy phases, then ship the native/shared-library bundle
