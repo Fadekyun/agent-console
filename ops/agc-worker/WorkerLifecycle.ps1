@@ -319,7 +319,8 @@ function Get-AgcWorkerCycleReceipt {
     $details = @{}
     foreach ($key in @('verification','verifyComplete','reason','requestSha256','drained','earlyTerminate',
                        'verificationPhase','launchLatencyMs','issuedUtc','gracefulDeadlineUtc',
-                       'terminateDeadlineUtc','deadlineUtc','coordinatorProcessId','reasonText','initialRunning')) {
+                       'terminateDeadlineUtc','deadlineUtc','coordinatorProcessId','reasonText','initialRunning',
+                       'executorPid','executorStartUtc')) {
         $details[$key] = Get-AgcWorkerValue $source $key ''
     }
     return @{schema=1;owner='worker';requestId=$RequestId;bootId=$BootId;phase='cycle';
@@ -428,6 +429,8 @@ function Get-AgcWorkerCycleSharedData {
         drained = [string](Read-CycleValue $details 'drained' '')
         earlyTerminate = [string](Read-CycleValue $details 'earlyTerminate' '')
         verificationPhase = [string](Read-CycleValue $details 'verificationPhase' '')
+        executorPid = [string](Read-CycleValue $details 'executorPid' '')
+        executorStartUtc = [string](Read-CycleValue $details 'executorStartUtc' '')
     }
 }
 
@@ -458,6 +461,10 @@ function Invoke-AgcWorkerOwnerCycle {
     $validation = Get-AgcWorkerCycleRequest -Request $Request
     $started = & $Now
     $clock = [Diagnostics.Stopwatch]::StartNew()
+    # The receipt must prove which prestarted process ran the cycle. These values
+    # come from the executing process, never from the request or readiness file.
+    $executorStartUtc = ''
+    try { $executorStartUtc = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o') } catch { }
     $receipt = @{schema=1;owner='worker';requestId=$validation.RequestId;bootId=$validation.BootId;
         phase='cycle';outcome='unconfirmed';stopped=$false;verified=$false;scope='distro';source='owner';
         startedUtc=$started.ToString('o');accountName=$identity.Name;accountSid=$identity.Sid;distro=$Distro
@@ -466,7 +473,8 @@ function Invoke-AgcWorkerOwnerCycle {
             gracefulDeadlineUtc=$(if($validation.GracefulDeadline){$validation.GracefulDeadline.ToString('o')}else{''});
             terminateDeadlineUtc=$(if($validation.TerminateDeadline){$validation.TerminateDeadline.ToString('o')}else{''});
             deadlineUtc=$(if($validation.Deadline){$validation.Deadline.ToString('o')}else{''});
-            coordinatorProcessId=$validation.CoordinatorProcessId;reasonText=$validation.ReasonText}}
+            coordinatorProcessId=$validation.CoordinatorProcessId;reasonText=$validation.ReasonText;
+            executorPid=$PID;executorStartUtc=$executorStartUtc}}
     $finish = {
         param([string]$Outcome, [string]$Reason)
         $receipt.outcome = $Outcome
@@ -487,11 +495,8 @@ function Invoke-AgcWorkerOwnerCycle {
     }
     if ($Distro -ne 'AGC-Worker') { return (& $finish 'unconfirmed' 'distro_not_owned') }
     if (-not $validation.Valid) { return (& $finish 'unconfirmed' $validation.Reason) }
-    # Budgets are anchored to the single launch instant, before any effect, so
-    # remaining time is never charged twice for setup/lock/receipt reads. The
-    # anchors are computed only for a validated request (no null-date maths).
-    # Budgets are anchored to the single launch instant, before any setup, so
-    # remaining time is never charged twice for validation/lock/receipt reads.
+    # Budgets are anchored to the single launch instant, before any effect, and
+    # are computed only for a validated request (no null-date maths).
     $anchorDeadline = [int64](($validation.Deadline - $started).TotalMilliseconds)
     $anchorGraceful = [int64](($validation.GracefulDeadline - $started).TotalMilliseconds)
     $anchorTerminate = [int64](($validation.TerminateDeadline - $started).TotalMilliseconds)
@@ -609,6 +614,66 @@ function Invoke-AgcWorkerOwnerCycle {
     } finally {
         if ($null -ne $stream) { try { $stream.Dispose() } catch { } }
     }
+}
+
+
+function Invoke-AgcWorkerOwnerCycleResult {
+    <#
+      Shared executor-loop CycleInvoker contract (#212). Runs the existing
+      bounded cycle in this process and returns Outcome/Verified/Detail/
+      ReceiptPath. The request hash binds the exact admin-owned file so the
+      existing replacement/cancellation checks keep working in resident mode.
+    #>
+    [CmdletBinding()]
+    param(
+        $Request,
+        [string]$RequestPath = '',
+        [string]$WslPath = 'wsl.exe',
+        [string]$Distro = 'AGC-Worker',
+        [string]$DataPath = $script:AgcWorkerDataPath
+    )
+    $requestHash = ''
+    if ($RequestPath -and (Test-Path -LiteralPath $RequestPath -PathType Leaf)) {
+        try { $requestHash = (Get-FileHash -LiteralPath $RequestPath -Algorithm SHA256).Hash.ToLowerInvariant() } catch { }
+    }
+    if (-not $requestHash) {
+        $requestHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash(
+            [Text.Encoding]::UTF8.GetBytes(($Request | ConvertTo-Json -Compress -Depth 8)))).Replace('-', '').ToLowerInvariant()
+    }
+    $requestId = [string](Get-AgcWorkerValue $Request 'requestId' 'unknown')
+    $requestBootId = [string](Get-AgcWorkerValue $Request 'bootId' '')
+    # Revalidate the volatile gate and the exact request file before every guest
+    # effect, exactly as the one-shot helper does.
+    $gateCheck = {
+        $current = Get-AgcStopRequest
+        return ($null -ne $current -and [string]$current.RequestId -eq $requestId -and [string]$current.BootId -eq $requestBootId)
+    }.GetNewClosure()
+    $requestCheck = {
+        try {
+            if (-not $RequestPath) { return $true }
+            $currentHash = (Get-FileHash -LiteralPath $RequestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($currentHash -ne $requestHash) { return $false }
+            $currentRequest = Get-Content -LiteralPath $RequestPath -Raw -ErrorAction Stop | ConvertFrom-Json
+            return ([string]$currentRequest.requestId -eq $requestId -and [string]$currentRequest.bootId -eq $requestBootId -and
+                [string]$currentRequest.phase -eq 'cycle')
+        } catch { return $false }
+    }.GetNewClosure()
+    $onComplete = {
+        param($cycleReceipt)
+        return (Write-AgcWorkerStopReceipt -Data $cycleReceipt -RequestId $requestId `
+            -Outcome $cycleReceipt.outcome -Phase 'cycle')
+    }.GetNewClosure()
+    $result = Invoke-AgcWorkerOwnerCycle -Request $Request -RequestHash $requestHash -WslPath $WslPath `
+        -Distro $Distro -DataPath $DataPath -GateCheck $gateCheck -RequestCheck $requestCheck -OnComplete $onComplete
+    $sharedPath = ''
+    try {
+        if (Get-Command Get-AgcLifecycleRoot -CommandType Function -ErrorAction SilentlyContinue) {
+            $sharedPath = Join-Path (Join-Path (Join-Path (Get-AgcLifecycleRoot) 'receipts') 'worker') ($requestId + '.cycle.json')
+        }
+    } catch { }
+    $receiptPath = if ($sharedPath -and (Test-Path -LiteralPath $sharedPath -PathType Leaf)) { $sharedPath } else { Join-Path $DataPath ($requestId + '.cycle.json') }
+    $detail = if ([string]::IsNullOrEmpty([string]$result.reason)) { [string]$result.outcome } else { [string]$result.reason }
+    return [pscustomobject]@{ Outcome = [string]$result.outcome; Verified = [bool]$result.verified; Detail = $detail; ReceiptPath = $receiptPath }
 }
 
 function Write-AgcWorkerStopReceipt {

@@ -1,3 +1,12 @@
+## Resident worker owner executor — 2026-10-24 (#212)
+
+The actual Windows Preshutdown returned `0x8007045B` for fresh owner task launches, so cleanup now comes from a prestarted whole-boot executor.
+
+- [x] Add `AGC-Worker-OwnerExecutor` and the `worker-executor.ps1` entrypoint using the shared resident loop, existing protected credential and no Scheduler call during shutdown.
+- [x] Write `executorPid`/`executorStartUtc` from the executing process and require fresh readiness (PID/start/SID/boot) before guest admission.
+- [x] Add `-EnableOwnerExecutor` installer registration, backups, Ready-time start and shared readiness verification.
+- [ ] Root deploys, requires native `executorTask`, and captures actual Preshutdown receipts from the preexisting executor PID plus a clean restart.
+
 ## Worker lifecycle gate and bounded shutdown — 2026-10-22 (#206)
 
 The deployed worker consumes the Windows AGCLifecycle gate instead of launching WSL independently. Owner stop handling is split into explicit stop, exact-distro fallback and verification phases; guest SIGTERM closure no longer depends on the watchdog lock and shutdown defers expensive result inventory.

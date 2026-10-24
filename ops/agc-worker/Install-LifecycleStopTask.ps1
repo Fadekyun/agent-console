@@ -1,11 +1,13 @@
 #Requires -RunAsAdministrator
-# Install/update the persistent fixed worker lifecycle stop task.
+# Install/update the persistent fixed worker lifecycle stop task and, with
+# -EnableOwnerExecutor, the independent resident AGC-Worker-OwnerExecutor task.
 # Preserves the existing agc-worker account, password principal and DPAPI
-# credential; never disables the account or changes its password.
+# credential; never disables the account, changes its password or exports it.
 [CmdletBinding()]
-param([string]$SourceDirectory = $PSScriptRoot)
+param([string]$SourceDirectory = $PSScriptRoot, [switch]$EnableOwnerExecutor, [switch]$DeferExecutorStart)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+if ($DeferExecutorStart -and -not $EnableOwnerExecutor) { throw 'DeferExecutorStart requires EnableOwnerExecutor' }
 $WorkerName = 'agc-worker'
 $Base = 'C:\ProgramData\AGC-Worker'
 $Control = Join-Path $Base 'control'
@@ -17,6 +19,9 @@ $OwnerRoot = Join-Path $LifecycleRoot 'owners'
 $OwnerScript = Join-Path $OwnerRoot 'worker-stop.ps1'
 $TaskName = 'AGC-Worker-LifecycleStop'
 $ExpectedArguments = '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\ProgramData\AGCLifecycle\owners\worker-stop.ps1 -FromTask'
+$ExecutorTask = 'AGC-Worker-OwnerExecutor'
+$ExecutorScript = Join-Path $OwnerRoot 'worker-executor.ps1'
+$ExecutorArguments = '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\ProgramData\AGCLifecycle\owners\worker-executor.ps1 -FromTask'
 
 function Save-Json([string]$File, $Value) {
     $Value | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath "$File.tmp" -Encoding UTF8
@@ -35,6 +40,21 @@ function Protect-Directory([string]$Directory, [string]$WorkerSid) {
         $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($identity,'ReadAndExecute','ContainerInherit,ObjectInherit','None','Allow')))
     }
     Set-Acl -LiteralPath $Directory -AclObject $acl
+}
+function Protect-OwnerScript([string]$Path) {
+    # Owner entrypoints are admin/SYSTEM-owned, worker read-only. The worker may
+    # read them but must never be able to replace its own stop/executor helper.
+    $acl = Get-Acl -LiteralPath $Path
+    $acl.SetAccessRuleProtection($true,$false)
+    $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+    foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRule($rule) | Out-Null }
+    foreach ($sid in @('S-1-5-18','S-1-5-32-544')) {
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+            (New-Object Security.Principal.SecurityIdentifier($sid)),'FullControl','None','None','Allow')))
+    }
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+        (New-Object Security.Principal.SecurityIdentifier($enrolled.sid)),'ReadAndExecute','None','None','Allow')))
+    Set-Acl -LiteralPath $Path -AclObject $acl
 }
 function Read-TaskCredential {
     Add-Type -AssemblyName System.Security
@@ -63,19 +83,7 @@ Copy-Item -LiteralPath (Join-Path $SourceDirectory 'Stop-Worker.ps1') -Destinati
 # keep working on the same fixed task.
 $helperText = Get-Content -LiteralPath $OwnerScript -Raw
 $cycleProtocolSupported = [bool]($helperText -match '(?m)^# AGC_OWNER_CYCLE_PROTOCOL=1\s*$')
-# Owner entrypoint is admin/SYSTEM-owned, worker read-only. The worker only
-# needs to read it; it must never be able to replace its own stop helper.
-$ownerAcl = Get-Acl -LiteralPath $OwnerScript
-$ownerAcl.SetAccessRuleProtection($true,$false)
-$ownerAcl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
-foreach ($rule in @($ownerAcl.Access)) { $ownerAcl.RemoveAccessRule($rule) | Out-Null }
-foreach ($sid in @('S-1-5-18','S-1-5-32-544')) {
-    $ownerAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
-        (New-Object Security.Principal.SecurityIdentifier($sid)),'FullControl','None','None','Allow')))
-}
-$ownerAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
-    (New-Object Security.Principal.SecurityIdentifier($enrolled.sid)),'ReadAndExecute','None','None','Allow')))
-Set-Acl -LiteralPath $OwnerScript -AclObject $ownerAcl
+Protect-OwnerScript $OwnerScript
 
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($existing) {
@@ -109,6 +117,87 @@ if (-not $actionMatchesFixed) {
     throw 'Lifecycle stop task action does not match the fixed owner-cycle helper action'
 }
 $taskXml = $task | Export-ScheduledTask
+
+# Optional independent resident executor (#212). It is started while Windows is
+# Ready and must be verified ready before workloads are restored. Preshutdown
+# never registers, starts, or logs on anything.
+$executorReady = $null
+$executorTaskXml = ''
+$executorState = ''
+if ($EnableOwnerExecutor) {
+    $executorSource = Join-Path $SourceDirectory 'worker-executor.ps1'
+    if (-not (Test-Path -LiteralPath $executorSource -PathType Leaf)) { throw 'worker-executor.ps1 is missing from the source directory' }
+    $executorText = Get-Content -LiteralPath $executorSource -Raw
+    if ($executorText -notmatch '(?m)^# AGC_OWNER_RESIDENT_EXECUTOR=1\s*$') { throw 'worker-executor.ps1 does not advertise AGC_OWNER_RESIDENT_EXECUTOR=1' }
+    $existingExecutor = Get-ScheduledTask -TaskName $ExecutorTask -ErrorAction SilentlyContinue
+    if ($existingExecutor) {
+        $existingExecutorPrincipal = [string]$existingExecutor.Principal.UserId
+        $existingExecutorSid = ''
+        try { $existingExecutorSid = (New-Object Security.Principal.NTAccount($existingExecutorPrincipal)).Translate([Security.Principal.SecurityIdentifier]).Value } catch { }
+        if ($existingExecutorPrincipal -and $existingExecutorPrincipal -notmatch "(^|\\)$WorkerName$" -and $existingExecutorSid -ne $enrolled.sid) {
+            throw 'Existing owner executor task has a different principal; inspect before replacing'
+        }
+        $existingExecutorAction = @($existingExecutor.Actions)[0]
+        if ($null -ne $existingExecutorAction -and
+            ([string]$existingExecutorAction.Execute -ne 'powershell.exe' -or [string]$existingExecutorAction.Arguments -ne $ExecutorArguments)) {
+            throw 'Existing owner executor task action does not match the fixed resident action; inspect before replacing'
+        }
+        $backupExecutor = Join-Path $Control 'owner-executor-task.before.xml'
+        if (-not (Test-Path -LiteralPath $backupExecutor)) {
+            $existingExecutor | Export-ScheduledTask | Set-Content -LiteralPath $backupExecutor -Encoding UTF8
+        }
+    }
+    Copy-Item -LiteralPath $executorSource -Destination $ExecutorScript -Force
+    Protect-OwnerScript $ExecutorScript
+    $executorTriggers = @((New-ScheduledTaskTrigger -AtStartup), (New-ScheduledTaskTrigger -AtLogOn))
+    $executorSettings = New-ScheduledTaskSettingsSet -Hidden -ExecutionTimeLimit ([TimeSpan]::Zero) `
+        -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -WakeToRun:$false -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+    $executorAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $ExecutorArguments
+    Register-ScheduledTask -TaskName $ExecutorTask -Action $executorAction -Trigger $executorTriggers `
+        -Settings $executorSettings -User $credential.UserName -Password $credential.GetNetworkCredential().Password `
+        -RunLevel Limited -Force | Out-Null
+    $executorTask = Get-ScheduledTask -TaskName $ExecutorTask
+    $executorPrincipal = $executorTask.Principal
+    if ($executorPrincipal.UserId -notmatch "(^|\\)$WorkerName$" -or $executorPrincipal.RunLevel -ne 'Limited') {
+        throw 'Owner executor task principal verification failed'
+    }
+    $executorTaskXml = $executorTask | Export-ScheduledTask
+    if ($DeferExecutorStart) {
+        # First rollout: the old B4 shared library has no readiness helpers.
+        # Register the fixed task under the existing protected credential but do
+        # not start it, source the new library, or claim readiness. Root installs
+        # the shared library/native config, then starts and verifies executors
+        # while Windows is Ready before workloads return.
+        $executorState = 'registered-not-started'
+    } else {
+        $workerReceipts = Join-Path $LifecycleRoot 'receipts\worker'
+        if (-not (Test-Path -LiteralPath $workerReceipts)) {
+            New-Item -ItemType Directory -Path $workerReceipts -Force | Out-Null
+            & icacls.exe $workerReceipts /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' ("*" + $enrolled.sid + ":(OI)(CI)M") | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to protect the worker executor readiness directory' }
+        }
+        $sharedLibrary = Join-Path $LifecycleRoot 'Lifecycle.ps1'
+        if (-not (Test-Path -LiteralPath $sharedLibrary -PathType Leaf)) { throw 'AGCLifecycle shared library is required to verify owner executor readiness' }
+        . $sharedLibrary
+        Set-StrictMode -Off
+        if (-not (Get-Command Get-AgcExecutorReadiness -CommandType Function -ErrorAction SilentlyContinue)) {
+            throw 'Shared readiness helper Get-AgcExecutorReadiness is missing; refuse to claim executor readiness'
+        }
+        Start-ScheduledTask -TaskName $ExecutorTask
+        $readyDeadline = (Get-Date).AddSeconds(20)
+        do {
+            Start-Sleep -Milliseconds 500
+            try { $executorReady = Get-AgcExecutorReadiness -Owner 'worker' } catch { $executorReady = $null }
+            if ($null -ne $executorReady -and $executorReady.Present -eq $true -and $executorReady.Fresh -eq $true -and
+                [string]$executorReady.AccountSid -eq $enrolled.sid -and [string]$executorReady.Protocol -eq 'cycle') { break }
+            $executorReady = $null
+        } while ((Get-Date) -lt $readyDeadline)
+        if ($null -eq $executorReady) { throw 'AGC-Worker-OwnerExecutor did not publish fresh readiness; workloads must stay unadmitted' }
+        $executorState = 'ready'
+    }
+}
+
 $receipt = @{
     version = 1; task = $TaskName; state = 'installed'; worker_sid = $taskSid
     principal = $principal.UserId; run_level = [string]$principal.RunLevel
@@ -117,10 +206,19 @@ $receipt = @{
     worker_lifecycle_sha256 = (Hash (Join-Path $Code 'WorkerLifecycle.ps1'))
     cycle_protocol_supported = $cycleProtocolSupported
     task_action_matches_fixed = $actionMatchesFixed
+    owner_executor_task = $(if ($EnableOwnerExecutor) { $ExecutorTask } else { '' })
+    owner_executor_script = $(if ($EnableOwnerExecutor) { $ExecutorScript } else { '' })
+    owner_executor_sha256 = $(if ($EnableOwnerExecutor) { Hash $ExecutorScript } else { '' })
+    owner_executor_task_definition_sha256 = $(if ($EnableOwnerExecutor) {
+        [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($executorTaskXml))).Replace('-','').ToLowerInvariant()
+    } else { '' })
+    owner_executor_state = $executorState
+    owner_executor_ready_pid = $(if ($null -ne $executorReady) { [int]$executorReady.Pid } else { 0 })
+    owner_executor_ready_start = $(if ($null -ne $executorReady) { [string]$executorReady.ProcessStartUtc } else { '' })
     stop_worker_sha256 = (Hash (Join-Path $Code 'Stop-Worker.ps1'))
     task_definition_sha256 = ([BitConverter]::ToString(
         [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($taskXml)))).Replace('-','').ToLowerInvariant()
     installed_at = [DateTimeOffset]::UtcNow.ToString('o')
 }
 Save-Json (Join-Path $Control 'lifecycle-stop-task.json') $receipt
-[pscustomobject]@{state='installed';task=$TaskName;principal=$principal.UserId;account_disabled=$false;receipt=(Join-Path $Control 'lifecycle-stop-task.json')} | ConvertTo-Json -Compress
+[pscustomobject]@{state='installed';task=$TaskName;principal=$principal.UserId;account_disabled=$false;owner_executor_state=$executorState;receipt=(Join-Path $Control 'lifecycle-stop-task.json')} | ConvertTo-Json -Compress

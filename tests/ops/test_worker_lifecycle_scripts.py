@@ -93,8 +93,10 @@ class WorkerScriptContractTests(unittest.TestCase):
     def test_stop_task_queues_while_background_stays_single_instance(self):
         installer = source("Install-LifecycleStopTask.ps1")
         provision = source("Provision-Worker.ps1")
-        self.assertIn("-MultipleInstances Queue", installer)
-        self.assertNotIn("-MultipleInstances IgnoreNew", installer)
+        stop_settings = installer[installer.index("$settings = New-ScheduledTaskSettingsSet"):installer.index("Register-ScheduledTask -TaskName $TaskName")]
+        self.assertIn("-MultipleInstances Queue", stop_settings)
+        self.assertNotIn("-MultipleInstances IgnoreNew", stop_settings)
+        self.assertIn("-MultipleInstances IgnoreNew", installer)  # resident executor is single-instance
         background = [line for line in provision.splitlines() if "-Days 6" in line]
         self.assertEqual(len(background), 1)
         self.assertIn("-MultipleInstances IgnoreNew", background[0])
@@ -170,6 +172,15 @@ class WorkerScriptContractTests(unittest.TestCase):
         self.assertIn("task_action_matches_fixed", installer)
         # No worker-installer toggle may imply it enables native configuration.
         self.assertNotIn("EnableCycleProtocol", installer)
+        executor = source("worker-executor.ps1")
+        self.assertRegex(executor, r"(?m)^# AGC_OWNER_RESIDENT_EXECUTOR=1$")
+        self.assertIn("Invoke-AgcExecutorLoop -Owner 'worker'", executor)
+        self.assertIn("Invoke-AgcWorkerOwnerCycleResult", executor)
+        self.assertNotIn("schtasks", executor)
+        self.assertNotIn("LogonUser", executor)
+        self.assertIn("AGC-Worker-OwnerExecutor", installer)
+        self.assertIn("-EnableOwnerExecutor", installer)
+        self.assertIn("Get-AgcExecutorReadiness", installer)
         self.assertNotIn("Disable-LocalUser", installer)
 
     def test_worker_shutdown_constants_are_not_lease_grace(self):
@@ -211,6 +222,31 @@ class PowerShellCycleTests(unittest.TestCase):
         self.assertIn("worker cycle tests: PASS", result.stdout)
 
     @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
+    @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
+    @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
+    def test_worker_resident_real_admission_regression(self):
+        # Real shared-library admission contract when root supplies the library;
+        # otherwise the PowerShell fixture reports SKIP and exits 0.
+        env = {**os.environ, "POWERSHELL_TELEMETRY_OPTOUT": "1"}
+        result = subprocess.run(
+            [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-File",
+             str(WORKER / "tests/WorkerResidentAdmission.Tests.ps1")],
+            cwd=ROOT, capture_output=True, text=True, timeout=180, env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(
+            "worker resident admission tests: PASS" in result.stdout or
+            "SKIP" in result.stdout,
+            result.stdout + result.stderr)
+
+    def test_worker_resident_executor_regression_passes(self):
+        result = subprocess.run(
+            [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-File",
+             str(WORKER / "tests/WorkerResident.Tests.ps1")],
+            cwd=ROOT, capture_output=True, text=True, timeout=180,
+            env={**os.environ, "POWERSHELL_TELEMETRY_OPTOUT": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("worker resident tests: PASS", result.stdout)
+
     def test_owner_cycle_entrypoint_block_regression_passes(self):
         # Executes the real bounded cycle block extracted from worker-stop.ps1
         # with a fake library/gate/config; live Windows owner ACL/identity proof
