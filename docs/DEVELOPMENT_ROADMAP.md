@@ -1,3 +1,8 @@
+## Worker resident cycle-marker capability — 2026-10-24 (#216)
+
+- [x] Declare `# AGC_OWNER_CYCLE_PROTOCOL=1` in the worker resident entrypoint and prove the real display capability check rejects the old helper and accepts the corrected one.
+- [ ] Root reinstalls after the separate Defender detection is resolved and validates worker `executorTask` activation.
+
 ## Worker installer task-name correction — 2026-10-24 (#214)
 
 - [x] Keep the fixed `AGC-Worker-OwnerExecutor` name string separate from the registered CIM task object and prove every task operation/receipt binding with an execution-level mocked regression on PowerShell 5.1/7.

@@ -1,3 +1,10 @@
+## 0.32.9 — unreleased, 2026-10-24 (#216)
+
+- Impact: the worker resident entrypoint now truthfully declares `# AGC_OWNER_CYCLE_PROTOCOL=1` in addition to `# AGC_OWNER_RESIDENT_EXECUTOR=1`, so the display installer's real `Test-AgcOwnerCycleCapability` accepts the installed worker helper and enables the worker resident executor. No runtime behavior, protocol, timing, fixed task identity, credential, privilege or central-hold change.
+- Configuration/migration: none beyond installing the corrected worker entrypoint/installer; the display native installer can now set `owners.worker.executorTask` after its existing owner/action/SID/marker checks.
+- Verification: new `WorkerExecutorCapability.Tests.ps1` executes the verbatim display `Get-AgcTaskActionTarget`/`Test-AgcOwnerCycleCapability` fixture against mocked task metadata and the actual worker entrypoint: the pre-fix helper (resident marker only) is rejected with the missing-cycle-marker detail, the corrected helper is accepted. Optional drift check compares the fixture with a supplied display installer. Windows PowerShell 5.1 and PowerShell 7 compatible; no real task/ACL/WSL operation.
+- Rollback: restore the prior worker entrypoint; no task/config/credential state is changed by this declaration fix. Root owns Windows installation and Defender resolution.
+
 ## 0.32.8 — unreleased, 2026-10-24 (#214)
 
 - Impact: fix the Windows PowerShell 5.1 resident-installer failure where `$executorTask = Get-ScheduledTask` (case-insensitively) overwrote the fixed `$ExecutorTask` name string, so `Disable/Enable/Start-ScheduledTask` received a CIM object and the deferred install failed with `0x80070002` after registering the disabled task. The registered object is now `$registeredExecutorTask`; the fixed name constant is preserved. Task names, principals, actions, triggers, settings, credentials, ACLs and resident protocol are unchanged.
