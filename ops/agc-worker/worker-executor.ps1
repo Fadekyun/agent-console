@@ -9,6 +9,7 @@
 # existing bounded worker cycle as the CycleInvoker.
 #Requires -Version 5.1
 # AGC_OWNER_RESIDENT_EXECUTOR=1
+# AGC_OWNER_CYCLE_PROTOCOL=1
 [CmdletBinding()]
 param([switch]$FromTask)
 $ErrorActionPreference = 'Stop'
