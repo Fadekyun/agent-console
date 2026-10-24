@@ -1,3 +1,8 @@
+## Worker installer task-name correction — 2026-10-24 (#214)
+
+- [x] Keep the fixed `AGC-Worker-OwnerExecutor` name string separate from the registered CIM task object and prove every task operation/receipt binding with an execution-level mocked regression on PowerShell 5.1/7.
+- [ ] Root reinstalls the corrected worker resident installer on Windows and validates deferred registration/activation.
+
 ## Resident worker owner executor — 2026-10-24 (#212)
 
 The actual Windows Preshutdown returned `0x8007045B` for fresh owner task launches, so cleanup now comes from a prestarted whole-boot executor.
