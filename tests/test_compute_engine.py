@@ -80,7 +80,7 @@ class ComputeEngineTests(unittest.TestCase):
     def test_managed_cli_denies_all_actions_before_store_or_payload_access(self):
         commands = [['status'], ['tick'], ['inspect', 'j'], ['enqueue', '--stdin'],
                     ['hold', '--stdin'], ['retry', 'j'], ['cancel', 'j'],
-                    ['reconcile', 'a', '--stdin']]
+                    ['reconcile', 'a', '--stdin'], ['transfer-emergency', 'j', '--stdin']]
         for marker in MARKERS:
             for words in commands:
                 with self.subTest(marker=marker, words=words), patch.dict(os.environ, {marker: 'sentinel'}):

@@ -176,8 +176,8 @@ class ComputePolicyTests(unittest.TestCase):
         self.assertEqual(laptop.max_concurrent_jobs, 1)
         for name in ('yuyutei.collect', 'yuyutei.parse', 'agc.build', 'agc.test'):
             with self.subTest(profile=name):
-                self.assertEqual(admission(name, self.telemetry(), (), self.now), 'profile_disabled')
-                forged = replace(get_profile(name), enabled=True)
+                self.assertEqual(admission(name, self.telemetry(), (), self.now), 'physical_host_mismatch')
+                forged = replace(get_profile(name), enabled=False)
                 self.assertEqual(admission(forged, self.telemetry(), (), self.now), 'invalid_profile')
         self.assertEqual(asdict(laptop)['schedule'], 'Wednesday-Sunday; Sunday admission closes 23:45')
 

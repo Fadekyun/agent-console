@@ -820,6 +820,8 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     from .workflow_dispatch_api import dispatch_routes
     app.include_router(dispatch_routes(session_manager, require_identity))
     from .compute_api import compute_routes
+    from .compute_producer_api import producer_routes
+    app.include_router(producer_routes(compute_engine))
     app.include_router(compute_routes(compute_engine, require_identity, permitted_origins=ALLOWED_ORIGINS))
     from .workflow_release_api import release_routes
     app.include_router(release_routes(session_manager, require_identity))

@@ -1,54 +1,325 @@
-"""Single-lane dispatcher for the bounded, read-only first compute adapter."""
+"""Durable single-lane dispatch per physical host, with fenced remote receipts."""
 from dataclasses import asdict
 import json
+import base64
+from pathlib import PurePosixPath
 import logging
 import threading
 import time
 
-from .compute_policy import WORKERS, laptop_availability
+from .compute_artifacts import ComputeArtifacts, CHUNK_BYTES, ArtifactCapacityUnavailable
+from .compute_manifest import artifact
+from .compute_policy import WORKERS, admission, emergency_runtime_hold, laptop_availability, laptop_schedule_reason
 from .compute_queue import ComputeQueue
-from .compute_sampler import ComputeSampler, maintenance_report
+from .compute_sampler import ComputeSampler, LaptopSampler, EmergencySampler, maintenance_report
+from .compute_transport import SSHWorker, EmergencySSHWorker, WorkerUnavailable, binding, validate_binding
+from .workflow_store import canonical
 
 log = logging.getLogger(__name__)
 
 
 class ComputeEngine:
-    def __init__(self, state_dir, *, enabled=False, sampler=None, clock=time.time):
+    def __init__(self, state_dir, *, enabled=False, sampler=None, clock=time.time, worker=None, emergency_worker=None):
         self.queue = ComputeQueue(state_dir, clock=clock)
         self.enabled = enabled is True
         self.clock = clock
         self.sampler = sampler or ComputeSampler(filesystem_path=state_dir)
+        self.worker = worker if worker is not None else SSHWorker.from_env()
+        self.laptop_sampler = LaptopSampler(self.worker) if self.worker else None
+        self.emergency_worker = emergency_worker if emergency_worker is not None else EmergencySSHWorker.from_env()
+        self.emergency_sampler = EmergencySampler(self.emergency_worker) if self.emergency_worker else None
+        self.emergency_telemetry = None
+        self.artifacts = ComputeArtifacts(state_dir)
         self._lock = threading.Lock()
         self.telemetry = None
+        self.laptop_telemetry = None
 
     def tick(self):
-        # SQLite also protects different service processes; this lock avoids
-        # duplicate probes within a process. Neither lock spans a remote job.
         if not self._lock.acquire(blocking=False):
             return None
         try:
             self.queue.expire()
             held = self.queue.held()
-            if self.enabled and not held:
-                self.telemetry = self.sampler.sample(enabled=True, operator_hold=False, now=self.clock())
-            else:
-                self.telemetry = self.sampler.sample(enabled=False, operator_hold=held, now=self.clock())
-                self.telemetry['enabled'] = self.enabled
+            self.telemetry = self.sampler.sample(enabled=self.enabled and not held,
+                                                 operator_hold=held, now=self.clock())
+            self.telemetry['enabled'] = self.enabled
+            # Existing leases must be inspected/drained even under an owner hold;
+            # holds prevent new starts, never silently abandon a running process.
+            remote_result = self._remote_tick(held) if self.worker else None
+            emergency_result = self._emergency_tick(held) if self.emergency_worker else None
             attempt = self.queue.reserve(self.telemetry)
             if attempt is None:
-                return None
+                return emergency_result or remote_result
             if json.loads(attempt['profile_json'])['name'] != 'maintenance.report':
-                raise ValueError('no verified adapter for this profile')
-            # The only admitted profile is a fixed in-process report. There is
-            # no shell, subprocess, browser, deployment, or publication hook.
+                raise ValueError('no verified local adapter for this profile')
             self.queue.heartbeat(attempt['id'], attempt['generation'])
-            report = maintenance_report(self.telemetry)
-            self.queue.finish(attempt['id'], attempt['generation'], report=report)
+            self.queue.finish(attempt['id'], attempt['generation'], report=maintenance_report(self.telemetry))
             return self.queue.inspect(attempt['job_id'])
         finally:
-            # On any unexpected exception retain the reservation. Expiry will
-            # expose an unknown receipt, never silently replay the attempt.
             self._lock.release()
+
+    def _remote_tick(self, held):
+        if laptop_schedule_reason(self.clock()) == 'schedule_closed':
+            # Even a status RPC could start an otherwise stopped WSL guest.
+            # Do not contact or wake the worker on Monday/Tuesday.
+            self.laptop_telemetry = {'physical_host': 'agc-laptop', 'guest_id': 'AGC-Worker',
+                'enabled': self.enabled, 'operator_hold': held, 'online': False, 'readiness': 'schedule_closed'}
+            self.queue.reserve(self.laptop_telemetry)
+            return None
+        self.laptop_telemetry = self.laptop_sampler.sample(
+            enabled=self.enabled, operator_hold=held, now=self.clock())
+        for attempt in self.queue.active_attempts('agc-laptop'):
+            try:
+                self._advance(attempt, held=held)
+            except WorkerUnavailable:
+                # The worker watchdog ends unattended work. Until a fresh bound
+                # terminal receipt proves that, central keeps its reservation.
+                pass
+            except (ValueError, KeyError, TypeError):
+                self.queue.mark_unknown(attempt['id'], reason='remote_protocol_invalid')
+        self._acknowledge_archived()
+        if not self.enabled or held:
+            return None
+        attempt = self.queue.reserve(self.laptop_telemetry)
+        if attempt is not None:
+            try:
+                self._advance(attempt, held=False)
+            except WorkerUnavailable:
+                pass
+            except (ValueError, KeyError, TypeError):
+                self.queue.mark_unknown(attempt['id'], reason='remote_protocol_invalid')
+            return self.queue.inspect(attempt['job_id'])
+        return None
+
+    def _emergency_tick(self, held):
+        active = [a for a in self.queue.active_attempts('n100') if a['guest_id'] == 'lxc-102']
+        self.emergency_telemetry = self.emergency_sampler.sample(
+            enabled=self.enabled or bool(active), operator_hold=held or not self.enabled, now=self.clock())
+        self.emergency_telemetry['enabled'] = self.enabled
+        for attempt in active:
+            self._advance_safely(attempt, held=held)
+        self._acknowledge_archived(target='n100')
+        if not self.enabled or held:
+            return None
+        attempt = self.queue.reserve(self.emergency_telemetry)
+        if attempt:
+            self._advance_safely(attempt, held=False)
+            return self.queue.inspect(attempt['job_id'])
+        return None
+
+    def _advance_safely(self, attempt, *, held):
+        try:
+            self._advance(attempt, held=held)
+        except WorkerUnavailable:
+            pass
+        except (ValueError, KeyError, TypeError):
+            self.queue.mark_unknown(attempt['id'], reason='remote_protocol_invalid')
+
+    def _worker_for(self, attempt):
+        if attempt['physical_host'] == 'agc-laptop' and attempt['guest_id'] == 'AGC-Worker':
+            worker = self.worker
+        elif attempt['physical_host'] == 'n100' and attempt['guest_id'] == 'lxc-102':
+            worker = self.emergency_worker
+        else:
+            raise ValueError('no fixed remote adapter for attempt')
+        if worker is None:
+            raise WorkerUnavailable('worker_not_enrolled')
+        return worker
+
+    def _upload(self, description, attempt, *, budget):
+        artifact(description)
+        if not self.artifacts.has(description):
+            raise WorkerUnavailable('source_artifact_not_ready')
+        offset = 0
+        while time.monotonic() < budget:
+            chunk = self.artifacts.get(description['sha256'], offset=offset)
+            response = self._worker_for(attempt).call('stage', artifact_id=description['sha256'],
+                offset=offset, data=chunk['data'], size=description['size'], final=chunk['eof'])
+            next_offset = response.get('offset')
+            if type(next_offset) is not int or not 0 <= next_offset <= description['size']:
+                raise ValueError('invalid staged artifact offset')
+            if response.get('complete') is True:
+                if next_offset != description['size']:
+                    raise ValueError('incomplete artifact marked complete')
+                return True
+            if next_offset == offset:
+                raise WorkerUnavailable('artifact_staging_stalled')
+            offset = next_offset
+            self.queue.heartbeat(attempt['id'], attempt['generation'])
+        return False
+
+    def _fetch(self, description, *, budget, attempt):
+        from .compute_retention import ComputeRetention
+        artifact(description)
+        ComputeRetention(self).pin_upload(description['sha256'], 'attempt:' + attempt['id'])
+        if self.artifacts.has(description):
+            return True
+        offset = self.artifacts.offset(description)
+        while time.monotonic() < budget:
+            response = self._worker_for(attempt).call('fetch', artifact_id=description['sha256'], offset=offset, length=CHUNK_BYTES)
+            if (response.get('artifact_id') != description['sha256'] or response.get('offset') != offset
+                    or response.get('size') != description['size']):
+                raise ValueError('artifact response mismatch')
+            try:
+                result = self.artifacts.put(description['sha256'], size=description['size'], offset=offset,
+                                            data=response['data'], final=response.get('eof', False))
+            except ArtifactCapacityUnavailable:
+                # A bound terminal receipt remains pending archival. Capacity
+                # pressure is not evidence of a protocol fault or unknown write.
+                return False
+            if result['complete']:
+                return True
+            if result['offset'] <= offset:
+                raise ValueError('artifact fetch made no progress')
+            offset = result['offset']
+        return False
+
+    def _advance(self, attempt, *, held):
+        job = self.queue.inspect(attempt['job_id'])
+        expected = binding(job, attempt)
+        manifest = json.loads(job['manifest_json'])
+        worker = self._worker_for(attempt)
+        emergency = job['kind'] == 'bushi.emergency'
+        # Only the process that durably claims start can send it. A lost start
+        # acknowledgement is inspected, never resent (including after restart).
+        if attempt['remote_start_sent_at'] is None and attempt['state'] != 'unknown':
+            if held or not self.enabled:
+                return
+            if emergency:
+                if self.clock() >= job['deadline'] - 30:
+                    # No start was sent, so there is no external write ambiguity.
+                    self.queue.finish(attempt['id'], attempt['generation'], failure='adapter_failed')
+                    return
+                if (admission('bushi.emergency', self.emergency_telemetry, (), self.clock())
+                        or self.emergency_telemetry.get('installed_source_sha') != manifest['source_sha']
+                        or self.emergency_telemetry.get('installed_source_artifact') != manifest['source_artifact']):
+                    return
+            self.queue.heartbeat(attempt['id'], attempt['generation'])
+            budget = time.monotonic() + 5
+            for description in [manifest['source_artifact']] + ([manifest['inputs_artifact']] if 'inputs_artifact' in manifest else []):
+                if not self._upload(description, attempt, budget=budget):
+                    return
+            if not self.queue.claim_remote_start(attempt['id'], attempt['generation']):
+                return
+            response = worker.call('start', **expected, manifest=manifest)
+        else:
+            response = worker.call('inspect', **expected)
+        validate_binding(response, expected)
+        state = response.get('state')
+        terminated = response.get('termination_confirmed') is True
+        terminal_states = {'completed', 'succeeded', 'failed', 'stopped', 'oom', 'timeout', 'interrupted'}
+        external_uncertain = (attempt.get('external_write_unknown')
+            or response.get('reason') == 'external_write_unknown'
+            or (manifest['production_writes'] and response.get('write_outcome') != 'not_started'
+                and (state == 'unknown' or (terminated and state not in {'completed', 'succeeded'})
+                     or attempt['state'] == 'unknown')))
+        if external_uncertain:
+            # Persist the business fence before fetching anything: disk/transport
+            # failures must not allow the other host to repeat the external action.
+            self.queue.mark_external_unknown(attempt['id'], attempt['generation'], terminated=terminated)
+            report = response.get('result')
+            if terminated and isinstance(report, dict) and report.get('inventory_artifact'):
+                if self._archive_result(report, expected, attempt):
+                    self.queue.mark_external_unknown(attempt['id'], attempt['generation'], terminated=True,
+                        report={**report, 'binding': expected, 'external_write_unknown': True})
+            return
+        if attempt['state'] == 'unknown':
+            if terminated and state in terminal_states:
+                self.queue.reconcile_terminated(attempt['id'],
+                    evidence='Authenticated worker terminal receipt matches immutable attempt binding; result requires review',
+                    actor='compute-dispatcher', failure='oom' if state == 'oom' or response.get('failure') == 'oom' else None,
+                    write_not_started=response.get('write_outcome') == 'not_started')
+            return
+        if terminated and state in terminal_states:
+            if state in {'completed', 'succeeded'}:
+                report = response.get('result')
+                self.queue.heartbeat(attempt['id'], attempt['generation'])
+                if not self._archive_result(report, expected, attempt):
+                    return
+                self.queue.finish(attempt['id'], attempt['generation'], report={**report, 'binding': expected})
+            else:
+                self.queue.finish(attempt['id'], attempt['generation'],
+                                  failure='oom' if state == 'oom' or response.get('failure') == 'oom' else 'adapter_failed')
+            return
+        if state not in {'starting', 'running', 'checkpointing', 'stopping'} or terminated:
+            self.queue.mark_unknown(attempt['id'], reason='remote_state_uncertain')
+            return
+        stop = (emergency_runtime_hold(self.emergency_telemetry, self.clock())
+                or self.clock() >= job['deadline'] - 30) if emergency else laptop_schedule_reason(self.clock())
+        if held or not self.enabled or stop or self.clock() >= attempt['started_at'] + json.loads(attempt['profile_json'])['timeout_seconds'] - 30:
+            worker.call('stop', **expected)
+            return
+        heartbeat = worker.call('heartbeat', **expected)
+        validate_binding(heartbeat, expected)
+        self.queue.heartbeat(attempt['id'], attempt['generation'],
+                             checkpoint_digest=heartbeat.get('checkpoint_sha256'))
+
+    def _archive_result(self, report, expected, attempt):
+        if not isinstance(report, dict) or len(canonical(report).encode()) > 8192:
+            raise ValueError('invalid result receipt')
+        artifacts = report.get('artifacts')
+        if not isinstance(artifacts, list) or not 1 <= len(artifacts) <= 10:
+            raise ValueError('result must name bounded immutable artifacts')
+        budget = time.monotonic() + 5
+        for description in artifacts:
+            if not self._fetch(description, budget=budget, attempt=attempt):
+                return False
+        for description in self._result_descriptions(report, expected):
+            if not self._fetch(description, budget=budget, attempt=attempt):
+                return False
+        return True
+
+    def _acknowledge_archived(self, target='agc-laptop'):
+        # A scheduled-off laptop must not starve CT102 acknowledgements.
+        attempts = self.queue.pending_remote_acks(physical_host=target)
+        for attempt in attempts[:1]:
+            try:
+                job = self.queue.inspect(attempt['job_id'])
+                expected = binding(job, attempt)
+                response = self._worker_for(attempt).call('ack', **expected, inventory_sha256=attempt['inventory_digest'])
+                validate_binding(response, expected)
+                if response.get('acknowledged') is not True:
+                    raise ValueError('worker archive not acknowledged')
+                self.queue.confirm_remote_ack(attempt['id'])
+            except (WorkerUnavailable, ValueError, KeyError, TypeError):
+                # Archival acknowledgement is idempotent and has its own durable
+                # outbox. Failure never undoes the accepted central result.
+                pass
+
+    def _result_descriptions(self, result, expected):
+        inventory = result.get('inventory_artifact')
+        if inventory is None:
+            return result['artifacts']
+        artifact(inventory)
+        if inventory['size'] > 2 * 1024 ** 2 or inventory not in result['artifacts']:
+            raise ValueError('invalid result inventory')
+        raw, offset = bytearray(), 0
+        while offset < inventory['size']:
+            chunk = self.artifacts.get(inventory['sha256'], offset=offset)
+            data = base64.b64decode(chunk['data'], validate=True)
+            if not data:
+                raise ValueError('incomplete inventory')
+            raw.extend(data)
+            offset += len(data)
+        value = json.loads(raw)
+        if value.get('version') != 1 or value.get('binding') != expected:
+            raise ValueError('result inventory binding mismatch')
+        files = value.get('files')
+        if not isinstance(files, list) or len(files) > 4096:
+            raise ValueError('result inventory exceeds bounds')
+        result_descriptions, seen = [inventory], set()
+        for item in files:
+            name = item.get('path')
+            if (not isinstance(name, str) or not name or len(name) > 500 or name in seen
+                    or PurePosixPath(name).is_absolute() or '..' in PurePosixPath(name).parts
+                    or '\\' in name or '\x00' in name):
+                raise ValueError('invalid inventory path')
+            seen.add(name)
+            result_descriptions.append(artifact({'sha256': item['sha256'], 'size': item['size']}))
+        return result_descriptions
+
+    def result_artifact_ids(self, result):
+        return {item['sha256'] for item in self._result_descriptions(result, result['binding'])}
 
     def status(self):
         self.queue.expire()
@@ -60,8 +331,15 @@ class ComputeEngine:
                 value['enabled'] = self.enabled
                 value['availability'] = ('worker_disabled' if not self.enabled else
                                          'operator_hold' if held else 'requires_fresh_admission')
+            elif worker.worker_id == 'bushi-emergency':
+                value['enabled'] = self.enabled and self.emergency_worker is not None
+                value['availability'] = ((self.emergency_telemetry or {}).get('readiness')
+                    or ('requires_fresh_admission' if value['enabled'] else 'worker_disabled'))
             else:
-                value['availability'] = laptop_availability(self.clock())
+                value['enabled'] = self.enabled and self.worker is not None
+                value['availability'] = ((self.laptop_telemetry or {}).get('readiness') or
+                                         laptop_availability(self.clock()))
             workers.append(value)
         return {**self.queue.status(), 'enabled': self.enabled, 'held': held,
-                'workers': workers, 'telemetry': self.telemetry}
+                'workers': workers, 'telemetry': self.telemetry, 'laptop_telemetry': self.laptop_telemetry,
+                'emergency_telemetry': self.emergency_telemetry}

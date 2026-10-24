@@ -1,5 +1,10 @@
 # Compute scheduling: first source slice (#181)
 
+Historical foundation: the October 17 remote worker integration (#203) is
+documented in [COMPUTE_REMOTE_WORKER.md](COMPUTE_REMOTE_WORKER.md). It supersedes
+this slice's laptop-profile, publication and schema-version limitations while
+preserving the N100 admission gates and owner-control boundary below.
+
 This release adds central durable compute records, conservative resource admission,
 and a small read-only resource report. It preserves Proxmox, the existing LXCs,
 persistent applications, and interactive Console sessions. It does not install a

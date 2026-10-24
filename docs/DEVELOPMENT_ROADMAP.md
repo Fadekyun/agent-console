@@ -1,3 +1,51 @@
+## Worker resident cycle-marker capability — 2026-10-24 (#216)
+
+- [x] Declare `# AGC_OWNER_CYCLE_PROTOCOL=1` in the worker resident entrypoint and prove the real display capability check rejects the old helper and accepts the corrected one.
+- [ ] Root reinstalls after the separate Defender detection is resolved and validates worker `executorTask` activation.
+
+## Worker installer task-name correction — 2026-10-24 (#214)
+
+- [x] Keep the fixed `AGC-Worker-OwnerExecutor` name string separate from the registered CIM task object and prove every task operation/receipt binding with an execution-level mocked regression on PowerShell 5.1/7.
+- [ ] Root reinstalls the corrected worker resident installer on Windows and validates deferred registration/activation.
+
+## Resident worker owner executor — 2026-10-24 (#212)
+
+The actual Windows Preshutdown returned `0x8007045B` for fresh owner task launches, so cleanup now comes from a prestarted whole-boot executor.
+
+- [x] Add `AGC-Worker-OwnerExecutor` and the `worker-executor.ps1` entrypoint using the shared resident loop, existing protected credential and no Scheduler call during shutdown.
+- [x] Write `executorPid`/`executorStartUtc` from the executing process and require fresh readiness (PID/start/SID/boot) before guest admission.
+- [x] Add `-EnableOwnerExecutor` installer registration, backups, Ready-time start and shared readiness verification.
+- [ ] Root deploys, requires native `executorTask`, and captures actual Preshutdown receipts from the preexisting executor PID plus a clean restart.
+
+## Worker lifecycle gate and bounded shutdown — 2026-10-22 (#206)
+
+The deployed worker consumes the Windows AGCLifecycle gate instead of launching WSL independently. Owner stop handling is split into explicit stop, exact-distro fallback and verification phases; guest SIGTERM closure no longer depends on the watchdog lock and shutdown defers expensive result inventory.
+
+- [x] Gate every ordinary WSL launch/recovery through the atomic `RequireAdmission` API and suppress closed-gate/refused starts with exit 0; bind phase receipts to gate request/boot/deadline.
+- [x] Add a nonthrowing worker-side adapter, bounded WSL/RPC helpers and a persistent fixed `AGC-Worker-LifecycleStop` task using the existing password principal/DPAPI credential without disabling the account.
+- [x] Close guest admission before job termination and defer artifact hashing on shutdown while preserving truthful unknown/deferred receipts and fences.
+- [x] Ship stage-only managed guest install (no independent boot enablement, `Restart=no`), 128 MiB/7-day journald, 1 MiB × 8 worker log rotation and record-age 7-day pruning.
+- [ ] Root requalifies the changed worker hash and actually verifies task registration, WSL termination, attended shutdown and physical sleep behavior.
+- [x] Run one bounded owner cycle per shutdown (graceful drain, conditional early terminate, fresh running-list proof, absolute +13/+21/+24 s bounds, duplicate protection) while keeping legacy stop/terminate/verify compatibility for mixed rollout (#210).
+
+## AGC laptop workload migration — 2026-10-17 (#203)
+
+Temporary artifact capacity now defers safely, and authenticated owners have a compute-page pause/resume control. Dedicated organizer credential provisioning and isolated TV Python test support are included.
+
+Provisioning now includes fixed per-workload SSH identities, independently checked worker policy sealing, and exact-prior-receipt adapter upgrades. Native qualification passed real OOM, timeout and both lease-loss stop paths within90seconds; production workload cutovers remain pending acceptance.
+
+- [x] Add scoped producers, immutable transfers, dependencies/deadlines and central publication fencing to the existing durable queue.
+- [x] Implement independent Windows account/WSL provisioning, constrained headless runtime, staff-priority admission/throttling and durable lease receipts.
+- [x] Reserve the Bushi organizer account across physical hosts; leave emergency execution disabled pending qualification.
+- [x] Add owner-only atomic emergency transfer for zero-attempt paid laptop jobs, preserving the job/request/business identity and durable producer-verifiable routing receipt. Keep Tuesday routine work durable without inventing emergency deadlines.
+- [x] Map only the current worker job into a private systemd namespace under production 0077; keep host state private and publish readable fenced lease replacements atomically. Native/runtime qualification is required before admission resumes.
+- [x] Require explicit protected native/toolchain receipts and matching worker hashes for operator hold release; replace historical Windows setup/staff pins with exact reviewed inputs and a fresh observed staff baseline. Fresh laptop execution evidence remains pending.
+- [x] Prepare a deterministic, held three-file private-job upgrade with exact old/new hashes, backups, partial-failure journal, untouched configuration/credentials/resource units and fresh pinned qualification wrappers. Laptop execution and root-reviewed watchdog handover remain pending reconnect.
+- [x] Prepare an explicit Windows watchdog handover with a bounded independent guard, temporary Background enabled-bit fence, pinned native process termination, preserved task definition and fresh replacement telemetry; native acceptance remains pending.
+- [x] Verify emergency CT102's actual hidden Proxmox memory boundary with authenticated host sampling and a protected enrollment receipt; retain conservative local limits, stale-sample stops and cold-start holds.
+- [ ] Qualify the installed worker, pinned toolchains, interruption/resource behavior and all five workload adapters.
+- [ ] Cut over each old heavy timer after accepted artifacts and publisher rollback; preserve central databases, payment APIs and serving processes.
+
 ## Protected credentials and clear setup documentation — 2026-10-10 (#189)
 
 - [x] Keep the Environment key/value form and scope controls; route five protected names into a separate-user credential broker.
@@ -475,3 +523,5 @@ Verify recovery after rename, stopped-terminal recreation, concurrent resume, re
 ### 0.29.1 — issue #187 — 2026-10-10
 
 Recovery refreshes the Console bootstrap/interpreter when a historic release runtime has been retired, while preserving the native command, snapshot, UUID and permission settings. Configuration/migration: none. Verify recovery with a missing original Python path. Rollback: select the preceding release; keep native histories and immutable-ID bindings.
+
+- 2026-10-17 (#203): verified CT102 producer addresses and native-qualified worker hold release are installed; central owner activation and domain acceptance remain required.
