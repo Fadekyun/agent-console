@@ -240,6 +240,16 @@ class PowerShellCycleTests(unittest.TestCase):
         self.assertIn("worker resident admission tests: PASS", result.stdout)
 
     @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
+    @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
+    def test_worker_installer_resident_block_regression(self):
+        result = subprocess.run(
+            [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-File",
+             str(WORKER / "tests/WorkerInstallerResidentBlock.Tests.ps1")],
+            cwd=ROOT, capture_output=True, text=True, timeout=180,
+            env={**os.environ, "POWERSHELL_TELEMETRY_OPTOUT": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("worker installer resident tests: PASS", result.stdout)
+
     def test_worker_resident_entrypoint_execution_regression(self):
         result = subprocess.run(
             [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-File",

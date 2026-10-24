@@ -170,12 +170,12 @@ if ($EnableOwnerExecutor) {
     Register-ScheduledTask -TaskName $ExecutorTask -Action $executorAction -Trigger $executorTriggers `
         -Settings $executorSettings -User $credential.UserName -Password $credential.GetNetworkCredential().Password `
         -RunLevel Limited -Force | Out-Null
-    $executorTask = Get-ScheduledTask -TaskName $ExecutorTask
-    $executorPrincipal = $executorTask.Principal
+    $registeredExecutorTask = Get-ScheduledTask -TaskName $ExecutorTask
+    $executorPrincipal = $registeredExecutorTask.Principal
     if ($executorPrincipal.UserId -notmatch "(^|\\)$WorkerName$" -or $executorPrincipal.RunLevel -ne 'Limited') {
         throw 'Owner executor task principal verification failed'
     }
-    $executorTaskXml = $executorTask | Export-ScheduledTask
+    $executorTaskXml = $registeredExecutorTask | Export-ScheduledTask
     $workerReceipts = Join-Path $LifecycleRoot 'receipts\worker'
     if (-not (Test-Path -LiteralPath $workerReceipts)) {
         New-Item -ItemType Directory -Path $workerReceipts -Force | Out-Null
