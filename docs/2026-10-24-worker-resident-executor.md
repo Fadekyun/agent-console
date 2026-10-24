@@ -105,7 +105,10 @@ task, so rollback/mixed hosts keep their existing path.
 - Existing cycle, entrypoint-extraction and adapter suites remain green.
 
 Linux fixtures cannot prove Windows task/ACL behavior or actual Preshutdown
-survival. Root owns the installer run, the zero-launch SCM rehearsal, the single
+survival. The real shared readiness/admission regression runs only when
+`AGC_LIFECYCLE_REAL_LIBRARY` points at a stable library with the resident
+helpers and a native Windows owner SID; it reports SKIP (not PASS) otherwise.
+ Root owns the installer run, the zero-launch SCM rehearsal, the single
 normal restart, and the acceptance evidence that the preexisting executor PID
 produced the bound receipts.
 

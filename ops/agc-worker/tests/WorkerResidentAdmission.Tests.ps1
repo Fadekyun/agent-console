@@ -27,6 +27,14 @@ function Assert-True([bool]$Condition, [string]$Name) {
 }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $sid = $identity.User.Value
+if ([string]::IsNullOrEmpty($sid)) {
+    # Production identity proof requires a native Windows owner SID. Never
+    # weaken the check by accepting an empty SID on a non-Windows host.
+    Write-Host 'worker resident admission tests: SKIP (no native Windows owner SID)'
+    Remove-Item Env:AGC_LIFECYCLE_TEST_MODE,Env:AGC_LIFECYCLE_ROOT,Env:AGC_LIFECYCLE_GATE_FILE -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    exit 0
+}
 $now = [DateTimeOffset]::UtcNow
 @{state='Ready';bootId='admission-boot';requestId='';deadlineUtc='';heartbeatUtc=$now.ToString('o');updatedUtc=$now.ToString('o')} |
     ConvertTo-Json | Set-Content -LiteralPath $env:AGC_LIFECYCLE_GATE_FILE -Encoding UTF8
@@ -42,7 +50,7 @@ Assert-True ($null -ne $record) 'readiness writer returns the bound record'
 $ready = Get-AgcExecutorReadiness -Owner 'worker'
 Assert-True ($ready.Present -eq $true -and $ready.Fresh -eq $true) 'fresh readiness validates'
 Assert-True ([int]$ready.Pid -eq $PID) 'readiness binds the live process id'
-Assert-True ([string]$ready.AccountSid -eq $sid -or [string]::IsNullOrEmpty($sid)) 'readiness binds the owner SID'
+Assert-True (-not [string]::IsNullOrEmpty($sid) -and [string]$ready.AccountSid -eq $sid) 'readiness binds the exact owner SID'
 Assert-True (Test-AgcStartAllowed -Owner 'worker') 'resident admission allows guest launch after fresh readiness'
 
 Write-AgcExecutorReadiness -Owner 'worker' -ProcessId $PID -ProcessStartUtc $process.StartTime.ToUniversalTime() -HeartbeatUtc ([DateTime]::UtcNow.AddSeconds(5)) | Out-Null

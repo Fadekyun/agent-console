@@ -227,16 +227,17 @@ class PowerShellCycleTests(unittest.TestCase):
     def test_worker_resident_real_admission_regression(self):
         # Real shared-library admission contract when root supplies the library;
         # otherwise the PowerShell fixture reports SKIP and exits 0.
+        if not os.environ.get("AGC_LIFECYCLE_REAL_LIBRARY"):
+            self.skipTest("real AGCLifecycle library not supplied")
         env = {**os.environ, "POWERSHELL_TELEMETRY_OPTOUT": "1"}
         result = subprocess.run(
             [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-File",
              str(WORKER / "tests/WorkerResidentAdmission.Tests.ps1")],
             cwd=ROOT, capture_output=True, text=True, timeout=180, env=env)
+        if "SKIP" in result.stdout:
+            self.skipTest(result.stdout.strip().splitlines()[-1])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue(
-            "worker resident admission tests: PASS" in result.stdout or
-            "SKIP" in result.stdout,
-            result.stdout + result.stderr)
+        self.assertIn("worker resident admission tests: PASS", result.stdout)
 
     def test_worker_resident_executor_regression_passes(self):
         result = subprocess.run(
