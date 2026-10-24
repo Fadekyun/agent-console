@@ -58,6 +58,33 @@ exact fixed task action and records `cycle_protocol_supported` and
 installer, decides whether the optional cycle task is enabled. Receipts bind owner/request/boot/SID/distro and are also
 retained locally for rollback diagnosis.
 
+### Resident owner executor (#212)
+
+The stop task alone cannot run during Windows Preshutdown (`0x8007045B`). Run
+`Install-LifecycleStopTask.ps1 -EnableOwnerExecutor` while Windows is Ready to
+install and start `AGC-Worker-OwnerExecutor`: one independent whole-boot process
+(`owners\worker-executor.ps1`, existing `agc-worker` password principal) that
+calls the shared `Invoke-AgcExecutorLoop -Owner worker` and reuses the same
+bounded worker cycle in-process. It writes
+`receipts\worker\executor.json` readiness (PID/start/SID/boot) used by the
+shared admission gate, and cycle receipts carry `executorPid`/`executorStartUtc`.
+The installer backs up an existing executor task definition, registers the fixed
+boot+logon task with no execution time limit and no wake, starts it, and fails
+unless fresh readiness is present. On the first rollout against the old B4
+library use `-EnableOwnerExecutor -DeferExecutorStart`: it registers the task
+**disabled** under the existing protected credential but does not start it or
+claim ready (`registered-disabled`); activation explicitly enables, starts and
+verifies it after installing the shared library/config. Before any live
+copy/ACL/task mutation the installer refuses with `maintenance_required` if
+`AGC-Worker-OwnerExecutor` is running (even without `-EnableOwnerExecutor`,
+because the base helpers change); stop/quiesce the resident executor first.
+Existing executor tasks with a foreign principal/action are refused before
+replacement. No new task launch or owner logon occurs
+during Preshutdown; `AGC-Worker-LifecycleStop` stays available for legacy
+rollback. Rollback restores `control\lifecycle-stop-task.before.xml` and
+`control\owner-executor-task.before.xml` and unregisters the executor after the
+coordinator stops targeting it.
+
 Every host/owner WSL hook loaded from this directory is gate-covered:
 `Start-Worker`, `Dispatch-Worker`, `Invoke-WorkerSetup`, `Initialize-Distro`,
 `Invoke-WatchdogHandoverGuard`, `Install-OrganizerCredential` and the
