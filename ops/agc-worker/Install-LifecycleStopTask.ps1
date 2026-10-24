@@ -74,6 +74,16 @@ if (-not $worker.Enabled) { throw 'Worker account is disabled; enable only throu
 if (-not (Test-Path -LiteralPath $CredentialFile)) { throw 'Missing protected task credential; refuse automatic reset' }
 if (-not (Test-Path -LiteralPath $OwnerRoot)) { throw 'AGCLifecycle owner directory is not installed; install the Windows lifecycle service first' }
 
+# Preflight before ANY live copy/ACL/task mutation. The resident executor is
+# IgnoreNew and would keep the old in-memory WorkerLifecycle/entrypoint after
+# those files are replaced, so installs require a quiesced (stopped) executor.
+# This applies even without -EnableOwnerExecutor because the base helper files
+# always change.
+$existingResident = Get-ScheduledTask -TaskName $ExecutorTask -ErrorAction SilentlyContinue
+if ($null -ne $existingResident -and [string]$existingResident.State -eq 'Running') {
+    throw 'maintenance_required: AGC-Worker-OwnerExecutor is running; stop/quiesce it before installing worker lifecycle files'
+}
+
 Protect-Directory $Code $enrolled.sid
 Copy-Item -LiteralPath (Join-Path $SourceDirectory 'worker-stop.ps1') -Destination $OwnerScript -Force
 Copy-Item -LiteralPath (Join-Path $SourceDirectory 'WorkerLifecycle.ps1') -Destination (Join-Path $Code 'WorkerLifecycle.ps1') -Force

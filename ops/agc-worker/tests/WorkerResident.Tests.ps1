@@ -47,6 +47,19 @@ Assert-True ($entrySource -notmatch 'LogonUser|Start-ScheduledTask') 'entrypoint
 Assert-True ($entrySource -match 'Invoke-AgcWorkerResidentExecutor') 'resident core is invoked by the installed entrypoint'
 
 
+# --- Installer preflight: refuse a running resident before any mutation ---
+$guardIndex = $installer.IndexOf("AGC-Worker-OwnerExecutor is running")
+$mutationIndexes = @(
+    $installer.IndexOf('Protect-Directory $Code'),
+    $installer.IndexOf("Copy-Item -LiteralPath (Join-Path `$SourceDirectory 'worker-stop.ps1')"),
+    $installer.IndexOf('Set-Acl -LiteralPath $OwnerScript'),
+    $installer.IndexOf('Register-ScheduledTask -TaskName $TaskName'),
+    $installer.IndexOf('Register-ScheduledTask -TaskName $ExecutorTask')
+) | Where-Object { $_ -ge 0 }
+Assert-True ($guardIndex -gt 0) 'installer has a running-executor maintenance preflight'
+Assert-True (($mutationIndexes | Measure-Object -Minimum).Minimum -gt $guardIndex) 'maintenance preflight precedes every live copy/ACL/task mutation'
+Assert-True ($installer -match 'maintenance_required:') 'maintenance refusal has a clear scoped error'
+
 # --- Installer: independent fixed task, existing credential, Ready-time start ---
 Assert-True ($installer -match 'AGC-Worker-OwnerExecutor') 'installer registers the worker owner executor task'
 Assert-True ($installer -match 'worker-executor\.ps1') 'installer installs the resident entrypoint'

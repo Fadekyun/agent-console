@@ -91,7 +91,13 @@ installs the shared library/native config and starts both executors while
 Windows is Ready, verifies readiness, and only then restores workloads. The
 default (no defer) path still starts and verifies readiness in the same run.
 
-The readiness-directory ACL is re-applied idempotently on every run so an
+Before any live copy/ACL/task mutation the installer refuses with a clear
+`maintenance_required` error if `AGC-Worker-OwnerExecutor` is running (even
+without `-EnableOwnerExecutor`, because the base helper files always change).
+Installation therefore requires quiesced maintenance: stop the resident executor
+(or use the deferred first-rollout path where it does not yet exist), install the
+reviewed files, then activate and verify readiness. The readiness-directory ACL
+is re-applied idempotently on every run so an
 existing admin-only or partially installed `receipts\worker` cannot block the
 executor. An existing `AGC-Worker-OwnerExecutor` with a foreign principal or a
 different action is rejected before replacement; only its own fixed action may
