@@ -82,15 +82,20 @@ credentials, ACLs) and adds `-EnableOwnerExecutor`:
 
 The first rollout runs while the old B4 shared library is still installed. Use
 `-EnableOwnerExecutor -DeferExecutorStart` for that pass: it copies/protects the
-entrypoint, backs up and registers the fixed task under the existing protected
-credential, but does not source the new readiness library, start the executor or
-claim readiness (`owner_executor_state=registered-not-started`). Root then
+entrypoint, backs up and registers the fixed task **disabled** under the
+existing protected credential, but does not source the new readiness library,
+start the executor or claim readiness (`owner_executor_state=registered-disabled`).
+Activation explicitly enables that exact task, starts it and verifies readiness
+while Windows is Ready. Root then
 installs the shared library/native config and starts both executors while
 Windows is Ready, verifies readiness, and only then restores workloads. The
 default (no defer) path still starts and verifies readiness in the same run.
 
-An existing `AGC-Worker-OwnerExecutor` with a foreign principal or a different
-action is rejected before replacement; only its own fixed action may be updated.
+The readiness-directory ACL is re-applied idempotently on every run so an
+existing admin-only or partially installed `receipts\worker` cannot block the
+executor. An existing `AGC-Worker-OwnerExecutor` with a foreign principal or a
+different action is rejected before replacement; only its own fixed action may
+be updated.
 
 Without `-EnableOwnerExecutor` the installer only maintains the legacy stop
 task, so rollback/mixed hosts keep their existing path.
@@ -102,12 +107,19 @@ task, so rollback/mixed hosts keep their existing path.
   runs the real cycle invoker against a fake shared library and fake WSL, and
   proves zero Scheduler calls, verified proof, shared receipt path, and
   `executorPid`/`executorStartUtc` binding to the executing process.
+- `ops/agc-worker/tests/WorkerResidentEntrypoint.Tests.ps1` executes the
+  production `Invoke-AgcWorkerResidentExecutor` with a recording
+  `schtasks.exe` shim on PATH, a fake shared loop and fake WSL: the real cycle
+  completes, the loop is invoked once, and the shim is never called.
 - Existing cycle, entrypoint-extraction and adapter suites remain green.
 
 Linux fixtures cannot prove Windows task/ACL behavior or actual Preshutdown
-survival. The real shared readiness/admission regression runs only when
-`AGC_LIFECYCLE_REAL_LIBRARY` points at a stable library with the resident
-helpers and a native Windows owner SID; it reports SKIP (not PASS) otherwise.
+survival. The real shared readiness/admission regression runs against
+`AGC_LIFECYCLE_REAL_LIBRARY` (currently display `823f123`): on Windows it uses
+the real owner SID and process-token probe; on Linux it mocks only that narrow
+process-owner boundary via `AgcProcessOwnerProbeOverride` while exercising the
+real readiness writer, validator and admission gate. It reports SKIP (not PASS)
+when the library or a SID is unavailable.
  Root owns the installer run, the zero-launch SCM rehearsal, the single
 normal restart, and the acceptance evidence that the preexisting executor PID
 produced the bound receipts.

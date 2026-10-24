@@ -617,6 +617,44 @@ function Invoke-AgcWorkerOwnerCycle {
 }
 
 
+function Invoke-AgcWorkerResidentExecutor {
+    <#
+      Resident worker executor core (#212). The installed worker-executor.ps1
+      wrapper loads the shared lifecycle library and this adapter, then calls
+      this function with fixed production paths. It checks the owner identity,
+      requires the atomic admission API, and runs the shared executor loop with
+      the existing bounded cycle as the CycleInvoker. No task launch, logon,
+      per-cycle PowerShell or guest command happens before a validated request.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$DataPath = $script:AgcWorkerDataPath,
+        [string]$RequestPath = 'C:\ProgramData\AGCLifecycle\requests\worker\current.json',
+        [string]$Distro = 'AGC-Worker',
+        [switch]$FromTask
+    )
+    if (-not $FromTask) { return 2 }
+    $identity = Get-AgcWorkerIdentity
+    if (-not $identity -or $identity.Name -notmatch '\\agc-worker$' -or $identity.Sid -eq 'S-1-5-18') { return 2 }
+    if (-not (Initialize-AgcWorkerLifecycle)) { return 1 }
+    if (-not (Test-AgcWorkerAdmissionApi)) { return 1 }
+    $cycleInvoker = {
+        param($request)
+        return (Invoke-AgcWorkerOwnerCycleResult -Request $request -RequestPath $RequestPath `
+            -WslPath 'wsl.exe' -Distro $Distro -DataPath $DataPath)
+    }.GetNewClosure()
+    try {
+        $result = Invoke-AgcExecutorLoop -Owner 'worker' -CycleInvoker $cycleInvoker
+    } catch {
+        try { Write-AgcLifecycleLog -Stream 'worker' -Event 'executor.exit' -Level 'error' -Data @{ reason = 'exception'; error = $_.Exception.GetType().Name } } catch { }
+        return 1
+    }
+    if ($null -eq $result) { return 1 }
+    try { Write-AgcLifecycleLog -Stream 'worker' -Event 'executor.exit' -Data @{ reason = [string]$result.Reason } } catch { }
+    if ([string]$result.Reason -eq 'fatal') { return 1 }
+    return 0
+}
+
 function Invoke-AgcWorkerOwnerCycleResult {
     <#
       Shared executor-loop CycleInvoker contract (#212). Runs the existing

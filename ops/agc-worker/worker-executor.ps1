@@ -21,33 +21,8 @@ $Lifecycle = Join-Path $LifecycleRoot 'Lifecycle.ps1'
 $RequestPath = Join-Path (Join-Path $LifecycleRoot 'requests\worker') 'current.json'
 $Distro = 'AGC-Worker'
 
-if (-not $FromTask) { exit 2 }
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-if (-not $identity -or $identity.Name -notmatch '\\agc-worker$' -or $identity.User.Value -eq 'S-1-5-18') {
-    exit 2
-}
 if (-not (Test-Path -LiteralPath $Lifecycle -PathType Leaf)) { exit 1 }
 . $Lifecycle
 . (Join-Path $Code 'WorkerLifecycle.ps1')
 try { Set-StrictMode -Off } catch { }
-if (-not (Initialize-AgcWorkerLifecycle)) { exit 1 }
-if (-not (Test-AgcWorkerAdmissionApi)) { exit 1 }
-
-$cycleInvoker = {
-    param($request)
-    return (Invoke-AgcWorkerOwnerCycleResult -Request $request -RequestPath $RequestPath `
-        -WslPath 'wsl.exe' -Distro $Distro -DataPath $Data)
-}
-
-try {
-    $result = Invoke-AgcExecutorLoop -Owner 'worker' -CycleInvoker $cycleInvoker
-} catch {
-    try { Write-AgcLifecycleLog -Stream 'worker' -Event 'executor.exit' -Level 'error' -Data @{ reason = 'exception'; error = $_.Exception.GetType().Name } } catch { }
-    exit 1
-}
-if ($null -eq $result) { exit 1 }
-try { Write-AgcLifecycleLog -Stream 'worker' -Event 'executor.exit' -Data @{ reason = [string]$result.Reason } } catch { }
-switch ([string]$result.Reason) {
-    'fatal' { exit 1 }
-    default { exit 0 }
-}
+exit (Invoke-AgcWorkerResidentExecutor -FromTask:$FromTask -DataPath $Data -RequestPath $RequestPath -Distro $Distro)

@@ -72,9 +72,9 @@ The installer backs up an existing executor task definition, registers the fixed
 boot+logon task with no execution time limit and no wake, starts it, and fails
 unless fresh readiness is present. On the first rollout against the old B4
 library use `-EnableOwnerExecutor -DeferExecutorStart`: it registers the task
-under the existing protected credential but does not start it or claim ready
-(`registered-not-started`); root starts/verifies it after installing the shared
-library/config. Existing executor tasks with a foreign principal/action are
+**disabled** under the existing protected credential but does not start it or
+claim ready (`registered-disabled`); activation explicitly enables, starts and
+verifies it after installing the shared library/config. Existing executor tasks with a foreign principal/action are
 refused before replacement. No new task launch or owner logon occurs
 during Preshutdown; `AGC-Worker-LifecycleStop` stays available for legacy
 rollback. Rollback restores `control\lifecycle-stop-task.before.xml` and

@@ -173,9 +173,12 @@ class WorkerScriptContractTests(unittest.TestCase):
         # No worker-installer toggle may imply it enables native configuration.
         self.assertNotIn("EnableCycleProtocol", installer)
         executor = source("worker-executor.ps1")
+        adapter = source("WorkerLifecycle.ps1")
         self.assertRegex(executor, r"(?m)^# AGC_OWNER_RESIDENT_EXECUTOR=1$")
-        self.assertIn("Invoke-AgcExecutorLoop -Owner 'worker'", executor)
-        self.assertIn("Invoke-AgcWorkerOwnerCycleResult", executor)
+        self.assertIn("Invoke-AgcWorkerResidentExecutor -FromTask:$FromTask", executor)
+        self.assertIn("function Invoke-AgcWorkerResidentExecutor", adapter)
+        self.assertIn("Invoke-AgcExecutorLoop -Owner 'worker'", adapter)
+        self.assertIn("Invoke-AgcWorkerOwnerCycleResult", adapter)
         self.assertNotIn("schtasks", executor)
         self.assertNotIn("LogonUser", executor)
         self.assertIn("AGC-Worker-OwnerExecutor", installer)
@@ -221,9 +224,6 @@ class PowerShellCycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("worker cycle tests: PASS", result.stdout)
 
-    @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
-    @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
-    @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
     def test_worker_resident_real_admission_regression(self):
         # Real shared-library admission contract when root supplies the library;
         # otherwise the PowerShell fixture reports SKIP and exits 0.
@@ -238,6 +238,16 @@ class PowerShellCycleTests(unittest.TestCase):
             self.skipTest(result.stdout.strip().splitlines()[-1])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("worker resident admission tests: PASS", result.stdout)
+
+    @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
+    def test_worker_resident_entrypoint_execution_regression(self):
+        result = subprocess.run(
+            [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-File",
+             str(WORKER / "tests/WorkerResidentEntrypoint.Tests.ps1")],
+            cwd=ROOT, capture_output=True, text=True, timeout=180,
+            env={**os.environ, "POWERSHELL_TELEMETRY_OPTOUT": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("worker resident entrypoint tests: PASS", result.stdout)
 
     def test_worker_resident_executor_regression_passes(self):
         result = subprocess.run(

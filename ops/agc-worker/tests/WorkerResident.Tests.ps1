@@ -36,12 +36,15 @@ $script:SchedulerCalls = 0
 Assert-True (Test-Path -LiteralPath $entry) 'worker resident entrypoint exists'
 $entrySource = Get-Content -LiteralPath $entry -Raw
 Assert-True ($entrySource -match '(?m)^# AGC_OWNER_RESIDENT_EXECUTOR=1$') 'entrypoint advertises the resident marker'
-Assert-True ($entrySource -match '\\agc-worker\$') 'entrypoint requires the agc-worker identity'
-Assert-True ($entrySource -match 'Invoke-AgcExecutorLoop\s+-Owner\s+.worker.') 'entrypoint calls the shared executor loop for worker'
-Assert-True ($entrySource -match 'Invoke-AgcWorkerOwnerCycleResult') 'entrypoint cycle invoker reuses the worker cycle'
+Assert-True ($entrySource -match 'Invoke-AgcWorkerResidentExecutor\s+-FromTask:\$FromTask') 'entrypoint calls the resident executor core'
+$adapter = Get-Content -LiteralPath (Join-Path $workerRoot 'WorkerLifecycle.ps1') -Raw
+Assert-True ($adapter -match 'function Invoke-AgcWorkerResidentExecutor') 'resident executor core exists in the adapter'
+Assert-True ($adapter -match '\\agc-worker\$') 'resident core requires the agc-worker identity'
+Assert-True ($adapter -match 'Invoke-AgcExecutorLoop\s+-Owner\s+.worker.') 'resident core calls the shared executor loop for worker'
+Assert-True ($adapter -match 'Invoke-AgcWorkerOwnerCycleResult') 'resident cycle invoker reuses the worker cycle'
 Assert-True ($entrySource -notmatch 'schtasks') 'entrypoint never launches a task'
 Assert-True ($entrySource -notmatch 'LogonUser|Start-ScheduledTask') 'entrypoint never logs on or starts a task'
-Assert-True ($entrySource -match 'Set-AgcProcessShutdownPriority|Invoke-AgcExecutorLoop') 'shutdown priority and lifetime belong to the shared loop'
+Assert-True ($entrySource -match 'Invoke-AgcWorkerResidentExecutor') 'resident core is invoked by the installed entrypoint'
 
 
 # --- Installer: independent fixed task, existing credential, Ready-time start ---
@@ -58,7 +61,10 @@ Assert-True ($installer -match 'Get-AgcExecutorReadiness') 'installer verifies r
 Assert-True ($installer -match 'Start-ScheduledTask') 'installer starts the executor while Windows is ready'
 Assert-True ($installer -match '\[switch\]\$DeferExecutorStart') 'installer exposes the first-rollout defer switch'
 Assert-True ($installer -match "DeferExecutorStart requires EnableOwnerExecutor") 'defer is rejected without executor enablement'
-Assert-True ($installer -match "registered-not-started") 'defer path records registered-not-started instead of ready'
+Assert-True ($installer -match "registered-disabled") 'defer path records registered-disabled instead of ready'
+Assert-True ($installer -match 'Disable-ScheduledTask') 'defer path registers the executor disabled'
+Assert-True ($installer -match 'Enable-ScheduledTask') 'activation path explicitly enables the executor'
+Assert-True ($installer -match 'icacls\.exe \$workerReceipts') 'readiness ACL repair is applied outside the create-if-missing branch'
 Assert-True ($installer.IndexOf('if ($DeferExecutorStart)') -lt $installer.IndexOf('Start-ScheduledTask')) 'defer path decides before any task start'
 Assert-True ($installer -match 'Existing owner executor task has a different principal') 'existing foreign executor principal is refused'
 Assert-True ($installer -match 'Existing owner executor task action does not match') 'existing foreign executor action is refused'

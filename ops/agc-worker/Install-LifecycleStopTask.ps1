@@ -163,20 +163,26 @@ if ($EnableOwnerExecutor) {
         throw 'Owner executor task principal verification failed'
     }
     $executorTaskXml = $executorTask | Export-ScheduledTask
+    $workerReceipts = Join-Path $LifecycleRoot 'receipts\worker'
+    if (-not (Test-Path -LiteralPath $workerReceipts)) {
+        New-Item -ItemType Directory -Path $workerReceipts -Force | Out-Null
+    }
+    # Idempotent: an existing directory left admin-only by a partial install or
+    # fixture must be repaired so the executor can write its readiness record.
+    & icacls.exe $workerReceipts /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' ("*" + $enrolled.sid + ":(OI)(CI)M") | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to protect the worker executor readiness directory' }
     if ($DeferExecutorStart) {
         # First rollout: the old B4 shared library has no readiness helpers.
-        # Register the fixed task under the existing protected credential but do
-        # not start it, source the new library, or claim readiness. Root installs
-        # the shared library/native config, then starts and verifies executors
-        # while Windows is Ready before workloads return.
-        $executorState = 'registered-not-started'
-    } else {
-        $workerReceipts = Join-Path $LifecycleRoot 'receipts\worker'
-        if (-not (Test-Path -LiteralPath $workerReceipts)) {
-            New-Item -ItemType Directory -Path $workerReceipts -Force | Out-Null
-            & icacls.exe $workerReceipts /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' ("*" + $enrolled.sid + ":(OI)(CI)M") | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw 'Unable to protect the worker executor readiness directory' }
+        # Register disabled under the existing protected credential; root/native
+        # activation installs the shared library/config, then explicitly enables
+        # and verifies this exact task before workloads return.
+        Disable-ScheduledTask -TaskName $ExecutorTask -ErrorAction Stop | Out-Null
+        if ([string](Get-ScheduledTask -TaskName $ExecutorTask -ErrorAction Stop).State -ne 'Disabled') {
+            throw 'Deferred owner executor task is not disabled'
         }
+        $executorState = 'registered-disabled'
+    } else {
+        Enable-ScheduledTask -TaskName $ExecutorTask -ErrorAction Stop | Out-Null
         $sharedLibrary = Join-Path $LifecycleRoot 'Lifecycle.ps1'
         if (-not (Test-Path -LiteralPath $sharedLibrary -PathType Leaf)) { throw 'AGCLifecycle shared library is required to verify owner executor readiness' }
         . $sharedLibrary
