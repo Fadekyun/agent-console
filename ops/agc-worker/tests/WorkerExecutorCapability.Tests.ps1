@@ -25,10 +25,14 @@ $fixture = Join-Path (Join-Path $PSScriptRoot 'fixtures') 'DisplayOwnerCycleCapa
 if (-not [string]::IsNullOrWhiteSpace($env:AGC_DISPLAY_LIFECYCLE_INSTALLER) -and
     (Test-Path -LiteralPath $env:AGC_DISPLAY_LIFECYCLE_INSTALLER -PathType Leaf)) {
     $live = [IO.File]::ReadAllText($env:AGC_DISPLAY_LIFECYCLE_INSTALLER)
-    $liveText = [regex]::Match($live, '(?ms)^function Test-AgcOwnerCycleCapability \{.*?^\}').Value
-    $fixtureText = [regex]::Match([IO.File]::ReadAllText($fixture), '(?ms)^function Test-AgcOwnerCycleCapability \{.*?^\}').Value
+    $fixtureSource = [IO.File]::ReadAllText($fixture)
     $normalize = { param([string]$Text) ($Text -replace "`r", '').Trim() }
-    Assert-True ((& $normalize $liveText) -eq (& $normalize $fixtureText)) 'extracted capability function matches the supplied display installer'
+    foreach ($functionName in @('Get-AgcTaskActionTarget', 'Test-AgcOwnerCycleCapability')) {
+        $pattern = '(?ms)^function ' + [regex]::Escape($functionName) + ' \{.*?^\}'
+        $liveText = [regex]::Match($live, $pattern).Value
+        $fixtureText = [regex]::Match($fixtureSource, $pattern).Value
+        Assert-True (-not [string]::IsNullOrEmpty($liveText) -and (& $normalize $liveText) -eq (& $normalize $fixtureText)) ('extracted ' + $functionName + ' matches the supplied display installer')
+    }
 }
 
 $sid = 'S-1-5-21-1111-2222-3333-1001'

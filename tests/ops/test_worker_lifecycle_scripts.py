@@ -240,7 +240,6 @@ class PowerShellCycleTests(unittest.TestCase):
         self.assertIn("worker resident admission tests: PASS", result.stdout)
 
     @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
-    @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
     def test_worker_executor_capability_regression(self):
         result = subprocess.run(
             [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-File",
@@ -250,6 +249,7 @@ class PowerShellCycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("worker executor capability tests: PASS", result.stdout)
 
+    @unittest.skipUnless(shutil.which("pwsh"), "pwsh is not installed")
     def test_worker_installer_resident_block_regression(self):
         result = subprocess.run(
             [shutil.which("pwsh"), "-NoLogo", "-NoProfile", "-File",
