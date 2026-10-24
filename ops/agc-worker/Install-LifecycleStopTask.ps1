@@ -163,6 +163,9 @@ if ($EnableOwnerExecutor) {
     $executorSettings = New-ScheduledTaskSettingsSet -Hidden -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -WakeToRun:$false -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+    # Register the first-rollout task disabled in the initial settings so no
+    # boot/logon trigger can launch it between registration and activation.
+    $executorSettings.Enabled = -not $DeferExecutorStart
     $executorAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $ExecutorArguments
     Register-ScheduledTask -TaskName $ExecutorTask -Action $executorAction -Trigger $executorTriggers `
         -Settings $executorSettings -User $credential.UserName -Password $credential.GetNetworkCredential().Password `

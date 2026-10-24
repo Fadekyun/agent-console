@@ -79,6 +79,11 @@ Assert-True ($installer -match 'Disable-ScheduledTask') 'defer path registers th
 Assert-True ($installer -match 'Enable-ScheduledTask') 'activation path explicitly enables the executor'
 Assert-True ($installer -match 'icacls\.exe \$workerReceipts') 'readiness ACL repair is applied outside the create-if-missing branch'
 Assert-True ($installer.IndexOf('if ($DeferExecutorStart)') -lt $installer.IndexOf('Start-ScheduledTask')) 'defer path decides before any task start'
+$settingsIndex = $installer.IndexOf('$executorSettings = New-ScheduledTaskSettingsSet')
+$enabledIndex = $installer.IndexOf('$executorSettings.Enabled = -not $DeferExecutorStart')
+$registerIndex = $installer.IndexOf('Register-ScheduledTask -TaskName $ExecutorTask')
+Assert-True ($enabledIndex -gt $settingsIndex -and $enabledIndex -lt $registerIndex) 'deferred executor is disabled in the initial task settings before registration'
+Assert-True ($installer.IndexOf('Disable-ScheduledTask') -gt $registerIndex) 'post-registration disable remains as confirmation'
 Assert-True ($installer -match 'Existing owner executor task has a different principal') 'existing foreign executor principal is refused'
 Assert-True ($installer -match 'Existing owner executor task action does not match') 'existing foreign executor action is refused'
 
