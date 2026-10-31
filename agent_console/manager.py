@@ -21,6 +21,7 @@ from typing import Any
 from .environment import EnvironmentStore, read_private, write_private
 from .auth import AuthRegistry
 from .admission import admission_lock
+from .storage import require_headroom
 from .config import Settings
 from .database import Database, EVIDENCE_RESULTS, EVIDENCE_TYPES, REQUIRED_EVIDENCE_TYPES, utc_now
 from .deployer import DeploymentMode, Deployer, ProductionServiceRunner, ServiceConfig
@@ -1640,6 +1641,9 @@ class SessionManager:
         _launch_request: str | None = None,
         _continue_from: str | None = None,
     ) -> dict[str, Any]:
+        # Refuse before any launch state is written: an exhausted filesystem
+        # must not produce a half-created session that fails mid-terminal.
+        require_headroom(self.settings.state_dir)
         prepared = self.prepare_launch(
             tool=tool, profile=profile, repository=repository, worktree=worktree,
             auth_context=auth_context, agent_mode=agent_mode, provider=provider,

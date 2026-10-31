@@ -31,6 +31,7 @@ from .config import Settings
 from .database import Database
 from .logging_config import configure_logging, configure_uvicorn_logging
 from .manager import SessionIdentityConflict, SessionManager
+from .storage import status as storage_status
 from .pty_transport import PtyTransport
 from .integration_requests import IntegrationService
 from .profiles import profile_summaries
@@ -402,6 +403,23 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
     @app.get("/api/delegations")
     async def delegations(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
         return session_manager.session_tree()
+
+    @app.get("/api/storage")
+    async def storage(_: AuthContext = Depends(require_identity)) -> dict[str, Any]:
+        """Current launch headroom, plus the last periodic guard result if any.
+
+        The UI uses this to explain a refused launch instead of showing a
+        generic error, and to show pressure before the filesystem is exhausted.
+        """
+        state_dir = session_manager.settings.state_dir
+        report = storage_status(state_dir)
+        guard_path = Path(state_dir) / 'storage-status.json'
+        if guard_path.is_file():
+            try:
+                report = {**report, 'guard': json.loads(guard_path.read_text(encoding='utf-8'))}
+            except (OSError, ValueError):
+                report = {**report, 'guard': None}
+        return report
 
     @app.get("/api/session-groups")
     async def session_groups(_: AuthContext = Depends(require_identity)) -> list[dict[str, Any]]:
@@ -919,8 +937,11 @@ def create_app(manager: SessionManager | None = None) -> FastAPI:
         from fastapi.responses import JSONResponse
 
         log.warning("request=%s %s error=%s", request.method, request.url.path, exc)
-        return JSONResponse(status_code=409 if isinstance(exc, SessionIdentityConflict) else 400,
-                            content={"detail": str(exc)})
+        # Storage pressure is not the caller's fault and is retryable once space
+        # is reclaimed, so it keeps its own 503 instead of the generic 400.
+        status = getattr(exc, 'status', None) or (
+            409 if isinstance(exc, SessionIdentityConflict) else 400)
+        return JSONResponse(status_code=status, content={"detail": str(exc)})
 
     for exception_type in (
         ValueError,
