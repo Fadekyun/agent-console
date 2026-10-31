@@ -1,0 +1,27 @@
+[Unit]
+Description=Agent Console storage guard (bounded reclaim of Console state)
+After=network-online.target agent-console-web.service
+
+[Service]
+Type=oneshot
+# Run as the Console owner so reclaimed paths stay inside its own state dir.
+User=agentstage
+Group=agentstage
+WorkingDirectory=/path/to/agent-console
+Environment=AGENT_CONSOLE_STATE_DIR=/home/agentstage/.local/share/agent-console
+# Opt in to reclaiming aged tool overlays and provider history (tier 2).
+# Environment=AGENT_CONSOLE_STORAGE_GUARD_TIER2=1
+Environment=AGENT_CONSOLE_MIN_FREE_MIB=2048
+ExecStart=/path/to/venv/bin/python /path/to/agent-console/ops/lxc115-storage-guard.py
+Nice=19
+IOSchedulingClass=idle
+CPUQuota=25%
+MemoryMax=256M
+MemorySwapMax=0
+TasksMax=64
+NoNewPrivileges=true
+UMask=0077
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=default.target
