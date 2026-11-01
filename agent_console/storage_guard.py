@@ -31,6 +31,7 @@ PROTECT_SECONDS = 3600
 DAY = 86400
 
 RELEASES_KEEP = 3            # current + canary + one rollback target
+ASSESSMENT_KEEP = 2          # newest harness assessments, plus whatever latest.json names
 BACKUP_MAX_AGE_DAYS = 14
 CONTEXT_MAX_AGE_DAYS = 7
 LOG_MAX_AGE_DAYS = 30
@@ -206,6 +207,37 @@ def plan_logs(state_dir: Path, now: float) -> list[Action]:
     return actions
 
 
+def plan_assessments(state_dir: Path, now: float) -> list[Action]:
+    """Superseded harness-assessment snapshots.
+
+    Each run writes a complete snapshot (hundreds of MiB) and only the newest is
+    referenced by ``latest.json``. They are regenerable, so this is tier 1.
+    """
+    root = state_dir / 'harness-assessments'
+    snapshots = [child for child in _entries(root) if child.is_dir()]
+    snapshots.sort(key=lambda child: child.name)
+    keep = {str(child) for child in snapshots[-ASSESSMENT_KEEP:]}
+    latest = root / 'latest.json'
+    if latest.is_file():
+        try:
+            payload = json.loads(latest.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            payload = {}
+        for key in ('snapshot', 'path', 'directory', 'name'):
+            value = payload.get(key) if isinstance(payload, dict) else None
+            if isinstance(value, str):
+                keep.add(str((root / value).resolve()) if not value.startswith('/') else value)
+    actions = []
+    for child in snapshots:
+        if str(child.resolve()) in keep:
+            continue
+        # Leave a snapshot that may still be written by an in-flight run.
+        if not _stale(child, 0.25, now):
+            continue
+        actions.append(Action(child, 1, 'superseded harness assessment', size_of(child)))
+    return actions
+
+
 def plan_contexts(state_dir: Path, now: float, live: set[str]) -> list[Action]:
     root = state_dir / 'contexts'
     actions = []
@@ -263,6 +295,7 @@ def plan(state_dir: Path, *, now: float | None = None, live_names: set[str] | No
         *plan_update_backups(state_dir, now),
         *plan_logs(state_dir, now),
         *plan_contexts(state_dir, now, live_names),
+        *plan_assessments(state_dir, now),
     ]
     if tmp_dir is not None and tmp_dir.is_dir():
         actions.extend(plan_tmp(tmp_dir, now, live_names))
@@ -291,7 +324,7 @@ def apply(actions: list[Action], report: Report) -> Report:
 def run(state_dir: str | Path, *, db_path: str | Path | None = None,
         tmp_dir: str | Path | None = '/tmp', tier2: bool | None = None,
         now: float | None = None, apply_actions: bool = True) -> Report:
-    """Plan (and optionally apply) reclaim for the current free-space level."""
+    """Plan (and optionally apply) retention plus pressure reclaim."""
     from .storage import free_bytes
 
     root = Path(state_dir)
@@ -300,8 +333,9 @@ def run(state_dir: str | Path, *, db_path: str | Path | None = None,
         tier2 = os.getenv('AGENT_CONSOLE_STORAGE_GUARD_TIER2') == '1'
     free = free_bytes(root)
     report = Report(level=level_for(free), free_bytes=free)
-    if report.level == 'ok':
-        return report
+    # Retention runs every time, not only under pressure: bounded growth is the
+    # point, and every tier-1 rule keeps a hard minimum (newest assessments,
+    # current/canary releases, recent logs, live sessions).
     names, ids = live_sessions(db_path or (root / 'agent-console.sqlite3'))
     report.actions = plan(root, now=now, live_names=names, live_ids=ids,
                           tmp_dir=Path(tmp_dir) if tmp_dir else None, tier2=tier2)

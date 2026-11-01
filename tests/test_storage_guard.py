@@ -96,6 +96,33 @@ class GuardPlanTests(unittest.TestCase):
         selected = {action.path.name for action in actions}
         self.assertEqual(selected, {'old-session-pi'})
 
+    def test_superseded_assessments_are_pruned_but_latest_two_kept(self):
+        root = self.root / 'harness-assessments'
+        root.mkdir()
+        names = [f'2026010{day}T000000000000Z' for day in range(1, 6)]
+        for name in names:
+            (root / name).mkdir()
+            (root / name / 'report.json').write_bytes(b'x' * 1024)
+            _age(root / name, 3)
+        (root / 'latest.json').write_text(json.dumps({'snapshot': names[0]}), encoding='utf-8')
+        actions = storage_guard.plan_assessments(self.root, self.now)
+        selected = {action.path.name for action in actions}
+        # Newest two stay, and so does the snapshot latest.json still names.
+        self.assertEqual(selected, {names[1], names[2]})
+        self.assertEqual(actions[0].tier, 1)
+
+    def test_assessment_being_written_is_left_alone(self):
+        root = self.root / 'harness-assessments'
+        root.mkdir()
+        for day in range(1, 5):
+            target = root / f'2026010{day}T000000000000Z'
+            target.mkdir()
+            _age(target, 3)
+        fresh = root / '20260105T000000000000Z'
+        fresh.mkdir()          # just created, may still be written
+        actions = storage_guard.plan_assessments(self.root, self.now)
+        self.assertNotIn(fresh.name, {action.path.name for action in actions})
+
     def test_provider_history_is_only_reclaimed_with_tier_two(self):
         overlays = self.root / 'tool-overlays'
         provider = self.root / 'provider-state'
@@ -158,6 +185,19 @@ class GuardPlanTests(unittest.TestCase):
             self.assertLess(len(list(releases.iterdir())), 5)
         finally:
             storage.free_bytes = original_free
+
+    def test_retention_also_runs_while_healthy(self):
+        root = self.root / 'harness-assessments'
+        root.mkdir()
+        for day in range(1, 5):
+            target = root / f'2026010{day}T000000000000Z'
+            target.mkdir()
+            _age(target, 3)
+        report = storage_guard.run(self.root, tmp_dir=None, tier2=False,
+                                   now=self.now, apply_actions=True)
+        self.assertEqual(report.level, 'ok')
+        self.assertEqual(report.removed, 2)      # keeps the newest two
+        self.assertEqual(len([p for p in root.iterdir() if p.is_dir()]), 2)
 
     def test_status_file_is_private_and_parseable(self):
         report = storage_guard.Report(level='warn', free_bytes=5 * 1024 * MIB)
