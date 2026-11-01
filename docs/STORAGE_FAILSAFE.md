@@ -44,7 +44,14 @@ Tier 1 never loses anything that cannot be regenerated:
 * `logs/*` older than 30 days;
 * `contexts/<session>` directories older than 7 days whose session is not live;
 * `/tmp` entries older than 2 days (dotfiles, mounts and tmux sockets are never
-  touched).
+  touched);
+* superseded `harness-assessments/<timestamp>` snapshots — the newest two plus
+  whatever `latest.json` names are kept, and a snapshot younger than six hours is
+  left alone in case a run is still writing it.
+
+Tier 1 runs on **every** invocation, not only under pressure: bounded growth is
+the point, and each rule keeps a hard minimum. Tier 2 below only runs when the
+filesystem is at `warn` or worse.
 
 Tier 2 is opt-in (`AGENT_CONSOLE_STORAGE_GUARD_TIER2=1`) because it destroys
 native conversation history:
