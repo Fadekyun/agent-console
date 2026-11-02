@@ -26,9 +26,10 @@ LEVEL_THRESHOLDS_MIB: tuple[tuple[str, int], ...] = (
     ('blocked', 0),
 )
 
-# A launch is refused outright below this reserve: 2 GiB is roughly the largest
-# single tool overlay plus its worktree and logs.
-DEFAULT_MIN_FREE_MIB = 2048
+# A launch is refused outright below this reserve. 4 GiB matches the host
+# resource admission already enforced on the LXC deployment, so a launch cannot
+# pass one gate and fail the other.
+DEFAULT_MIN_FREE_MIB = 4096
 
 
 class StoragePressure(RuntimeError):
