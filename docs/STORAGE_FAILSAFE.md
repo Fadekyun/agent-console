@@ -172,3 +172,44 @@ Exit codes for `--apply-plan`: `0` applied, `1` applied with cleanup errors, `2`
 refused (invalid, expired, drifted, or already executed). Models may summarise or
 critique a proposal but cannot create one, add paths, or approve one: the digest
 they talk about is produced by the deterministic planner.
+
+## Bi-weekly approval loop
+
+Lossless retention stays automatic (every 15 minutes). Anything destructive goes
+through a proposal the operator approves, on the 1st and 15th at 09:00 SGT.
+
+```bash
+ac-storage-loop-run --propose            # 1st and 15th: plan, summarise, notify
+ac-storage-loop-run --poll               # every 15 min: execute approved digests
+ac-storage-loop-run --propose --dry-run  # print the card, post and delete nothing
+```
+
+The flow, all outbound from the Console host — nothing gains shell access to it:
+
+1. `--propose` calls `storage_proposal.build`, writes the manifest, asks the cheap
+   OpenRouter model for a plain-language summary, asks a local Sol review
+   (`codex exec`, read-only) for a verdict, and posts one Discord card with the
+   digest, the size, both opinions and an approval link.
+2. The approval link points at the n8n workflow `AC storage approvals`, which
+   records `{digest, approver, approved_at}` in the `ac_storage_approvals` data
+   table.
+3. `--poll` reads the approved digests, refuses any whose approver is not the
+   configured owner, then runs `storage_proposal.execute` — which re-hashes, checks
+   expiry, re-plans for drift and claims the digest once before deleting.
+4. The result is marked back into n8n (`executed` / `refused`) and posted to
+   Discord with what was removed and the free space afterwards.
+
+If the Sol review returns a verdict of `object`, the card is posted **without** an
+approval link; the plan has to be changed first.
+
+Configuration is host-local in `~/.config/agent-console/storage-loop.env` (0600):
+n8n base URL and the three webhook paths, the public base URL used inside the
+approval link, the Discord webhook, the owner's Discord id, and the OpenRouter key.
+
+**Known limitation.** The approval link is a bearer credential: whoever holds the
+link can approve, and the recorded approver id is asserted by the caller rather
+than proven by Discord. It is bounded by a single-use digest, a seven-day expiry
+and the drift check, and the console host only executes digests approved inside
+that window. Replacing it with a signed Discord interaction (button press handled
+by the bot) is the next hardening step if the link ever leaves the operator's own
+devices.
