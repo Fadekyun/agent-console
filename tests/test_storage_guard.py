@@ -321,6 +321,19 @@ class GuardPlanTests(unittest.TestCase):
         self.assertEqual(report.removed, 2)
         self.assertEqual(len([p for p in root.iterdir() if p.is_dir()]), 2)
 
+    def test_tmp_actions_are_contained_by_the_tmp_root(self):
+        tmp = self.root / 'tmp'
+        tmp.mkdir()
+        (tmp / 'agc-old-build').mkdir()
+        (tmp / 'agc-old-build' / 'f').write_bytes(b'x' * 32)
+        _age_tree(tmp / 'agc-old-build', 10)
+        report = storage_guard.run(self.root, tmp_dir=tmp, tier2=False,
+                                   now=self.now, apply_actions=True)
+        kinds = [action.kind for action in report.actions]
+        self.assertIn('tmp', kinds)
+        self.assertFalse((tmp / 'agc-old-build').exists())
+        self.assertEqual(report.skipped, [])
+
     def test_concurrent_run_is_refused(self):
         import fcntl
         lock_path = self.root / 'storage-guard.lock'

@@ -77,6 +77,7 @@ class Action:
     reason: str
     bytes: int
     kind: str = 'item'
+    root: Path | None = None   # containment root the candidate must stay inside
 
     def as_dict(self) -> dict[str, object]:
         return {'path': str(self.path), 'tier': self.tier, 'kind': self.kind,
@@ -244,7 +245,7 @@ def plan_releases(state_dir: Path, now: float, live: set[str]) -> list[Action]:
         ok, size, _ = _eligible(child, 1, now, root)
         if not ok:
             continue
-        actions.append(Action(child, 1, 'obsolete release', size, 'release'))
+        actions.append(Action(child, 1, 'obsolete release', size, 'release', root))
     return actions
 
 
@@ -258,7 +259,7 @@ def plan_update_backups(state_dir: Path, now: float) -> list[Action]:
         if not ok:
             continue
         actions.append(Action(child, 1, f'update backup older than {BACKUP_MAX_AGE_DAYS}d',
-                              size, 'backup'))
+                              size, 'backup', root))
     return actions
 
 
@@ -271,7 +272,7 @@ def plan_logs(state_dir: Path, now: float) -> list[Action]:
         ok, size, _ = _eligible(child, LOG_MAX_AGE_DAYS, now, root)
         if not ok:
             continue
-        actions.append(Action(child, 1, f'log older than {LOG_MAX_AGE_DAYS}d', size, 'log'))
+        actions.append(Action(child, 1, f'log older than {LOG_MAX_AGE_DAYS}d', size, 'log', root))
     return actions
 
 
@@ -316,7 +317,7 @@ def plan_assessments(state_dir: Path, now: float) -> list[Action]:
         ok, size, _ = _eligible(child, 0.25, now, root)
         if not ok:
             continue
-        actions.append(Action(child, 1, 'superseded harness assessment', size, 'assessment'))
+        actions.append(Action(child, 1, 'superseded harness assessment', size, 'assessment', root))
     return actions
 
 
@@ -339,7 +340,7 @@ def plan_contexts(state_dir: Path, now: float, live: set[str]) -> list[Action]:
         if not ok:
             continue
         actions.append(Action(child, 1, 'session context for an inactive session',
-                              size, 'context'))
+                              size, 'context', root))
     return actions
 
 
@@ -355,7 +356,7 @@ def plan_provider_state(state_dir: Path, now: float, live_names: set[str],
         if not ok:
             continue
         actions.append(Action(child, 2, f'tool overlay older than {OVERLAY_MAX_AGE_DAYS}d',
-                              size, 'overlay'))
+                              size, 'overlay', overlays))
     provider = state_dir / 'provider-state'
     for child in _entries(provider):
         if not child.is_dir() or child.name in live_ids:
@@ -364,7 +365,7 @@ def plan_provider_state(state_dir: Path, now: float, live_names: set[str],
         if not ok:
             continue
         actions.append(Action(child, 2, 'provider state for an inactive session',
-                              size, 'provider'))
+                              size, 'provider', provider))
     return actions
 
 
@@ -381,7 +382,7 @@ def plan_tmp(tmp_dir: Path, now: float, live: set[str]) -> list[Action]:
         if not ok:
             continue
         actions.append(Action(child, 1, f'managed temporary entry older than {TMP_MAX_AGE_DAYS}d',
-                              size, 'tmp'))
+                              size, 'tmp', root))
     return actions
 
 
@@ -415,7 +416,7 @@ def _pointers_changed(action: Action, state_dir: Path) -> bool:
 
 def apply(actions: list[Action], report: Report, *, state_dir: Path | None = None) -> Report:
     for action in actions:
-        root = state_dir or action.path.parent
+        root = action.root or state_dir or action.path.parent
         if not _contained(action.path, root):
             report.skipped.append(f'{action.path}: outside {root}')
             continue
