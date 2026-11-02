@@ -9,7 +9,9 @@ publishes ``storage-status.json`` next to the Console database.
     lxc115-storage-guard.py             # reclaim at warn/critical
     lxc115-storage-guard.py --tier2     # also reclaim aged provider history
 
-Exit status: 0 healthy/warn, 2 storage critical or blocked, 1 unexpected error.
+Exit status: 0 healthy/warn, 2 storage critical or blocked, 1 when a cleanup step
+failed (deletion errors or a concurrent run), so a timer cannot report success
+after doing nothing.
 """
 from __future__ import annotations
 
@@ -60,6 +62,8 @@ def main() -> int:
     if report.errors:
         for error in report.errors[:10]:
             print(f'error: {error}', file=sys.stderr)
+    if report.errors:
+        return 1
     return 2 if report.level in {'critical', 'blocked'} else 0
 
 

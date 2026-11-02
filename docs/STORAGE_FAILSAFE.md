@@ -28,7 +28,8 @@ Levels are measured on free space of the Console state directory
 | `blocked` | < 1 GiB | refused when below the reserve | exit status 2 |
 
 A launch is refused when free space is below `AGENT_CONSOLE_MIN_FREE_MIB`
-(default 2048 MiB — about one tool overlay plus its worktree and logs). The
+(default 4096 MiB, matching the host resource admission that already guards the
+LXC deployment, so one gate cannot be laxer than the other). The
 refusal is a single `StoragePressure` error raised at the top of
 `SessionManager.create`, so no context, launcher, worktree, overlay or session
 row exists afterwards. The web layer maps it to HTTP **503** (retryable once
@@ -36,22 +37,26 @@ space is reclaimed) instead of the generic 400 used for bad requests.
 
 ## Reclaim tiers
 
-Tier 1 never loses anything that cannot be regenerated:
+Tier 1 runs on **every** invocation and never loses anything that cannot be
+regenerated:
 
 * obsolete `releases/release-*` directories — the newest three plus whatever
   `current` and `canary` point at are always kept;
 * `update-backups/*` older than 14 days;
 * `logs/*` older than 30 days;
 * `contexts/<session>` directories older than 7 days whose session is not live;
-* `/tmp` entries older than 2 days (dotfiles, mounts and tmux sockets are never
-  touched);
+* managed `/tmp` trees older than 2 days — only names the Console tooling creates
+  (`agc-*`, `offkai-*`, `ac-*`, `pr1*`, `pr2*`, `pi-*`, `codex-*`, `console-*`,
+  `hermes-*`, `pnpmhome`, `node-compile-cache`, `ops-*`); anything else in `/tmp`
+  belongs to another job and is never touched;
 * superseded `harness-assessments/<timestamp>` snapshots — the newest two plus
   whatever `latest.json` names are kept, and a snapshot younger than six hours is
   left alone in case a run is still writing it.
 
 Tier 1 runs on **every** invocation, not only under pressure: bounded growth is
 the point, and each rule keeps a hard minimum. Tier 2 below only runs when the
-filesystem is at `warn` or worse.
+filesystem is at `warn` or worse **and** `AGENT_CONSOLE_STORAGE_GUARD_TIER2=1`,
+so enabling it never deletes history on a healthy disk.
 
 Tier 2 is opt-in (`AGENT_CONSOLE_STORAGE_GUARD_TIER2=1`) because it destroys
 native conversation history:
@@ -59,9 +64,32 @@ native conversation history:
 * `tool-overlays/<session>` older than 14 days;
 * `provider-state/<session-id>` older than 7 days.
 
-Nothing belonging to a live session is ever selected. A session counts as live
-when it is `reserved`, `attached` or `detached` in the database, when its name
-prefix matches a live session, or when it was modified within the last hour.
+## Safety properties
+
+- **Fail closed.** If the session database exists but cannot be read, every
+  session-dependent rule (contexts, overlays, provider state, `/tmp`) is skipped
+  and the run reports an error. An unreadable database must never look like "no
+  sessions", because a lock or corruption is exactly when a deletion would be
+  most damaging. Rules that do not depend on session state (releases, update
+  backups, logs, assessments) still run.
+- **Activity, not directory age.** Eligibility uses the newest file inside the
+  candidate, not the top-level directory mtime, and anything written inside
+  `PROTECT_SECONDS` (one hour) is never selected. Touching a single file deep in
+  an old tree therefore protects the whole tree.
+- **Containment.** A candidate must resolve inside its own root, with no
+  symlinked component, and must be owned by the guard's user. Symlinked category
+  roots and escapes are ignored.
+- **Pointers rechecked at delete time.** Release candidates are re-verified
+  against `current`/`canary` immediately before removal, so a deploy or rollback
+  that flips pointers between planning and applying cannot lose a live release.
+- **Serialised.** Applying takes an exclusive `storage-guard.lock`; a cron run and
+  an operator run cannot act on the same plan concurrently, and a blocked run
+  reports an error instead of pretending success.
+- **Live sessions** are excluded by database status (`reserved`, `attached`,
+  `detached`), by session-name prefix, and by the activity window above.
+- `contexts/<name>.md` instruction files are kept even when stale: a few
+  kilobytes each, bounded by session count rather than age, and possibly edited
+  by an operator. Only the heavy per-session context *directories* are pruned.
 
 ## Operation
 
