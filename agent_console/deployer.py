@@ -72,7 +72,14 @@ def _is_excluded(rel: str) -> bool:
 def _build_manifest(release_path: Path, *, source_sha: str | None = None) -> dict[str, Any]:
     files: dict[str, str] = {}
     for entry in sorted(release_path.rglob("*")):
-        if entry.is_file() and entry.name != MANIFEST_NAME and ".runtime" not in entry.relative_to(release_path).parts:
+        if not entry.is_file() or entry.name == MANIFEST_NAME:
+            continue
+        relative_parts = entry.relative_to(release_path).parts
+        # Bytecode caches are rewritten by the running interpreter, so hashing them
+        # would make every release manifest fail validation minutes after startup.
+        if "__pycache__" in relative_parts or entry.suffix == ".pyc":
+            continue
+        if ".runtime" not in relative_parts:
             rel = str(entry.relative_to(release_path))
             files[rel] = _hash_file(entry)
     manifest: dict[str, Any] = {

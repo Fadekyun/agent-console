@@ -1312,3 +1312,24 @@ class TempPathSafetyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ManifestBytecodeTests(unittest.TestCase):
+    """Bytecode caches are rewritten at runtime and must not be hashed."""
+
+    def test_manifest_excludes_bytecode_caches(self):
+        from agent_console.deployer import _build_manifest, _write_manifest, validate_manifest_at
+        root = Path(tempfile.mkdtemp())
+        (root / 'agent_console').mkdir()
+        (root / 'agent_console' / '__init__.py').write_text('x = 1\n')
+        (root / 'agent_console' / '__pycache__').mkdir()
+        (root / 'agent_console' / '__pycache__' / '__init__.cpython-311.pyc').write_bytes(b'bytecode')
+        (root / 'stray.pyc').write_bytes(b'bytecode')
+        manifest = _build_manifest(root)
+        _write_manifest(root)
+        self.assertNotIn('agent_console/__pycache__/__init__.cpython-311.pyc', manifest['files'])
+        self.assertNotIn('stray.pyc', manifest['files'])
+        self.assertIn('agent_console/__init__.py', manifest['files'])
+        # Rewriting the bytecode must not invalidate the manifest.
+        (root / 'agent_console' / '__pycache__' / '__init__.cpython-311.pyc').write_bytes(b'rewritten')
+        self.assertTrue(validate_manifest_at(root)['valid'])
