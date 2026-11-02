@@ -140,3 +140,35 @@ tier-2 gating, dry-run versus apply, and the private status file.
 Historical note: the first occurrence (2026-10-09/10) was diagnosed after the
 fact from `logs/agent-console.jsonl`, where the sweep failures and the ASGI
 exceptions both carried `disk I/O error`.
+
+## Approved cleanup proposals
+
+Anything destructive runs through a digest-bound proposal, so what an operator
+approves is exactly what executes.
+
+```bash
+# 1. plan only; writes storage-proposals/<sha256>.json and prints the digest
+python3 ops/lxc115-storage-guard.py --propose --json
+
+# 2. after approval, execute exactly that digest
+python3 ops/lxc115-storage-guard.py --apply-plan <sha256>
+```
+
+A proposal is a canonical manifest of the guide's decisions: host, state root,
+retention policy version, tier, and every path with its kind, tier and size. Its
+sha256 covers the host, state root, policy and action list, so:
+
+- editing the file invalidates the digest, so an approval cannot be stretched to a
+  different set of paths;
+- a proposal expires after seven days, so an old approval cannot be replayed;
+- execution re-plans and refuses on drift, so anything that became (in)eligible
+  after approval needs a fresh approval;
+- a digest can be claimed once, so a retried webhook or a double click cannot run
+  the same deletion twice;
+- a policy change changes every digest, and a proposal from another state root is
+  refused.
+
+Exit codes for `--apply-plan`: `0` applied, `1` applied with cleanup errors, `2`
+refused (invalid, expired, drifted, or already executed). Models may summarise or
+critique a proposal but cannot create one, add paths, or approve one: the digest
+they talk about is produced by the deterministic planner.
